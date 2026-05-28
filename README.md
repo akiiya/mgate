@@ -42,19 +42,13 @@ UK 用户 -> UK 代理组
 ### curl
 
 ```sh
-cd /tmp
-curl -fsSL -o mgate.sh https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh
-chmod +x mgate.sh
-./mgate.sh install
+cd /tmp && curl -fsSL -o mgate.sh https://raw.githubusercontent.com/<your-github-username>/mgate/main/mgate.sh && chmod +x mgate.sh && ./mgate.sh install
 ```
 
 ### wget
 
 ```sh
-cd /tmp
-wget -O mgate.sh https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh
-chmod +x mgate.sh
-./mgate.sh install
+cd /tmp && wget -O mgate.sh https://raw.githubusercontent.com/<your-github-username>/mgate/main/mgate.sh && chmod +x mgate.sh && ./mgate.sh install
 ```
 
 安装完成后，全局命令为：
