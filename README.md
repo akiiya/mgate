@@ -43,7 +43,7 @@ UK 用户 -> UK 代理组
 
 ```sh
 cd /tmp
-curl -fsSL -o mgate.sh https://raw.githubusercontent.com/akiia/mgate/main/mgate.sh
+curl -fsSL -o mgate.sh https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh
 chmod +x mgate.sh
 ./mgate.sh install
 ```
@@ -52,7 +52,7 @@ chmod +x mgate.sh
 
 ```sh
 cd /tmp
-wget -O mgate.sh https://raw.githubusercontent.com/akiia/mgate/main/mgate.sh
+wget -O mgate.sh https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh
 chmod +x mgate.sh
 ./mgate.sh install
 ```
