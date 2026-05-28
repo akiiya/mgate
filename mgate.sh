@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.1.5"
+MGATE_VERSION="0.1.6"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -41,6 +41,8 @@ GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
 GITHUB_API_LATEST="https://api.github.com/repos/$REPO/releases/latest"
 DEFAULT_MIHOMO_VERSION="${MGATE_DEFAULT_MIHOMO_VERSION:-v1.19.25}"
 DEFAULT_GITHUB_PROXY="https://gh-proxy.fastly.eu.org/"
+DEFAULT_SELF_URL="${MGATE_DEFAULT_SELF_URL:-https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh}"
+SELF_URL_FILE="$DATA_DIR/self.url"
 
 # Keep output plain ASCII for embedded routers and SSH terminals.
 # No emoji, no ANSI color, no terminal control sequences.
@@ -170,6 +172,90 @@ current_proxy_label() {
     esac
 }
 
+is_placeholder_url() {
+    url="$1"
+    case "$url" in
+        ""|*"<your-github-username>"*|*"example.com"*|*"YOUR_"*|*"your_"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+append_cache_bust() {
+    url="$1"
+    ts="$(date +%s 2>/dev/null || echo now)"
+    case "$url" in
+        *\?*) printf '%s&ts=%s' "$url" "$ts" ;;
+        *) printf '%s?ts=%s' "$url" "$ts" ;;
+    esac
+}
+
+with_self_proxy() {
+    url="$1"
+    proxy="${MGATE_SELF_PROXY:-${MGATE_GITHUB_PROXY:-$DEFAULT_GITHUB_PROXY}}"
+
+    case "$proxy" in
+        ""|direct|DIRECT|none|NONE|0)
+            printf '%s' "$url"
+            return 0
+            ;;
+    esac
+
+    case "$url" in
+        "$proxy"*)
+            printf '%s' "$url"
+            return 0
+            ;;
+    esac
+
+    case "$proxy" in
+        */) printf '%s%s' "$proxy" "$url" ;;
+        *) printf '%s/%s' "$proxy" "$url" ;;
+    esac
+}
+
+get_self_url() {
+    if [ -n "${MGATE_SELF_URL:-}" ]; then
+        if is_placeholder_url "$MGATE_SELF_URL"; then
+            die "MGATE_SELF_URL 不是有效地址：$MGATE_SELF_URL"
+        fi
+        printf '%s
+' "$MGATE_SELF_URL"
+        return 0
+    fi
+
+    if [ -f "$SELF_URL_FILE" ]; then
+        saved_url="$(sed -n '1p' "$SELF_URL_FILE" 2>/dev/null || true)"
+        if [ -n "$saved_url" ] && ! is_placeholder_url "$saved_url"; then
+            printf '%s
+' "$saved_url"
+            return 0
+        fi
+    fi
+
+    if ! is_placeholder_url "$DEFAULT_SELF_URL"; then
+        printf '%s
+' "$DEFAULT_SELF_URL"
+        return 0
+    fi
+
+    return 1
+}
+
+save_self_url_if_available() {
+    ensure_dirs
+    url=""
+    if [ -n "${MGATE_SELF_URL:-}" ] && ! is_placeholder_url "$MGATE_SELF_URL"; then
+        url="$MGATE_SELF_URL"
+    elif ! is_placeholder_url "$DEFAULT_SELF_URL"; then
+        url="$DEFAULT_SELF_URL"
+    fi
+
+    if [ -n "$url" ]; then
+        printf '%s
+' "$url" > "$SELF_URL_FILE" 2>/dev/null || true
+    fi
+}
+
 fetch_to_stdout() {
     url="$1"
     if have curl; then
@@ -187,7 +273,7 @@ download_file() {
     url="$1"
     out="$2"
     if have curl; then
-        curl -fL --connect-timeout 30 -o "$out" "$url"
+        curl -fL --connect-timeout 30 -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$out" "$url"
         return $?
     fi
     if have wget; then
@@ -298,6 +384,7 @@ install_self() {
     chmod 755 "$SCRIPT_PATH" || die "failed to chmod $SCRIPT_PATH"
     mkdir -p "$(dirname "$GLOBAL_BIN")"
     ln -sf "$SCRIPT_PATH" "$GLOBAL_BIN" || die "failed to create $GLOBAL_BIN"
+    save_self_url_if_available
     ok "管理脚本已安装：$SCRIPT_PATH"
     ok "全局命令已创建：$GLOBAL_BIN"
 }
@@ -514,7 +601,8 @@ Client examples:
 
 Common commands:
   mgate                 Enter TUI menu
-  mgate install         Install/update mgate
+  mgate install         Initialize/repair mgate workspace
+  mgate self-update    Update mgate manager script from GitHub
   mgate install-core    Install/update Mihomo core
   mgate start           Start service
   mgate stop            Stop service
@@ -528,8 +616,10 @@ Environment overrides:
   FORCE=1                         overwrite generated config after backup
   MGATE_MIHOMO_VERSION=v1.19.25   install a specific Mihomo version
   MGATE_MIHOMO_ASSET=linux-arm64  force a release asset architecture
-  MGATE_GITHUB_PROXY=https://.../ set GitHub proxy prefix; default is $DEFAULT_GITHUB_PROXY
-  MGATE_GITHUB_PROXY=direct       disable GitHub proxy and use direct download
+  MGATE_SELF_URL=https://.../       set mgate self-update URL
+  MGATE_SELF_PROXY=https://.../     set self-update proxy; default follows MGATE_GITHUB_PROXY
+  MGATE_GITHUB_PROXY=https://.../   set GitHub proxy prefix; default is $DEFAULT_GITHUB_PROXY
+  MGATE_GITHUB_PROXY=direct         disable GitHub proxy and use direct download
   SOCKS_PORT=31800                override default SOCKS5 port during config generation
   HTTP_PORT=31801                 override default HTTP port during config generation
 EOF_README
@@ -830,9 +920,69 @@ remove_service_files() {
     esac
 }
 
+extract_mgate_version() {
+    file="$1"
+    sed -n 's/^MGATE_VERSION="\([^"]*\)".*/\1/p' "$file" | head -n 1
+}
+
+validate_mgate_script() {
+    file="$1"
+    [ -s "$file" ] || die "下载内容为空"
+    sh -n "$file" >/dev/null 2>&1 || die "下载内容不是有效 shell 脚本"
+    grep -q 'APP_NAME="mgate"' "$file" || die "下载内容不是有效 mgate 脚本：缺少 APP_NAME"
+    grep -q '^MGATE_VERSION=' "$file" || die "下载内容不是有效 mgate 脚本：缺少 MGATE_VERSION"
+    grep -q 'main "\$@"' "$file" || die "下载内容不是有效 mgate 脚本：缺少入口调用"
+}
+
+cmd_self_update() {
+    need_root
+    ensure_dirs
+
+    self_url="$(get_self_url || true)"
+    if [ -z "$self_url" ]; then
+        err "未配置 mgate 自更新地址"
+        hint "请使用：MGATE_SELF_URL=https://raw.githubusercontent.com/<user>/mgate/main/mgate.sh mgate self-update"
+        hint "或在脚本内设置 DEFAULT_SELF_URL 后重新安装"
+        return 1
+    fi
+
+    url_with_ts="$(append_cache_bust "$self_url")"
+    download_url="$(with_self_proxy "$url_with_ts")"
+    tmp_file="$TMP_DIR/mgate.self-update.$$"
+
+    step "正在更新 mgate 管理脚本"
+    info "当前版本：$MGATE_VERSION"
+    info "更新地址：$self_url"
+    info "下载地址：$download_url"
+
+    rm -f "$tmp_file"
+    download_file "$download_url" "$tmp_file" || die "下载新版 mgate.sh 失败"
+    validate_mgate_script "$tmp_file"
+
+    new_version="$(extract_mgate_version "$tmp_file")"
+    [ -n "$new_version" ] || die "无法读取新版版本号"
+    info "新版本：$new_version"
+
+    if [ -f "$SCRIPT_PATH" ]; then
+        backup_file "$SCRIPT_PATH"
+    fi
+
+    cp "$tmp_file" "$SCRIPT_PATH" || die "安装新版管理脚本失败"
+    chmod 755 "$SCRIPT_PATH" || die "设置脚本权限失败"
+    mkdir -p "$(dirname "$GLOBAL_BIN")"
+    ln -sf "$SCRIPT_PATH" "$GLOBAL_BIN" || die "创建全局命令失败"
+    printf '%s
+' "$self_url" > "$SELF_URL_FILE" 2>/dev/null || true
+    rm -f "$tmp_file"
+
+    ok "mgate 管理脚本已更新：$SCRIPT_PATH"
+    info "当前版本：$new_version"
+    hint "执行 mgate version 查看版本信息"
+}
+
 cmd_install() {
     need_root
-    step "开始安装 mgate $MGATE_VERSION"
+    step "开始初始化/修复 mgate 工作区 $MGATE_VERSION"
     info "工作目录：$WORKDIR"
     ensure_dirs
     install_self
@@ -842,7 +992,7 @@ cmd_install() {
     create_service_files
     service_enable
     service_start
-    ok "mgate 安装完成"
+    ok "mgate 工作区初始化/修复完成"
     say ""
     hint "下一步：mgate edit && mgate test && mgate restart"
 }
@@ -943,12 +1093,19 @@ cmd_logs() {
 }
 
 cmd_version() {
-    say "$APP_NAME $MGATE_VERSION"
-    say "workspace: $WORKDIR"
-    if [ -x "$CORE_BIN" ]; then
-        "$CORE_BIN" -v 2>/dev/null || true
+    info "mgate 版本：$MGATE_VERSION"
+    info "工作目录：$WORKDIR"
+    if self_url="$(get_self_url 2>/dev/null || true)" && [ -n "$self_url" ]; then
+        info "更新地址：$self_url"
     else
-        say "mihomo: not installed"
+        warn "更新地址未配置"
+    fi
+    if [ -x "$CORE_BIN" ]; then
+        core_ver="$($CORE_BIN -v 2>/dev/null || true)"
+        [ -n "$core_ver" ] || core_ver="$CORE_BIN"
+        info "Mihomo 版本：$core_ver"
+    else
+        warn "Mihomo 未安装"
     fi
 }
 
@@ -958,7 +1115,9 @@ $APP_NAME - $APP_DESC
 
 Usage:
   mgate                     Enter TUI menu
-  mgate install             Install/update mgate, core, config and service
+  mgate install             Initialize/repair mgate workspace, core, config and service
+  mgate self-update         Update mgate manager script from GitHub
+  mgate update              Alias of self-update
   mgate install-core        Install/update Mihomo core only
   mgate uninstall-core      Remove Mihomo core only, keep config and manager
   mgate uninstall [--yes]   Remove mgate completely
@@ -982,8 +1141,10 @@ Environment:
   MGATE_ASSUME_YES=1              skip uninstall confirmation
   MGATE_MIHOMO_VERSION=v1.19.25   install a specific Mihomo version
   MGATE_MIHOMO_ASSET=linux-arm64  force Mihomo release asset
-  MGATE_GITHUB_PROXY=https://.../ set GitHub proxy prefix; default is $DEFAULT_GITHUB_PROXY
-  MGATE_GITHUB_PROXY=direct       disable GitHub proxy and use direct download
+  MGATE_SELF_URL=https://.../       set mgate self-update URL
+  MGATE_SELF_PROXY=https://.../     set self-update proxy; default follows MGATE_GITHUB_PROXY
+  MGATE_GITHUB_PROXY=https://.../   set GitHub proxy prefix; default is $DEFAULT_GITHUB_PROXY
+  MGATE_GITHUB_PROXY=direct         disable GitHub proxy and use direct download
 EOF_USAGE
 }
 
@@ -993,44 +1154,46 @@ menu() {
         say "mgate - Mobile Gateway Manager"
         say "Workspace: $WORKDIR"
         say ""
-        say "1)  安装/更新 mgate"
-        say "2)  安装/更新 Mihomo 内核"
-        say "3)  卸载 Mihomo 内核"
-        say "4)  完整卸载 mgate"
+        say "1)  初始化/修复 mgate 工作区"
+        say "2)  更新 mgate 管理脚本（从 GitHub）"
+        say "3)  安装/更新 Mihomo 内核"
+        say "4)  卸载 Mihomo 内核"
+        say "5)  完整卸载 mgate"
         say ""
-        say "5)  启动服务"
-        say "6)  停止服务"
-        say "7)  重启服务"
-        say "8)  查看服务状态"
+        say "6)  启动服务"
+        say "7)  停止服务"
+        say "8)  重启服务"
+        say "9)  查看服务状态"
         say ""
-        say "9)  设置开机启动"
-        say "10) 关闭开机启动"
+        say "10) 设置开机启动"
+        say "11) 关闭开机启动"
         say ""
-        say "11) 查看配置"
-        say "12) 编辑配置"
-        say "13) 测试配置"
-        say "14) 查看日志"
-        say "15) 查看版本"
+        say "12) 查看配置"
+        say "13) 编辑配置"
+        say "14) 测试配置"
+        say "15) 查看日志"
+        say "16) 查看版本"
         say ""
         say "0)  退出"
         printf '请选择: '
         read -r choice
         case "$choice" in
             1) cmd_install; pause_enter ;;
-            2) install_core; pause_enter ;;
-            3) cmd_uninstall_core; pause_enter ;;
-            4) cmd_uninstall; exit 0 ;;
-            5) service_start; pause_enter ;;
-            6) service_stop; pause_enter ;;
-            7) service_restart; pause_enter ;;
-            8) service_status; pause_enter ;;
-            9) service_enable; pause_enter ;;
-            10) service_disable; pause_enter ;;
-            11) cmd_config; pause_enter ;;
-            12) cmd_edit; pause_enter ;;
-            13) cmd_test; pause_enter ;;
-            14) cmd_logs; pause_enter ;;
-            15) cmd_version; pause_enter ;;
+            2) cmd_self_update; pause_enter ;;
+            3) install_core; pause_enter ;;
+            4) cmd_uninstall_core; pause_enter ;;
+            5) cmd_uninstall; exit 0 ;;
+            6) service_start; pause_enter ;;
+            7) service_stop; pause_enter ;;
+            8) service_restart; pause_enter ;;
+            9) service_status; pause_enter ;;
+            10) service_enable; pause_enter ;;
+            11) service_disable; pause_enter ;;
+            12) cmd_config; pause_enter ;;
+            13) cmd_edit; pause_enter ;;
+            14) cmd_test; pause_enter ;;
+            15) cmd_logs; pause_enter ;;
+            16) cmd_version; pause_enter ;;
             0) exit 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
@@ -1048,6 +1211,7 @@ main() {
     case "$cmd" in
         menu) menu ;;
         install) cmd_install "$@" ;;
+        self-update|update) cmd_self_update "$@" ;;
         install-core) install_core "$@" ;;
         uninstall-core) cmd_uninstall_core "$@" ;;
         uninstall) cmd_uninstall "$@" ;;

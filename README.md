@@ -15,6 +15,7 @@
 * 🧭 根据用户名自动分流到不同代理组
 * 🛡️ 未匹配流量默认拒绝
 * ⚙️ 支持服务管理和开机自启
+* 🔁 支持从 GitHub 自更新 mgate 管理脚本
 * 📁 所有文件都存放在 `/opt/mgate`
 * 🧹 支持完整卸载
 
@@ -42,13 +43,13 @@ UK 用户 -> UK 代理组
 ### curl
 
 ```sh
-cd /tmp && curl -fsSL -o mgate.sh https://raw.githubusercontent.com/<your-github-username>/mgate/main/mgate.sh && chmod +x mgate.sh && ./mgate.sh install
+cd /tmp && rm -f mgate.sh && curl -fsSL -H "Cache-Control: no-cache" -o mgate.sh "https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh?ts=$(date +%s)" && sh mgate.sh install
 ```
 
 ### wget
 
 ```sh
-cd /tmp && wget -O mgate.sh https://raw.githubusercontent.com/<your-github-username>/mgate/main/mgate.sh && chmod +x mgate.sh && ./mgate.sh install
+cd /tmp && rm -f mgate.sh && wget -O mgate.sh "https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh?ts=$(date +%s)" && sh mgate.sh install
 ```
 
 安装完成后，全局命令为：
@@ -71,12 +72,15 @@ mgate status
 mgate
 ```
 
-会进入交互式菜单，可进行安装、启动、停止、查看状态、编辑配置、查看日志、卸载等操作。
+会进入交互式菜单，可进行初始化工作区、更新管理脚本、安装内核、启动服务、停止服务、编辑配置、查看日志、卸载等操作。
 
 ## ⌨️ 常用命令
 
 ```sh
-mgate install          # 安装/更新 mgate
+mgate install          # 初始化/修复 mgate 工作区
+mgate self-update      # 从 GitHub 更新 mgate 管理脚本
+mgate update           # self-update 的别名
+
 mgate install-core     # 安装/更新 Mihomo 内核
 mgate uninstall-core   # 仅卸载 Mihomo 内核
 mgate uninstall        # 完整卸载 mgate
@@ -94,6 +98,34 @@ mgate edit             # 编辑配置
 mgate test             # 测试配置
 mgate logs             # 查看日志
 mgate version          # 查看版本
+```
+
+> `mgate install` 用于初始化或修复本地工作区，不会从 GitHub 拉取最新 `mgate.sh`。
+> 如需更新管理脚本，请使用 `mgate self-update` 或 `mgate update`。
+
+## 🔁 自更新
+
+更新 mgate 管理脚本：
+
+```sh
+mgate self-update
+```
+
+或者：
+
+```sh
+mgate update
+```
+
+自更新会自动从本项目 GitHub 仓库拉取最新 `mgate.sh`，并执行：
+
+```text
+1. 下载最新 mgate.sh
+2. 自动添加时间戳参数，避免缓存
+3. 校验脚本有效性
+4. 备份当前 /opt/mgate/mgate
+5. 覆盖安装新版管理脚本
+6. 保留 Mihomo 内核、配置和服务状态
 ```
 
 ## 📂 工作目录
@@ -220,44 +252,6 @@ socks5://DE:change_me_de@192.168.8.1:31800
 ```sh
 curl -x http://DE:change_me_de@127.0.0.1:31801 https://ipinfo.io/country
 curl -x socks5h://DE:change_me_de@127.0.0.1:31800 https://ipinfo.io/country
-```
-
-## ⚙️ 环境变量
-
-指定 Mihomo 版本：
-
-```sh
-MGATE_MIHOMO_VERSION=v1.19.25 mgate install-core
-```
-
-指定 Mihomo 架构：
-
-```sh
-MGATE_MIHOMO_ASSET=linux-arm64 mgate install-core
-```
-
-使用 GitHub 代理：
-
-```sh
-MGATE_GITHUB_PROXY=https://gh-proxy.example.com/ mgate install-core
-```
-
-强制重新生成配置：
-
-```sh
-FORCE=1 mgate install
-```
-
-修改默认端口并重新生成配置：
-
-```sh
-FORCE=1 SOCKS_PORT=1080 HTTP_PORT=8080 mgate install
-```
-
-完整卸载时跳过确认：
-
-```sh
-mgate uninstall --yes
 ```
 
 ## 🖥️ 支持系统
