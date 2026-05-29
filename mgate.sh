@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.2.9"
+MGATE_VERSION="0.3.3"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -61,6 +61,19 @@ DEFAULT_MIHOMO_VERSION="${MGATE_DEFAULT_MIHOMO_VERSION:-v1.19.25}"
 DEFAULT_GITHUB_PROXY="https://gh-proxy.fastly.eu.org/"
 DEFAULT_SELF_URL="${MGATE_DEFAULT_SELF_URL:-https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh}"
 SELF_URL_FILE="$DATA_DIR/self.url"
+
+SUB_URL_FILE="$DATA_DIR/sub.url"
+SUB_STATUS_FILE="$DATA_DIR/sub.status"
+SUB_COUNTRIES_FILE="$DATA_DIR/sub.countries"
+SUB_ACCOUNTS_FILE="$DATA_DIR/accounts.txt"
+ACCOUNT_DEFAULT_PASSWORD_FILE="$DATA_DIR/account.default_password"
+DEFAULT_ACCOUNT_PASSWORD="12345678"
+SUB_LAST_UPDATE_FILE="$DATA_DIR/sub.last_update"
+SUB_PROVIDER_DIR="$CONFIG_DIR/providers"
+SUB_PROVIDER_FILE="$SUB_PROVIDER_DIR/sub.yaml"
+SUB_USER_AGENT="${MGATE_SUB_USER_AGENT:-Clash.Meta}"
+SUB_LAST_LOG_FILE="$LOG_DIR/sub-update.last.log"
+SUB_LAST_TMP_FILE="$DATA_DIR/sub.last_tmp"
 
 # Keep output plain ASCII for embedded routers and SSH terminals.
 # No emoji, no ANSI color, no terminal control sequences.
@@ -1128,7 +1141,7 @@ CONFIG_FILE="__CONFIG_FILE__"
 WEB_PORT="__WEB_PORT__"
 DEFAULT_HTTP_PORT="__DEFAULT_HTTP_PORT__"
 DEFAULT_SOCKS_PORT="__DEFAULT_SOCKS_PORT__"
-FAVICON_VER="0.2.9"
+FAVICON_VER="0.3.3"
 
 html_escape() {
     sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
@@ -1197,6 +1210,7 @@ nav() {
 <a class="btn" href="/cgi-bin/mgate.cgi?action=version">版本</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=doctor">诊断</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=proxy-info">连接信息</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=account-password">账号密码</a>
 <a class="btn primary" href="/cgi-bin/mgate.cgi?action=start">启动服务</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=stop">停止服务</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=restart">重启服务</a>
@@ -1423,6 +1437,32 @@ EOF
     page_end
 }
 
+
+account_password_page() {
+    out="$($MGATE account-password 2>&1)"
+    header
+    page_start "账号密码"
+    nav
+    cat <<'EOF'
+<div class="card">
+<h2>代理账号默认密码</h2>
+<p class="muted">订阅模式下自动生成的国家/地区账号会统一使用此默认密码。</p>
+<pre>
+EOF
+    printf '%s\n' "$out" | html_escape
+    cat <<'EOF'
+</pre>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="account-password-set">
+<div class="row"><input type="text" name="password" placeholder="新的默认密码，例如 12345678" autocomplete="off"></div>
+<div class="row"><button class="primary" type="submit">修改默认密码</button></div>
+</form>
+<p class="muted">密码建议只使用字母和数字，不要包含空格、冒号或引号。修改后会重新更新订阅配置。</p>
+</div>
+EOF
+    page_end
+}
+
 logs_page() {
     lines="$1"
     case "$lines" in 50|100|200) : ;; *) lines="100" ;; esac
@@ -1497,6 +1537,11 @@ case "$action" in
     version) run_output_page "版本" version ;;
     doctor) run_output_page "系统诊断" doctor ;;
     proxy-info) proxy_info_page ;;
+    account-password) account_password_page ;;
+    account-password-set)
+        pw="$(param_get "$post_body" password)"
+        run_output_page "修改代理账号默认密码" account-password set "$pw"
+        ;;
     start) run_output_page "启动服务" start ;;
     test) run_output_page "测试配置" test ;;
     logs) logs_page "$lines" ;;
@@ -2323,6 +2368,452 @@ cmd_doctor() {
     ok "诊断完成，未发现明显问题"
 }
 
+
+# -----------------------------
+# Subscription management
+# -----------------------------
+ensure_sub_dirs() {
+    ensure_dirs
+    mkdir -p "$SUB_PROVIDER_DIR" || die "创建订阅目录失败：$SUB_PROVIDER_DIR"
+}
+
+sub_fetch_to_file() {
+    url="$1"
+    out="$2"
+    ua="$SUB_USER_AGENT"
+    if have curl; then
+        curl -fsSL --connect-timeout 20 --max-time 120 \
+            -A "$ua" \
+            -H "Accept: application/yaml,text/yaml,text/plain,*/*" \
+            -o "$out" "$url"
+        return $?
+    fi
+    if have wget; then
+        wget -T 120 \
+            --user-agent="$ua" \
+            --header="Accept: application/yaml,text/yaml,text/plain,*/*" \
+            -O "$out" "$url"
+        return $?
+    fi
+    die "需要 curl 或 wget 才能拉取订阅"
+}
+
+validate_sub_file() {
+    file="$1"
+    [ -s "$file" ] || die "订阅内容为空"
+    if grep -Eiq '<html|<!doctype html|<body|</html>' "$file" 2>/dev/null; then
+        die "订阅内容像 HTML 页面，不是 Clash/Mihomo YAML，请确认订阅链接格式"
+    fi
+    grep -Eq '^[[:space:]]*proxies[[:space:]]*:' "$file" 2>/dev/null || die "订阅内容未找到 proxies:，请使用 Clash/Mihomo YAML 订阅"
+    grep -Eq '^[[:space:]]*-[[:space:]]*name[[:space:]]*:|^[[:space:]]*-[[:space:]]*\{[[:space:]]*name[[:space:]]*:' "$file" 2>/dev/null || die "订阅内容未找到节点 name 字段"
+}
+
+extract_sub_names() {
+    file="$1"
+    out="$2"
+    : > "$out"
+    # block style: - name: "JP Tokyo 01"
+    sed -n "s/^[[:space:]]*-[[:space:]]*name[[:space:]]*:[[:space:]]*[\"']\{0,1\}\([^\"'#]*\).*/\1/p" "$file" >> "$out" 2>/dev/null || true
+    # inline style: - { name: "JP Tokyo 01", type: vmess, ... }
+    sed -n "s/.*name[[:space:]]*:[[:space:]]*[\"']\([^\"'}]*\)[\"'].*/\1/p" "$file" >> "$out" 2>/dev/null || true
+    # remove empty and duplicates
+    awk 'NF {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if (!seen[$0]++) print}' "$out" > "$out.tmp" && mv "$out.tmp" "$out"
+}
+
+country_map() {
+    # CODE|Label|grep -E regex for node names
+    cat <<'EOF_COUNTRY_MAP'
+HK|香港|🇭🇰|香港|hong[ -_]*kong|(^|[^a-z0-9])hk([^a-z0-9]|$)
+TW|台湾|🇹🇼|台湾|台灣|taiwan|taipei|(^|[^a-z0-9])tw([^a-z0-9]|$)
+MO|澳门|🇲🇴|澳门|澳門|macau|macao|(^|[^a-z0-9])mo([^a-z0-9]|$)
+JP|日本|🇯🇵|日本|japan|tokyo|osaka|东京|東京|大阪|(^|[^a-z0-9])jp([^a-z0-9]|$)
+KR|韩国|🇰🇷|韩国|韓國|korea|seoul|首尔|首爾|(^|[^a-z0-9])kr([^a-z0-9]|$)
+SG|新加坡|🇸🇬|新加坡|singapore|(^|[^a-z0-9])sg([^a-z0-9]|$)
+US|美国|🇺🇸|美国|美國|united[ -_]*states|america|usa|los[ -_]*angeles|san[ -_]*jose|new[ -_]*york|(^|[^a-z0-9])us([^a-z0-9]|$)
+UK|英国|🇬🇧|英国|英國|united[ -_]*kingdom|london|(^|[^a-z0-9])uk([^a-z0-9]|$)|(^|[^a-z0-9])gb([^a-z0-9]|$)
+DE|德国|🇩🇪|德国|德國|germany|frankfurt|(^|[^a-z0-9])de([^a-z0-9]|$)
+FR|法国|🇫🇷|法国|法國|france|paris|(^|[^a-z0-9])fr([^a-z0-9]|$)
+NL|荷兰|🇳🇱|荷兰|荷蘭|netherlands|amsterdam|(^|[^a-z0-9])nl([^a-z0-9]|$)
+CA|加拿大|🇨🇦|加拿大|canada|toronto|vancouver|(^|[^a-z0-9])ca([^a-z0-9]|$)
+AU|澳大利亚|🇦🇺|澳大利亚|澳洲|australia|sydney|melbourne|(^|[^a-z0-9])au([^a-z0-9]|$)
+NZ|新西兰|🇳🇿|新西兰|new[ -_]*zealand|(^|[^a-z0-9])nz([^a-z0-9]|$)
+IT|意大利|🇮🇹|意大利|italy|milan|rome|(^|[^a-z0-9])it([^a-z0-9]|$)
+ES|西班牙|🇪🇸|西班牙|spain|madrid|(^|[^a-z0-9])es([^a-z0-9]|$)
+PT|葡萄牙|🇵🇹|葡萄牙|portugal|lisbon|(^|[^a-z0-9])pt([^a-z0-9]|$)
+SE|瑞典|🇸🇪|瑞典|sweden|stockholm|(^|[^a-z0-9])se([^a-z0-9]|$)
+CH|瑞士|🇨🇭|瑞士|switzerland|zurich|zürich|(^|[^a-z0-9])ch([^a-z0-9]|$)
+NO|挪威|🇳🇴|挪威|norway|oslo|(^|[^a-z0-9])no([^a-z0-9]|$)
+FI|芬兰|🇫🇮|芬兰|芬蘭|finland|helsinki|(^|[^a-z0-9])fi([^a-z0-9]|$)
+DK|丹麦|🇩🇰|丹麦|丹麥|denmark|copenhagen|(^|[^a-z0-9])dk([^a-z0-9]|$)
+IE|爱尔兰|🇮🇪|爱尔兰|愛爾蘭|ireland|dublin|(^|[^a-z0-9])ie([^a-z0-9]|$)
+PL|波兰|🇵🇱|波兰|波蘭|poland|warsaw|(^|[^a-z0-9])pl([^a-z0-9]|$)
+CZ|捷克|🇨🇿|捷克|czech|prague|(^|[^a-z0-9])cz([^a-z0-9]|$)
+AT|奥地利|🇦🇹|奥地利|奧地利|austria|vienna|(^|[^a-z0-9])at([^a-z0-9]|$)
+BE|比利时|🇧🇪|比利时|比利時|belgium|brussels|(^|[^a-z0-9])be([^a-z0-9]|$)
+LU|卢森堡|🇱🇺|卢森堡|盧森堡|luxembourg|(^|[^a-z0-9])lu([^a-z0-9]|$)
+RO|罗马尼亚|🇷🇴|罗马尼亚|羅馬尼亞|romania|bucharest|(^|[^a-z0-9])ro([^a-z0-9]|$)
+TR|土耳其|🇹🇷|土耳其|turkey|istanbul|(^|[^a-z0-9])tr([^a-z0-9]|$)
+RU|俄罗斯|🇷🇺|俄罗斯|俄羅斯|russia|moscow|(^|[^a-z0-9])ru([^a-z0-9]|$)
+UA|乌克兰|🇺🇦|乌克兰|烏克蘭|ukraine|kyiv|kiev|(^|[^a-z0-9])ua([^a-z0-9]|$)
+IN|印度|🇮🇳|印度|india|mumbai|delhi|bangalore|chennai|(^|[^a-z0-9])in([^a-z0-9]|$)
+ID|印度尼西亚|🇮🇩|印度尼西亚|印尼|indonesia|jakarta|(^|[^a-z0-9])id([^a-z0-9]|$)
+MY|马来西亚|🇲🇾|马来西亚|馬來西亞|malaysia|kuala[ -_]*lumpur|(^|[^a-z0-9])my([^a-z0-9]|$)
+TH|泰国|🇹🇭|泰国|泰國|thailand|bangkok|(^|[^a-z0-9])th([^a-z0-9]|$)
+VN|越南|🇻🇳|越南|vietnam|hanoi|saigon|(^|[^a-z0-9])vn([^a-z0-9]|$)
+PH|菲律宾|🇵🇭|菲律宾|菲律賓|philippines|manila|(^|[^a-z0-9])ph([^a-z0-9]|$)
+AE|阿联酋|🇦🇪|阿联酋|阿聯酋|uae|dubai|(^|[^a-z0-9])ae([^a-z0-9]|$)
+IL|以色列|🇮🇱|以色列|israel|tel[ -_]*aviv|(^|[^a-z0-9])il([^a-z0-9]|$)
+SA|沙特|🇸🇦|沙特|saudi|riyadh|(^|[^a-z0-9])sa([^a-z0-9]|$)
+ZA|南非|🇿🇦|南非|south[ -_]*africa|johannesburg|(^|[^a-z0-9])za([^a-z0-9]|$)
+BR|巴西|🇧🇷|巴西|brazil|sao[ -_]*paulo|são[ -_]*paulo|(^|[^a-z0-9])br([^a-z0-9]|$)
+MX|墨西哥|🇲🇽|墨西哥|mexico|(^|[^a-z0-9])mx([^a-z0-9]|$)
+AR|阿根廷|🇦🇷|阿根廷|argentina|buenos[ -_]*aires|(^|[^a-z0-9])ar([^a-z0-9]|$)
+CL|智利|🇨🇱|智利|chile|santiago|(^|[^a-z0-9])cl([^a-z0-9]|$)
+CO|哥伦比亚|🇨🇴|哥伦比亚|哥倫比亞|colombia|bogota|bogotá|(^|[^a-z0-9])co([^a-z0-9]|$)
+PE|秘鲁|🇵🇪|秘鲁|秘魯|peru|lima|(^|[^a-z0-9])pe([^a-z0-9]|$)
+EOF_COUNTRY_MAP
+}
+
+country_label() {
+    code="$1"
+    country_map | awk -F'|' -v c="$code" '$1==c {print $2; exit}'
+}
+
+country_regex() {
+    code="$1"
+    country_map | awk -F'|' -v c="$code" '$1==c {for(i=3;i<=NF;i++){printf "%s%s", (i==3?"":"|"), $i} print ""; exit}'
+}
+
+sub_detect_countries() {
+    names_file="$1"
+    countries_file="$2"
+    counts_file="$3"
+    : > "$countries_file"
+    : > "$counts_file"
+
+    country_map | while IFS='|' read -r code label rest; do
+        [ -n "$code" ] || continue
+        regex="$(country_regex "$code")"
+        [ -n "$regex" ] || continue
+        count="$(grep -Eic "$regex" "$names_file" 2>/dev/null || echo 0)"
+        count="$(printf '%s' "$count" | awk '{print $1}')"
+        if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
+            printf '%s\n' "$code" >> "$countries_file"
+            printf '%s|%s|%s\n' "$code" "$label" "$count" >> "$counts_file"
+        fi
+    done
+}
+
+generate_password() {
+    if [ -r /dev/urandom ] && have tr && have head; then
+        pw="$(tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 14)"
+        if [ -n "$pw" ]; then
+            printf '%s\n' "$pw"
+            return 0
+        fi
+    fi
+    printf 'mg%s%s\n' "$(date +%s 2>/dev/null || echo 0)" "$$"
+}
+
+get_account_default_password() {
+    if [ -s "$ACCOUNT_DEFAULT_PASSWORD_FILE" ]; then
+        sed -n '1p' "$ACCOUNT_DEFAULT_PASSWORD_FILE" 2>/dev/null
+        return 0
+    fi
+    printf '%s\n' "$DEFAULT_ACCOUNT_PASSWORD"
+}
+
+validate_account_password() {
+    pw="$1"
+    [ -n "$pw" ] || die "默认密码不能为空"
+    case "$pw" in
+        *:*|*\"*|*\\*) die "默认密码不能包含冒号、双引号或反斜杠" ;;
+        *' '*|*'\t'*) die "默认密码不能包含空格" ;;
+    esac
+    return 0
+}
+
+save_account_default_password() {
+    pw="$1"
+    validate_account_password "$pw"
+    mkdir -p "$DATA_DIR" || die "创建数据目录失败：$DATA_DIR"
+    printf '%s\n' "$pw" > "$ACCOUNT_DEFAULT_PASSWORD_FILE" || die "保存默认密码失败"
+    chmod 600 "$ACCOUNT_DEFAULT_PASSWORD_FILE" 2>/dev/null || true
+}
+
+generate_accounts_file() {
+    countries_file="$1"
+    old_file="$2"
+    new_file="$3"
+    pw="$(get_account_default_password)"
+    : > "$new_file"
+    while IFS= read -r code; do
+        [ -n "$code" ] || continue
+        printf '%s:%s\n' "$code" "$pw" >> "$new_file"
+    done < "$countries_file"
+}
+
+generate_sub_config_file() {
+    out="$1"
+    provider_path="$2"
+    accounts_file="$3"
+    countries_file="$4"
+
+    cat > "$out" <<EOF_SUB_CONFIG
+mode: rule
+log-level: warning
+ipv6: false
+
+authentication:
+EOF_SUB_CONFIG
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf '  - "%s"\n' "$line" >> "$out"
+    done < "$accounts_file"
+
+    cat >> "$out" <<EOF_SUB_CONFIG
+
+listeners:
+  - name: socks-users
+    type: socks
+    listen: 0.0.0.0
+    port: $DEFAULT_SOCKS_PORT
+    udp: true
+
+  - name: http-users
+    type: http
+    listen: 0.0.0.0
+    port: $DEFAULT_HTTP_PORT
+
+proxy-providers:
+  mgate-sub:
+    type: file
+    path: "$provider_path"
+    health-check:
+      enable: false
+
+proxy-groups:
+EOF_SUB_CONFIG
+
+    while IFS= read -r code; do
+        [ -n "$code" ] || continue
+        regex="$(country_regex "$code")"
+        cat >> "$out" <<EOF_GROUP
+  - name: $code
+    type: select
+    use:
+      - mgate-sub
+    filter: "(?i)$regex"
+
+EOF_GROUP
+    done < "$countries_file"
+
+    cat >> "$out" <<EOF_RULES
+rules:
+EOF_RULES
+    while IFS= read -r code; do
+        [ -n "$code" ] || continue
+        printf '  - IN-USER,%s,%s\n' "$code" "$code" >> "$out"
+    done < "$countries_file"
+    printf '  - MATCH,REJECT\n' >> "$out"
+}
+
+sub_update_from_url() {
+    url="$1"
+    [ -n "$url" ] || die "订阅链接为空"
+    [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在，请先执行：mgate install-core"
+    ensure_sub_dirs
+
+    work="$TMP_DIR/sub-update.$$"
+    rm -rf "$work"
+    mkdir -p "$work" || die "创建临时目录失败：$work"
+    tmp_sub="$work/sub.yaml"
+    tmp_names="$work/names.txt"
+    tmp_countries="$work/countries.txt"
+    tmp_counts="$work/counts.txt"
+    tmp_accounts="$work/accounts.txt"
+    tmp_test_dir="$work/test-config"
+    tmp_test_provider_dir="$tmp_test_dir/providers"
+    tmp_test_provider_file="$tmp_test_provider_dir/sub.yaml"
+    tmp_config_test="$tmp_test_dir/config.yaml"
+    tmp_config_final="$work/config-final.yaml"
+    mkdir -p "$tmp_test_provider_dir" || die "创建临时配置目录失败：$tmp_test_provider_dir"
+
+    step "拉取订阅"
+    info "订阅客户端：$SUB_USER_AGENT"
+    sub_fetch_to_file "$url" "$tmp_sub" || die "订阅下载失败"
+    validate_sub_file "$tmp_sub"
+
+    step "识别节点国家/地区"
+    extract_sub_names "$tmp_sub" "$tmp_names"
+    node_count="$(wc -l < "$tmp_names" 2>/dev/null | awk '{print $1}')"
+    [ "${node_count:-0}" -gt 0 ] 2>/dev/null || die "未提取到节点名称"
+    sub_detect_countries "$tmp_names" "$tmp_countries" "$tmp_counts"
+    country_count="$(wc -l < "$tmp_countries" 2>/dev/null | awk '{print $1}')"
+    [ "${country_count:-0}" -gt 0 ] 2>/dev/null || die "未识别到可用国家/地区，请检查节点命名"
+    info "节点数量：$node_count"
+    info "识别国家/地区：$country_count"
+    cat "$tmp_counts" | while IFS='|' read -r code label count; do
+        info "$code $label：$count 个节点"
+    done
+
+    step "生成账号和配置"
+    generate_accounts_file "$tmp_countries" "$SUB_ACCOUNTS_FILE" "$tmp_accounts"
+    cp "$tmp_sub" "$tmp_test_provider_file" || die "写入临时 provider 失败"
+    generate_sub_config_file "$tmp_config_test" "./providers/sub.yaml" "$tmp_accounts" "$tmp_countries"
+    test_out="$work/test.out"
+    printf '%s
+' "$work" > "$SUB_LAST_TMP_FILE" 2>/dev/null || true
+    # Mihomo restricts file provider paths to the configured home directory.
+    # Test the subscription config with a temporary home directory that mirrors the final /opt/mgate/config layout.
+    if ! "$CORE_BIN" -t -d "$tmp_test_dir" -f "$tmp_config_test" >"$test_out" 2>&1; then
+        err "订阅配置测试失败"
+        cp "$test_out" "$SUB_LAST_LOG_FILE" 2>/dev/null || true
+        warn "已保留调试目录：$work"
+        warn "临时配置目录：$tmp_test_dir"
+        warn "临时配置文件：$tmp_config_test"
+        warn "临时 provider：$tmp_test_provider_file"
+        warn "测试错误日志：$SUB_LAST_LOG_FILE"
+        sed 's/^/[DETAIL] /' "$test_out" 2>/dev/null | tail -n 80
+        hint "可执行 mgate sub-debug 查看最近一次订阅失败详情"
+        return 1
+    fi
+
+    generate_sub_config_file "$tmp_config_final" "./providers/sub.yaml" "$tmp_accounts" "$tmp_countries"
+
+    step "备份并应用配置"
+    backup_id="sub-$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
+    cmd_backup "$backup_id" >/dev/null 2>&1 || true
+    mkdir -p "$SUB_PROVIDER_DIR"
+    cp "$tmp_sub" "$SUB_PROVIDER_FILE" || die "写入订阅 provider 失败"
+    cp "$tmp_accounts" "$SUB_ACCOUNTS_FILE" || die "写入账号文件失败"
+    cp "$tmp_countries" "$SUB_COUNTRIES_FILE" || die "写入国家文件失败"
+    cp "$tmp_counts" "$SUB_STATUS_FILE" || die "写入订阅状态失败"
+    printf '%s\n' "$url" > "$SUB_URL_FILE"
+    date '+%Y-%m-%d %H:%M:%S' 2>/dev/null > "$SUB_LAST_UPDATE_FILE" || true
+    cp "$tmp_config_final" "$CONFIG_FILE" || die "写入配置文件失败"
+    chmod 600 "$CONFIG_FILE" "$SUB_ACCOUNTS_FILE" 2>/dev/null || true
+
+    ok "订阅配置已更新"
+    service_restart
+    rm -rf "$work"
+}
+
+
+cmd_account_password() {
+    action="${1:-}"
+    case "$action" in
+        "")
+            info "当前代理账号默认密码：$(get_account_default_password)"
+            info "默认密码文件：$ACCOUNT_DEFAULT_PASSWORD_FILE"
+            if [ -s "$SUB_ACCOUNTS_FILE" ]; then
+                step "当前自动账号"
+                sed 's/^/[INFO] /' "$SUB_ACCOUNTS_FILE" 2>/dev/null
+            fi
+            ;;
+        set)
+            need_root
+            pw="${2:-}"
+            if [ -z "$pw" ]; then
+                printf '请输入新的代理账号默认密码: '
+                read -r pw
+            fi
+            save_account_default_password "$pw"
+            ok "代理账号默认密码已更新"
+            warn "客户端代理密码需要同步修改为新密码"
+            if [ -s "$SUB_URL_FILE" ]; then
+                step "重新生成订阅账号和配置"
+                cmd_sub_update
+            else
+                hint "当前未启用订阅模式。下次订阅更新时会使用新默认密码。"
+            fi
+            ;;
+        *)
+            die "用法：mgate account-password 或 mgate account-password set <password>"
+            ;;
+    esac
+}
+
+cmd_sub_set() {
+    need_root
+    url="${1:-}"
+    if [ -z "$url" ]; then
+        printf '请输入 Clash/Mihomo 订阅链接: '
+        read -r url
+    fi
+    [ -n "$url" ] || die "订阅链接为空"
+    sub_update_from_url "$url"
+}
+
+cmd_sub_update() {
+    need_root
+    [ -s "$SUB_URL_FILE" ] || die "未设置订阅链接，请先执行：mgate sub-set <url>"
+    url="$(cat "$SUB_URL_FILE" 2>/dev/null)"
+    sub_update_from_url "$url"
+}
+
+cmd_sub_debug() {
+    step "最近一次订阅调试信息"
+    if [ -s "$SUB_LAST_TMP_FILE" ]; then
+        last_tmp="$(cat "$SUB_LAST_TMP_FILE" 2>/dev/null)"
+        info "调试目录：$last_tmp"
+        [ -f "$last_tmp/test-config/config.yaml" ] && info "临时配置：$last_tmp/test-config/config.yaml"
+        [ -f "$last_tmp/test-config/providers/sub.yaml" ] && info "临时 provider：$last_tmp/test-config/providers/sub.yaml"
+        [ -f "$last_tmp/sub.yaml" ] && info "订阅缓存：$last_tmp/sub.yaml"
+        [ -f "$last_tmp/names.txt" ] && info "节点名称：$last_tmp/names.txt"
+        [ -f "$last_tmp/counts.txt" ] && info "识别统计：$last_tmp/counts.txt"
+    else
+        warn "暂无调试目录记录"
+    fi
+    if [ -s "$SUB_LAST_LOG_FILE" ]; then
+        step "最近一次配置测试错误"
+        sed 's/^/[DETAIL] /' "$SUB_LAST_LOG_FILE" 2>/dev/null | tail -n 120
+    else
+        warn "暂无订阅错误日志"
+    fi
+}
+
+cmd_sub_status() {
+    info "订阅模式：$([ -s "$SUB_URL_FILE" ] && echo enabled || echo disabled)"
+    if [ -s "$SUB_URL_FILE" ]; then
+        info "订阅链接：$(cat "$SUB_URL_FILE")"
+    fi
+    info "订阅客户端：$SUB_USER_AGENT"
+    info "代理账号默认密码：$(get_account_default_password)"
+    if [ -s "$SUB_LAST_UPDATE_FILE" ]; then
+        info "上次更新：$(cat "$SUB_LAST_UPDATE_FILE")"
+    fi
+    if [ -s "$SUB_STATUS_FILE" ]; then
+        step "识别到的国家/地区"
+        while IFS='|' read -r code label count; do
+            [ -n "$code" ] || continue
+            info "$code $label：$count 个节点"
+        done < "$SUB_STATUS_FILE"
+    else
+        warn "暂无订阅识别结果"
+    fi
+    if [ -s "$SUB_ACCOUNTS_FILE" ]; then
+        step "账号列表"
+        cat "$SUB_ACCOUNTS_FILE" | sed 's/^/[INFO] /'
+    else
+        warn "暂无自动生成账号"
+    fi
+}
+
+cmd_sub_clear() {
+    need_root
+    say "这将清除订阅链接、订阅缓存和自动账号文件。当前 config.yaml 不会自动恢复为手动模板。"
+    if [ "${MGATE_ASSUME_YES:-0}" != "1" ]; then
+        printf '输入 CLEAR 确认: '
+        read -r ans
+        [ "$ans" = "CLEAR" ] || die "已取消"
+    fi
+    cmd_backup "pre-sub-clear" >/dev/null 2>&1 || true
+    rm -f "$SUB_URL_FILE" "$SUB_STATUS_FILE" "$SUB_COUNTRIES_FILE" "$SUB_ACCOUNTS_FILE" "$SUB_LAST_UPDATE_FILE" "$SUB_PROVIDER_FILE"
+    ok "订阅信息已清除"
+    hint "如需重新生成手动模板：FORCE=1 mgate install"
+}
+
 cmd_version() {
     info "mgate 版本：$MGATE_VERSION"
     info "工作目录：$WORKDIR"
@@ -2375,6 +2866,15 @@ $APP_NAME - $APP_DESC
   mgate backups             查看备份列表
   mgate restore [id|latest] 恢复备份
 
+订阅管理：
+  mgate sub-set <url>       设置/替换订阅并立即更新配置
+  mgate sub-update          拉取已保存订阅并更新配置
+  mgate sub-status          查看订阅状态和账号
+  mgate account-password    查看/修改代理账号默认密码
+  mgate passwd              account-password 的别名
+  mgate sub-debug           查看最近一次订阅失败详情
+  mgate sub-clear           清除订阅设置和缓存
+
 Web 管理：
   mgate web-enable          开启 Web 管理
   mgate web-disable         关闭 Web 管理并关闭开机自启
@@ -2423,17 +2923,25 @@ menu() {
         say "18) 查看备份列表"
         say "19) 恢复备份"
         say ""
+        say "订阅管理"
+        say "20) 设置/替换订阅"
+        say "21) 更新订阅"
+        say "22) 查看订阅状态"
+        say "23) 查看/修改代理账号默认密码"
+        say "24) 查看订阅调试信息"
+        say "25) 清除订阅设置"
+        say ""
         say "版本信息"
-        say "20) 查看版本"
+        say "26) 查看版本"
         say ""
         say "Web 管理"
-        say "21) 开启 Web 管理"
-        say "22) 关闭 Web 管理"
-        say "23) 启动 Web 管理"
-        say "24) 停止 Web 管理"
-        say "25) 查看 Web 管理状态"
-        say "26) 重置 Web 管理 Token"
-        say "27) 刷新 Web 管理文件"
+        say "27) 开启 Web 管理"
+        say "28) 关闭 Web 管理"
+        say "29) 启动 Web 管理"
+        say "30) 停止 Web 管理"
+        say "31) 查看 Web 管理状态"
+        say "32) 重置 Web 管理 Token"
+        say "33) 刷新 Web 管理文件"
         say ""
         say "0)  退出"
         printf '请选择: '
@@ -2458,14 +2966,20 @@ menu() {
             17) cmd_backup; pause_enter ;;
             18) cmd_backups; pause_enter ;;
             19) cmd_restore; pause_enter ;;
-            20) cmd_version; pause_enter ;;
-            21) web_enable; pause_enter ;;
-            22) web_disable; pause_enter ;;
-            23) web_start; pause_enter ;;
-            24) web_stop; pause_enter ;;
-            25) web_status; pause_enter ;;
-            26) web_token reset; pause_enter ;;
-            27) web_refresh; pause_enter ;;
+            20) cmd_sub_set; pause_enter ;;
+            21) cmd_sub_update; pause_enter ;;
+            22) cmd_sub_status; pause_enter ;;
+            23) cmd_account_password; pause_enter ;;
+            24) cmd_sub_debug; pause_enter ;;
+            25) cmd_sub_clear; pause_enter ;;
+            26) cmd_version; pause_enter ;;
+            27) web_enable; pause_enter ;;
+            28) web_disable; pause_enter ;;
+            29) web_start; pause_enter ;;
+            30) web_stop; pause_enter ;;
+            31) web_status; pause_enter ;;
+            32) web_token reset; pause_enter ;;
+            33) web_refresh; pause_enter ;;
             0) exit 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
@@ -2501,6 +3015,12 @@ main() {
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
+        sub-set) cmd_sub_set "$@" ;;
+        sub-update) cmd_sub_update "$@" ;;
+        sub-status) cmd_sub_status "$@" ;;
+        account-password|passwd) cmd_account_password "$@" ;;
+        sub-debug) cmd_sub_debug "$@" ;;
+        sub-clear) cmd_sub_clear "$@" ;;
         version) cmd_version "$@" ;;
         web-enable) web_enable "$@" ;;
         web-disable) web_disable "$@" ;;
