@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.5"
+MGATE_VERSION="0.3.6"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -2483,55 +2483,258 @@ extract_sub_names() {
 
 country_map() {
     # CODE|Label|grep -E regex for node names
+    # Expanded in v0.3.6: flags, English names, ISO alpha-2/alpha-3 codes, and common aliases/cities.
     cat <<'EOF_COUNTRY_MAP'
-HK|香港|🇭🇰|香港|hong[ -_]*kong|(^|[^a-z0-9])hk([^a-z0-9]|$)
-TW|台湾|🇹🇼|台湾|台灣|taiwan|taipei|(^|[^a-z0-9])tw([^a-z0-9]|$)
-MO|澳门|🇲🇴|澳门|澳門|macau|macao|(^|[^a-z0-9])mo([^a-z0-9]|$)
-JP|日本|🇯🇵|日本|japan|tokyo|osaka|东京|東京|大阪|(^|[^a-z0-9])jp([^a-z0-9]|$)
-KR|韩国|🇰🇷|韩国|韓國|korea|seoul|首尔|首爾|(^|[^a-z0-9])kr([^a-z0-9]|$)
-SG|新加坡|🇸🇬|新加坡|singapore|(^|[^a-z0-9])sg([^a-z0-9]|$)
-US|美国|🇺🇸|美国|美國|united[ -_]*states|america|usa|los[ -_]*angeles|san[ -_]*jose|new[ -_]*york|(^|[^a-z0-9])us([^a-z0-9]|$)
-UK|英国|🇬🇧|英国|英國|united[ -_]*kingdom|london|(^|[^a-z0-9])uk([^a-z0-9]|$)|(^|[^a-z0-9])gb([^a-z0-9]|$)
-DE|德国|🇩🇪|德国|德國|germany|frankfurt|(^|[^a-z0-9])de([^a-z0-9]|$)
-FR|法国|🇫🇷|法国|法國|france|paris|(^|[^a-z0-9])fr([^a-z0-9]|$)
-NL|荷兰|🇳🇱|荷兰|荷蘭|netherlands|amsterdam|(^|[^a-z0-9])nl([^a-z0-9]|$)
-CA|加拿大|🇨🇦|加拿大|canada|toronto|vancouver|(^|[^a-z0-9])ca([^a-z0-9]|$)
-AU|澳大利亚|🇦🇺|澳大利亚|澳洲|australia|sydney|melbourne|(^|[^a-z0-9])au([^a-z0-9]|$)
-NZ|新西兰|🇳🇿|新西兰|new[ -_]*zealand|(^|[^a-z0-9])nz([^a-z0-9]|$)
-IT|意大利|🇮🇹|意大利|italy|milan|rome|(^|[^a-z0-9])it([^a-z0-9]|$)
-ES|西班牙|🇪🇸|西班牙|spain|madrid|(^|[^a-z0-9])es([^a-z0-9]|$)
-PT|葡萄牙|🇵🇹|葡萄牙|portugal|lisbon|(^|[^a-z0-9])pt([^a-z0-9]|$)
-SE|瑞典|🇸🇪|瑞典|sweden|stockholm|(^|[^a-z0-9])se([^a-z0-9]|$)
-CH|瑞士|🇨🇭|瑞士|switzerland|zurich|zürich|(^|[^a-z0-9])ch([^a-z0-9]|$)
-NO|挪威|🇳🇴|挪威|norway|oslo|(^|[^a-z0-9])no([^a-z0-9]|$)
-FI|芬兰|🇫🇮|芬兰|芬蘭|finland|helsinki|(^|[^a-z0-9])fi([^a-z0-9]|$)
-DK|丹麦|🇩🇰|丹麦|丹麥|denmark|copenhagen|(^|[^a-z0-9])dk([^a-z0-9]|$)
-IE|爱尔兰|🇮🇪|爱尔兰|愛爾蘭|ireland|dublin|(^|[^a-z0-9])ie([^a-z0-9]|$)
-PL|波兰|🇵🇱|波兰|波蘭|poland|warsaw|(^|[^a-z0-9])pl([^a-z0-9]|$)
-CZ|捷克|🇨🇿|捷克|czech|prague|(^|[^a-z0-9])cz([^a-z0-9]|$)
-AT|奥地利|🇦🇹|奥地利|奧地利|austria|vienna|(^|[^a-z0-9])at([^a-z0-9]|$)
-BE|比利时|🇧🇪|比利时|比利時|belgium|brussels|(^|[^a-z0-9])be([^a-z0-9]|$)
-LU|卢森堡|🇱🇺|卢森堡|盧森堡|luxembourg|(^|[^a-z0-9])lu([^a-z0-9]|$)
-RO|罗马尼亚|🇷🇴|罗马尼亚|羅馬尼亞|romania|bucharest|(^|[^a-z0-9])ro([^a-z0-9]|$)
-TR|土耳其|🇹🇷|土耳其|turkey|istanbul|(^|[^a-z0-9])tr([^a-z0-9]|$)
-RU|俄罗斯|🇷🇺|俄罗斯|俄羅斯|russia|moscow|(^|[^a-z0-9])ru([^a-z0-9]|$)
-UA|乌克兰|🇺🇦|乌克兰|烏克蘭|ukraine|kyiv|kiev|(^|[^a-z0-9])ua([^a-z0-9]|$)
-IN|印度|🇮🇳|印度|india|mumbai|delhi|bangalore|chennai|(^|[^a-z0-9])in([^a-z0-9]|$)
-ID|印度尼西亚|🇮🇩|印度尼西亚|印尼|indonesia|jakarta|(^|[^a-z0-9])id([^a-z0-9]|$)
-MY|马来西亚|🇲🇾|马来西亚|馬來西亞|malaysia|kuala[ -_]*lumpur|(^|[^a-z0-9])my([^a-z0-9]|$)
-TH|泰国|🇹🇭|泰国|泰國|thailand|bangkok|(^|[^a-z0-9])th([^a-z0-9]|$)
-VN|越南|🇻🇳|越南|vietnam|hanoi|saigon|(^|[^a-z0-9])vn([^a-z0-9]|$)
-PH|菲律宾|🇵🇭|菲律宾|菲律賓|philippines|manila|(^|[^a-z0-9])ph([^a-z0-9]|$)
-AE|阿联酋|🇦🇪|阿联酋|阿聯酋|uae|dubai|(^|[^a-z0-9])ae([^a-z0-9]|$)
-IL|以色列|🇮🇱|以色列|israel|tel[ -_]*aviv|(^|[^a-z0-9])il([^a-z0-9]|$)
-SA|沙特|🇸🇦|沙特|saudi|riyadh|(^|[^a-z0-9])sa([^a-z0-9]|$)
-ZA|南非|🇿🇦|南非|south[ -_]*africa|johannesburg|(^|[^a-z0-9])za([^a-z0-9]|$)
-BR|巴西|🇧🇷|巴西|brazil|sao[ -_]*paulo|são[ -_]*paulo|(^|[^a-z0-9])br([^a-z0-9]|$)
-MX|墨西哥|🇲🇽|墨西哥|mexico|(^|[^a-z0-9])mx([^a-z0-9]|$)
-AR|阿根廷|🇦🇷|阿根廷|argentina|buenos[ -_]*aires|(^|[^a-z0-9])ar([^a-z0-9]|$)
-CL|智利|🇨🇱|智利|chile|santiago|(^|[^a-z0-9])cl([^a-z0-9]|$)
-CO|哥伦比亚|🇨🇴|哥伦比亚|哥倫比亞|colombia|bogota|bogotá|(^|[^a-z0-9])co([^a-z0-9]|$)
-PE|秘鲁|🇵🇪|秘鲁|秘魯|peru|lima|(^|[^a-z0-9])pe([^a-z0-9]|$)
+HK|香港|🇭🇰|香港|hong[ -_]*kong|hongkong|(^|[^a-z0-9])hkg([^a-z0-9]|$)|(^|[^a-z0-9])hk([^a-z0-9]|$)|港区|港節點|港节点|港專|港专|hong[ -_]*kong[ -_]*special[ -_]*administrative[ -_]*region[ -_]*of[ -_]*china
+TW|台湾|🇹🇼|台湾|台灣|taiwan|taipei|kaohsiung|(^|[^a-z0-9])tw([^a-z0-9]|$)|(^|[^a-z0-9])twn([^a-z0-9]|$)|台北|高雄|taiwan,[ -_]*province[ -_]*of[ -_]*china
+MO|澳门|🇲🇴|澳门|澳門|macau|macao|(^|[^a-z0-9])mo([^a-z0-9]|$)|(^|[^a-z0-9])mac([^a-z0-9]|$)|macao[ -_]*special[ -_]*administrative[ -_]*region[ -_]*of[ -_]*china
+JP|日本|🇯🇵|日本|japan|tokyo|osaka|(^|[^a-z0-9])jp([^a-z0-9]|$)|(^|[^a-z0-9])jpn([^a-z0-9]|$)|东京|東京|大阪|名古屋|nagoya|樱花|櫻花
+KR|韩国|🇰🇷|韩国|韓國|korea|south[ -_]*korea|seoul|(^|[^a-z0-9])kr([^a-z0-9]|$)|(^|[^a-z0-9])kor([^a-z0-9]|$)|首尔|首爾|仁川|incheon|korea,[ -_]*republic[ -_]*of
+SG|新加坡|🇸🇬|新加坡|singapore|(^|[^a-z0-9])sg([^a-z0-9]|$)|(^|[^a-z0-9])sgp([^a-z0-9]|$)|狮城|獅城|republic[ -_]*of[ -_]*singapore
+US|美国|🇺🇸|美国|美國|united[ -_]*states|(^|[^a-z0-9])usa([^a-z0-9]|$)|america|los[ -_]*angeles|san[ -_]*jose|new[ -_]*york|chicago|dallas|seattle|(^|[^a-z0-9])us([^a-z0-9]|$)|美西|美东|美東|洛杉矶|洛杉磯|圣何塞|聖荷西|纽约|紐約|united[ -_]*states[ -_]*of[ -_]*america
+UK|英国|🇬🇧|英国|英國|united[ -_]*kingdom|great[ -_]*britain|britain|england|london|(^|[^a-z0-9])uk([^a-z0-9]|$)|(^|[^a-z0-9])gb([^a-z0-9]|$)|(^|[^a-z0-9])gbr([^a-z0-9]|$)|伦敦|倫敦|united[ -_]*kingdom[ -_]*of[ -_]*great[ -_]*britain[ -_]*and[ -_]*northern[ -_]*ireland
+DE|德国|🇩🇪|德国|德國|germany|(^|[^a-z0-9])deu([^a-z0-9]|$)|frankfurt|berlin|(^|[^a-z0-9])de([^a-z0-9]|$)|法兰克福|法蘭克福|柏林|federal[ -_]*republic[ -_]*of[ -_]*germany
+FR|法国|🇫🇷|法国|法國|france|paris|(^|[^a-z0-9])fr([^a-z0-9]|$)|(^|[^a-z0-9])fra([^a-z0-9]|$)|巴黎|french[ -_]*republic
+NL|荷兰|🇳🇱|荷兰|荷蘭|netherlands|holland|amsterdam|(^|[^a-z0-9])nl([^a-z0-9]|$)|(^|[^a-z0-9])nld([^a-z0-9]|$)|阿姆斯特丹|kingdom[ -_]*of[ -_]*the[ -_]*netherlands
+CA|加拿大|🇨🇦|加拿大|canada|toronto|vancouver|montreal|(^|[^a-z0-9])ca([^a-z0-9]|$)|(^|[^a-z0-9])can([^a-z0-9]|$)|多伦多|多倫多|温哥华|溫哥華
+AU|澳大利亚|🇦🇺|澳大利亚|澳大利亞|澳洲|australia|sydney|melbourne|(^|[^a-z0-9])au([^a-z0-9]|$)|(^|[^a-z0-9])aus([^a-z0-9]|$)|悉尼|墨尔本|墨爾本
+NZ|新西兰|🇳🇿|新西兰|新西蘭|new[ -_]*zealand|auckland|(^|[^a-z0-9])nz([^a-z0-9]|$)|(^|[^a-z0-9])nzl([^a-z0-9]|$)|奥克兰|奧克蘭
+IT|意大利|🇮🇹|意大利|italy|milan|rome|(^|[^a-z0-9])ita([^a-z0-9]|$)|米兰|米蘭|罗马|羅馬|italian[ -_]*republic
+ES|西班牙|🇪🇸|西班牙|spain|madrid|barcelona|(^|[^a-z0-9])es([^a-z0-9]|$)|(^|[^a-z0-9])esp([^a-z0-9]|$)|马德里|馬德里|巴塞罗那|kingdom[ -_]*of[ -_]*spain
+PT|葡萄牙|🇵🇹|葡萄牙|portugal|lisbon|(^|[^a-z0-9])pt([^a-z0-9]|$)|(^|[^a-z0-9])prt([^a-z0-9]|$)|里斯本|portuguese[ -_]*republic
+SE|瑞典|🇸🇪|瑞典|sweden|stockholm|(^|[^a-z0-9])se([^a-z0-9]|$)|(^|[^a-z0-9])swe([^a-z0-9]|$)|斯德哥尔摩|斯德哥爾摩|kingdom[ -_]*of[ -_]*sweden
+CH|瑞士|🇨🇭|瑞士|switzerland|zurich|zürich|geneva|(^|[^a-z0-9])ch([^a-z0-9]|$)|(^|[^a-z0-9])che([^a-z0-9]|$)|苏黎世|蘇黎世|日内瓦|日內瓦|swiss[ -_]*confederation
+NO|挪威|🇳🇴|挪威|norway|oslo|(^|[^a-z0-9])nor([^a-z0-9]|$)|奥斯陆|奧斯陸|kingdom[ -_]*of[ -_]*norway
+FI|芬兰|🇫🇮|芬兰|芬蘭|finland|helsinki|(^|[^a-z0-9])fi([^a-z0-9]|$)|(^|[^a-z0-9])fin([^a-z0-9]|$)|赫尔辛基|赫爾辛基|republic[ -_]*of[ -_]*finland
+DK|丹麦|🇩🇰|丹麦|丹麥|denmark|copenhagen|(^|[^a-z0-9])dk([^a-z0-9]|$)|(^|[^a-z0-9])dnk([^a-z0-9]|$)|哥本哈根|kingdom[ -_]*of[ -_]*denmark
+IE|爱尔兰|🇮🇪|爱尔兰|愛爾蘭|ireland|dublin|(^|[^a-z0-9])ie([^a-z0-9]|$)|(^|[^a-z0-9])irl([^a-z0-9]|$)|都柏林
+PL|波兰|🇵🇱|波兰|波蘭|poland|warsaw|(^|[^a-z0-9])pl([^a-z0-9]|$)|(^|[^a-z0-9])pol([^a-z0-9]|$)|华沙|華沙|republic[ -_]*of[ -_]*poland
+CZ|捷克|🇨🇿|捷克|czech|czechia|prague|(^|[^a-z0-9])cz([^a-z0-9]|$)|(^|[^a-z0-9])cze([^a-z0-9]|$)|布拉格|czech[ -_]*republic
+AT|奥地利|🇦🇹|奥地利|奧地利|austria|vienna|(^|[^a-z0-9])aut([^a-z0-9]|$)|维也纳|維也納|republic[ -_]*of[ -_]*austria
+BE|比利时|🇧🇪|比利时|比利時|belgium|brussels|(^|[^a-z0-9])bel([^a-z0-9]|$)|布鲁塞尔|布魯塞爾|kingdom[ -_]*of[ -_]*belgium
+LU|卢森堡|🇱🇺|卢森堡|盧森堡|luxembourg|(^|[^a-z0-9])lu([^a-z0-9]|$)|(^|[^a-z0-9])lux([^a-z0-9]|$)|grand[ -_]*duchy[ -_]*of[ -_]*luxembourg
+RO|罗马尼亚|🇷🇴|罗马尼亚|羅馬尼亞|romania|bucharest|(^|[^a-z0-9])ro([^a-z0-9]|$)|(^|[^a-z0-9])rou([^a-z0-9]|$)|布加勒斯特
+TR|土耳其|🇹🇷|土耳其|turkey|turkiye|türkiye|istanbul|(^|[^a-z0-9])tr([^a-z0-9]|$)|(^|[^a-z0-9])tur([^a-z0-9]|$)|伊斯坦布尔|伊斯坦堡|republic[ -_]*of[ -_]*türkiye
+RU|俄罗斯|🇷🇺|俄罗斯|俄羅斯|russia|moscow|saint[ -_]*petersburg|(^|[^a-z0-9])ru([^a-z0-9]|$)|(^|[^a-z0-9])rus([^a-z0-9]|$)|莫斯科|russian[ -_]*federation
+UA|乌克兰|🇺🇦|乌克兰|烏克蘭|ukraine|kyiv|kiev|(^|[^a-z0-9])ua([^a-z0-9]|$)|(^|[^a-z0-9])ukr([^a-z0-9]|$)|基辅|基輔
+IN|印度|🇮🇳|印度|india|mumbai|delhi|bangalore|chennai|(^|[^a-z0-9])ind([^a-z0-9]|$)|孟买|孟買|德里|班加罗尔|republic[ -_]*of[ -_]*india
+ID|印度尼西亚|🇮🇩|印度尼西亚|印度尼西亞|印尼|indonesia|jakarta|(^|[^a-z0-9])id([^a-z0-9]|$)|(^|[^a-z0-9])idn([^a-z0-9]|$)|雅加达|雅加達|republic[ -_]*of[ -_]*indonesia
+MY|马来西亚|🇲🇾|马来西亚|馬來西亞|malaysia|kuala[ -_]*lumpur|(^|[^a-z0-9])mys([^a-z0-9]|$)|吉隆坡
+TH|泰国|🇹🇭|泰国|泰國|thailand|bangkok|(^|[^a-z0-9])th([^a-z0-9]|$)|(^|[^a-z0-9])tha([^a-z0-9]|$)|曼谷|kingdom[ -_]*of[ -_]*thailand
+VN|越南|🇻🇳|越南|vietnam|hanoi|saigon|ho[ -_]*chi[ -_]*minh|(^|[^a-z0-9])vn([^a-z0-9]|$)|(^|[^a-z0-9])vnm([^a-z0-9]|$)|河内|河內|胡志明|viet[ -_]*nam|socialist[ -_]*republic[ -_]*of[ -_]*viet[ -_]*nam
+PH|菲律宾|🇵🇭|菲律宾|菲律賓|philippines|manila|(^|[^a-z0-9])ph([^a-z0-9]|$)|(^|[^a-z0-9])phl([^a-z0-9]|$)|马尼拉|馬尼拉|republic[ -_]*of[ -_]*the[ -_]*philippines
+AE|阿联酋|🇦🇪|阿联酋|阿聯酋|(^|[^a-z0-9])uae([^a-z0-9]|$)|united[ -_]*arab[ -_]*emirates|dubai|abu[ -_]*dhabi|(^|[^a-z0-9])ae([^a-z0-9]|$)|(^|[^a-z0-9])are([^a-z0-9]|$)|迪拜|阿布扎比
+IL|以色列|🇮🇱|以色列|israel|tel[ -_]*aviv|jerusalem|(^|[^a-z0-9])il([^a-z0-9]|$)|(^|[^a-z0-9])isr([^a-z0-9]|$)|特拉维夫|耶路撒冷|state[ -_]*of[ -_]*israel
+SA|沙特|🇸🇦|沙特|沙特阿拉伯|saudi|saudi[ -_]*arabia|riyadh|(^|[^a-z0-9])sa([^a-z0-9]|$)|(^|[^a-z0-9])sau([^a-z0-9]|$)|利雅得|kingdom[ -_]*of[ -_]*saudi[ -_]*arabia
+ZA|南非|🇿🇦|南非|south[ -_]*africa|johannesburg|cape[ -_]*town|(^|[^a-z0-9])za([^a-z0-9]|$)|(^|[^a-z0-9])zaf([^a-z0-9]|$)|约翰内斯堡|開普敦|开普敦|republic[ -_]*of[ -_]*south[ -_]*africa
+BR|巴西|🇧🇷|巴西|brazil|sao[ -_]*paulo|são[ -_]*paulo|(^|[^a-z0-9])rio([^a-z0-9]|$)|(^|[^a-z0-9])br([^a-z0-9]|$)|(^|[^a-z0-9])bra([^a-z0-9]|$)|圣保罗|聖保羅|里约|里約|federative[ -_]*republic[ -_]*of[ -_]*brazil
+MX|墨西哥|🇲🇽|墨西哥|mexico|mexico[ -_]*city|(^|[^a-z0-9])mx([^a-z0-9]|$)|(^|[^a-z0-9])mex([^a-z0-9]|$)|united[ -_]*mexican[ -_]*states
+AR|阿根廷|🇦🇷|阿根廷|argentina|buenos[ -_]*aires|(^|[^a-z0-9])ar([^a-z0-9]|$)|(^|[^a-z0-9])arg([^a-z0-9]|$)|布宜诺斯艾利斯|argentine[ -_]*republic
+CL|智利|🇨🇱|智利|chile|santiago|(^|[^a-z0-9])cl([^a-z0-9]|$)|(^|[^a-z0-9])chl([^a-z0-9]|$)|圣地亚哥|聖地亞哥|republic[ -_]*of[ -_]*chile
+CO|哥伦比亚|🇨🇴|哥伦比亚|哥倫比亞|colombia|bogota|bogotá|(^|[^a-z0-9])co([^a-z0-9]|$)|(^|[^a-z0-9])col([^a-z0-9]|$)|波哥大|republic[ -_]*of[ -_]*colombia
+PE|秘鲁|🇵🇪|秘鲁|秘魯|peru|lima|(^|[^a-z0-9])pe([^a-z0-9]|$)|(^|[^a-z0-9])per([^a-z0-9]|$)|利马|利馬|republic[ -_]*of[ -_]*peru
+GR|希腊|🇬🇷|希腊|希臘|greece|athens|(^|[^a-z0-9])gr([^a-z0-9]|$)|(^|[^a-z0-9])grc([^a-z0-9]|$)|雅典|hellenic[ -_]*republic
+HU|匈牙利|🇭🇺|匈牙利|hungary|budapest|(^|[^a-z0-9])hu([^a-z0-9]|$)|(^|[^a-z0-9])hun([^a-z0-9]|$)|布达佩斯
+SK|斯洛伐克|🇸🇰|斯洛伐克|slovakia|bratislava|(^|[^a-z0-9])sk([^a-z0-9]|$)|(^|[^a-z0-9])svk([^a-z0-9]|$)|布拉迪斯拉发|slovak[ -_]*republic
+BG|保加利亚|🇧🇬|保加利亚|保加利亞|bulgaria|sofia|(^|[^a-z0-9])bg([^a-z0-9]|$)|(^|[^a-z0-9])bgr([^a-z0-9]|$)|索菲亚|republic[ -_]*of[ -_]*bulgaria
+HR|克罗地亚|🇭🇷|克罗地亚|克羅地亞|croatia|zagreb|(^|[^a-z0-9])hr([^a-z0-9]|$)|(^|[^a-z0-9])hrv([^a-z0-9]|$)|萨格勒布|republic[ -_]*of[ -_]*croatia
+RS|塞尔维亚|🇷🇸|塞尔维亚|塞爾維亞|serbia|belgrade|(^|[^a-z0-9])rs([^a-z0-9]|$)|(^|[^a-z0-9])srb([^a-z0-9]|$)|贝尔格莱德|republic[ -_]*of[ -_]*serbia
+IS|冰岛|🇮🇸|冰岛|冰島|iceland|reykjavik|(^|[^a-z0-9])isl([^a-z0-9]|$)|雷克雅未克|republic[ -_]*of[ -_]*iceland
+EE|爱沙尼亚|🇪🇪|爱沙尼亚|愛沙尼亞|estonia|tallinn|(^|[^a-z0-9])ee([^a-z0-9]|$)|(^|[^a-z0-9])est([^a-z0-9]|$)|塔林|republic[ -_]*of[ -_]*estonia
+LV|拉脱维亚|🇱🇻|拉脱维亚|拉脫維亞|latvia|riga|(^|[^a-z0-9])lv([^a-z0-9]|$)|(^|[^a-z0-9])lva([^a-z0-9]|$)|里加|republic[ -_]*of[ -_]*latvia
+LT|立陶宛|🇱🇹|立陶宛|lithuania|vilnius|(^|[^a-z0-9])lt([^a-z0-9]|$)|(^|[^a-z0-9])ltu([^a-z0-9]|$)|维尔纽斯|republic[ -_]*of[ -_]*lithuania
+SI|斯洛文尼亚|🇸🇮|斯洛文尼亚|斯洛文尼亞|slovenia|ljubljana|(^|[^a-z0-9])si([^a-z0-9]|$)|(^|[^a-z0-9])svn([^a-z0-9]|$)|卢布尔雅那|republic[ -_]*of[ -_]*slovenia
+CY|塞浦路斯|🇨🇾|塞浦路斯|cyprus|nicosia|(^|[^a-z0-9])cy([^a-z0-9]|$)|(^|[^a-z0-9])cyp([^a-z0-9]|$)|尼科西亚|republic[ -_]*of[ -_]*cyprus
+EG|埃及|🇪🇬|埃及|egypt|cairo|(^|[^a-z0-9])eg([^a-z0-9]|$)|(^|[^a-z0-9])egy([^a-z0-9]|$)|开罗|開羅|arab[ -_]*republic[ -_]*of[ -_]*egypt
+NG|尼日利亚|🇳🇬|尼日利亚|尼日利亞|nigeria|lagos|abuja|(^|[^a-z0-9])ng([^a-z0-9]|$)|(^|[^a-z0-9])nga([^a-z0-9]|$)|拉各斯|federal[ -_]*republic[ -_]*of[ -_]*nigeria
+PK|巴基斯坦|🇵🇰|巴基斯坦|pakistan|karachi|islamabad|(^|[^a-z0-9])pk([^a-z0-9]|$)|(^|[^a-z0-9])pak([^a-z0-9]|$)|卡拉奇|islamic[ -_]*republic[ -_]*of[ -_]*pakistan
+BD|孟加拉|🇧🇩|孟加拉|bangladesh|dhaka|(^|[^a-z0-9])bd([^a-z0-9]|$)|(^|[^a-z0-9])bgd([^a-z0-9]|$)|达卡|達卡|people's[ -_]*republic[ -_]*of[ -_]*bangladesh
+AD|Andorra|🇦🇩|andorra|principality[ -_]*of[ -_]*andorra|(^|[^a-z0-9])and([^a-z0-9]|$)|(^|[^a-z0-9])ad([^a-z0-9]|$)
+AF|Afghanistan|🇦🇫|afghanistan|islamic[ -_]*republic[ -_]*of[ -_]*afghanistan|(^|[^a-z0-9])afg([^a-z0-9]|$)|(^|[^a-z0-9])af([^a-z0-9]|$)
+AG|Antigua and Barbuda|🇦🇬|antigua[ -_]*and[ -_]*barbuda|(^|[^a-z0-9])atg([^a-z0-9]|$)|(^|[^a-z0-9])ag([^a-z0-9]|$)
+AI|Anguilla|🇦🇮|anguilla|(^|[^a-z0-9])aia([^a-z0-9]|$)|(^|[^a-z0-9])ai([^a-z0-9]|$)
+AL|Albania|🇦🇱|albania|republic[ -_]*of[ -_]*albania|(^|[^a-z0-9])alb([^a-z0-9]|$)|(^|[^a-z0-9])al([^a-z0-9]|$)
+AM|Armenia|🇦🇲|armenia|republic[ -_]*of[ -_]*armenia|(^|[^a-z0-9])arm([^a-z0-9]|$)
+AO|Angola|🇦🇴|angola|republic[ -_]*of[ -_]*angola|(^|[^a-z0-9])ago([^a-z0-9]|$)|(^|[^a-z0-9])ao([^a-z0-9]|$)
+AQ|Antarctica|🇦🇶|antarctica|(^|[^a-z0-9])ata([^a-z0-9]|$)|(^|[^a-z0-9])aq([^a-z0-9]|$)
+AS|American Samoa|🇦🇸|american[ -_]*samoa|(^|[^a-z0-9])asm([^a-z0-9]|$)
+AW|Aruba|🇦🇼|aruba|(^|[^a-z0-9])abw([^a-z0-9]|$)|(^|[^a-z0-9])aw([^a-z0-9]|$)
+AX|Åland Islands|🇦🇽|åland[ -_]*islands|(^|[^a-z0-9])ala([^a-z0-9]|$)|(^|[^a-z0-9])ax([^a-z0-9]|$)
+AZ|Azerbaijan|🇦🇿|azerbaijan|republic[ -_]*of[ -_]*azerbaijan|(^|[^a-z0-9])aze([^a-z0-9]|$)|(^|[^a-z0-9])az([^a-z0-9]|$)
+BA|Bosnia and Herzegovina|🇧🇦|bosnia[ -_]*and[ -_]*herzegovina|republic[ -_]*of[ -_]*bosnia[ -_]*and[ -_]*herzegovina|(^|[^a-z0-9])bih([^a-z0-9]|$)|(^|[^a-z0-9])ba([^a-z0-9]|$)
+BB|Barbados|🇧🇧|barbados|(^|[^a-z0-9])brb([^a-z0-9]|$)|(^|[^a-z0-9])bb([^a-z0-9]|$)
+BF|Burkina Faso|🇧🇫|burkina[ -_]*faso|(^|[^a-z0-9])bfa([^a-z0-9]|$)|(^|[^a-z0-9])bf([^a-z0-9]|$)
+BH|巴林|🇧🇭|巴林|bahrain|manama|(^|[^a-z0-9])bh([^a-z0-9]|$)|(^|[^a-z0-9])bhr([^a-z0-9]|$)|麦纳麦|kingdom[ -_]*of[ -_]*bahrain
+BI|Burundi|🇧🇮|burundi|republic[ -_]*of[ -_]*burundi|(^|[^a-z0-9])bdi([^a-z0-9]|$)|(^|[^a-z0-9])bi([^a-z0-9]|$)
+BJ|Benin|🇧🇯|benin|republic[ -_]*of[ -_]*benin|(^|[^a-z0-9])ben([^a-z0-9]|$)|(^|[^a-z0-9])bj([^a-z0-9]|$)
+BL|Saint Barthélemy|🇧🇱|saint[ -_]*barthélemy|(^|[^a-z0-9])blm([^a-z0-9]|$)|(^|[^a-z0-9])bl([^a-z0-9]|$)
+BM|Bermuda|🇧🇲|bermuda|(^|[^a-z0-9])bmu([^a-z0-9]|$)|(^|[^a-z0-9])bm([^a-z0-9]|$)
+BN|Brunei Darussalam|🇧🇳|brunei[ -_]*darussalam|(^|[^a-z0-9])brn([^a-z0-9]|$)|(^|[^a-z0-9])bn([^a-z0-9]|$)
+BO|玻利维亚|🇧🇴|玻利维亚|玻利維亞|bolivia|la[ -_]*paz|(^|[^a-z0-9])bo([^a-z0-9]|$)|(^|[^a-z0-9])bol([^a-z0-9]|$)|拉巴斯|bolivia,[ -_]*plurinational[ -_]*state[ -_]*of|plurinational[ -_]*state[ -_]*of[ -_]*bolivia
+BQ|Bonaire, Sint Eustatius and Saba|🇧🇶|bonaire,[ -_]*sint[ -_]*eustatius[ -_]*and[ -_]*saba|(^|[^a-z0-9])bes([^a-z0-9]|$)|(^|[^a-z0-9])bq([^a-z0-9]|$)
+BS|Bahamas|🇧🇸|bahamas|commonwealth[ -_]*of[ -_]*the[ -_]*bahamas|(^|[^a-z0-9])bhs([^a-z0-9]|$)|(^|[^a-z0-9])bs([^a-z0-9]|$)
+BT|Bhutan|🇧🇹|bhutan|kingdom[ -_]*of[ -_]*bhutan|(^|[^a-z0-9])btn([^a-z0-9]|$)|(^|[^a-z0-9])bt([^a-z0-9]|$)
+BV|Bouvet Island|🇧🇻|bouvet[ -_]*island|(^|[^a-z0-9])bvt([^a-z0-9]|$)|(^|[^a-z0-9])bv([^a-z0-9]|$)
+BW|Botswana|🇧🇼|botswana|republic[ -_]*of[ -_]*botswana|(^|[^a-z0-9])bwa([^a-z0-9]|$)|(^|[^a-z0-9])bw([^a-z0-9]|$)
+BY|Belarus|🇧🇾|belarus|republic[ -_]*of[ -_]*belarus|(^|[^a-z0-9])blr([^a-z0-9]|$)
+BZ|Belize|🇧🇿|belize|(^|[^a-z0-9])blz([^a-z0-9]|$)|(^|[^a-z0-9])bz([^a-z0-9]|$)
+CC|Cocos (Keeling) Islands|🇨🇨|cocos[ -_]*\(keeling\)[ -_]*islands|(^|[^a-z0-9])cck([^a-z0-9]|$)|(^|[^a-z0-9])cc([^a-z0-9]|$)
+CD|Congo, The Democratic Republic of the|🇨🇩|congo,[ -_]*the[ -_]*democratic[ -_]*republic[ -_]*of[ -_]*the|(^|[^a-z0-9])cod([^a-z0-9]|$)|(^|[^a-z0-9])cd([^a-z0-9]|$)
+CF|Central African Republic|🇨🇫|central[ -_]*african[ -_]*republic|(^|[^a-z0-9])caf([^a-z0-9]|$)|(^|[^a-z0-9])cf([^a-z0-9]|$)
+CG|Congo|🇨🇬|congo|republic[ -_]*of[ -_]*the[ -_]*congo|(^|[^a-z0-9])cog([^a-z0-9]|$)|(^|[^a-z0-9])cg([^a-z0-9]|$)
+CI|Côte d'Ivoire|🇨🇮|côte[ -_]*d'ivoire|republic[ -_]*of[ -_]*côte[ -_]*d'ivoire|(^|[^a-z0-9])civ([^a-z0-9]|$)|(^|[^a-z0-9])ci([^a-z0-9]|$)
+CK|Cook Islands|🇨🇰|cook[ -_]*islands|(^|[^a-z0-9])cok([^a-z0-9]|$)|(^|[^a-z0-9])ck([^a-z0-9]|$)
+CM|Cameroon|🇨🇲|cameroon|republic[ -_]*of[ -_]*cameroon|(^|[^a-z0-9])cmr([^a-z0-9]|$)|(^|[^a-z0-9])cm([^a-z0-9]|$)
+CN|China|🇨🇳|china|people's[ -_]*republic[ -_]*of[ -_]*china|(^|[^a-z0-9])chn([^a-z0-9]|$)|(^|[^a-z0-9])cn([^a-z0-9]|$)
+CR|哥斯达黎加|🇨🇷|哥斯达黎加|哥斯大黎加|costa[ -_]*rica|san[ -_]*jose|(^|[^a-z0-9])cr([^a-z0-9]|$)|(^|[^a-z0-9])cri([^a-z0-9]|$)|republic[ -_]*of[ -_]*costa[ -_]*rica
+CU|古巴|🇨🇺|古巴|cuba|havana|(^|[^a-z0-9])cu([^a-z0-9]|$)|(^|[^a-z0-9])cub([^a-z0-9]|$)|哈瓦那|republic[ -_]*of[ -_]*cuba
+CV|Cabo Verde|🇨🇻|cabo[ -_]*verde|republic[ -_]*of[ -_]*cabo[ -_]*verde|(^|[^a-z0-9])cpv([^a-z0-9]|$)|(^|[^a-z0-9])cv([^a-z0-9]|$)
+CW|Curaçao|🇨🇼|curaçao|(^|[^a-z0-9])cuw([^a-z0-9]|$)|(^|[^a-z0-9])cw([^a-z0-9]|$)
+CX|Christmas Island|🇨🇽|christmas[ -_]*island|(^|[^a-z0-9])cxr([^a-z0-9]|$)|(^|[^a-z0-9])cx([^a-z0-9]|$)
+DJ|Djibouti|🇩🇯|djibouti|republic[ -_]*of[ -_]*djibouti|(^|[^a-z0-9])dji([^a-z0-9]|$)|(^|[^a-z0-9])dj([^a-z0-9]|$)
+DM|Dominica|🇩🇲|dominica|commonwealth[ -_]*of[ -_]*dominica|(^|[^a-z0-9])dma([^a-z0-9]|$)|(^|[^a-z0-9])dm([^a-z0-9]|$)
+DO|多米尼加|🇩🇴|多米尼加|dominican[ -_]*republic|santo[ -_]*domingo|(^|[^a-z0-9])dom([^a-z0-9]|$)
+DZ|阿尔及利亚|🇩🇿|阿尔及利亚|阿爾及利亞|algeria|algiers|(^|[^a-z0-9])dz([^a-z0-9]|$)|(^|[^a-z0-9])dza([^a-z0-9]|$)|阿尔及尔|people's[ -_]*democratic[ -_]*republic[ -_]*of[ -_]*algeria
+EC|厄瓜多尔|🇪🇨|厄瓜多尔|厄瓜多爾|ecuador|quito|(^|[^a-z0-9])ec([^a-z0-9]|$)|(^|[^a-z0-9])ecu([^a-z0-9]|$)|基多|republic[ -_]*of[ -_]*ecuador
+EH|Western Sahara|🇪🇭|western[ -_]*sahara|(^|[^a-z0-9])esh([^a-z0-9]|$)|(^|[^a-z0-9])eh([^a-z0-9]|$)
+ER|Eritrea|🇪🇷|eritrea|the[ -_]*state[ -_]*of[ -_]*eritrea|(^|[^a-z0-9])eri([^a-z0-9]|$)|(^|[^a-z0-9])er([^a-z0-9]|$)
+ET|埃塞俄比亚|🇪🇹|埃塞俄比亚|衣索比亚|ethiopia|addis[ -_]*ababa|(^|[^a-z0-9])et([^a-z0-9]|$)|(^|[^a-z0-9])eth([^a-z0-9]|$)|亚的斯亚贝巴|federal[ -_]*democratic[ -_]*republic[ -_]*of[ -_]*ethiopia
+FJ|Fiji|🇫🇯|fiji|republic[ -_]*of[ -_]*fiji|(^|[^a-z0-9])fji([^a-z0-9]|$)|(^|[^a-z0-9])fj([^a-z0-9]|$)
+FK|Falkland Islands (Malvinas)|🇫🇰|falkland[ -_]*islands[ -_]*\(malvinas\)|(^|[^a-z0-9])flk([^a-z0-9]|$)|(^|[^a-z0-9])fk([^a-z0-9]|$)
+FM|Micronesia, Federated States of|🇫🇲|micronesia,[ -_]*federated[ -_]*states[ -_]*of|federated[ -_]*states[ -_]*of[ -_]*micronesia|(^|[^a-z0-9])fsm([^a-z0-9]|$)|(^|[^a-z0-9])fm([^a-z0-9]|$)
+FO|Faroe Islands|🇫🇴|faroe[ -_]*islands|(^|[^a-z0-9])fro([^a-z0-9]|$)|(^|[^a-z0-9])fo([^a-z0-9]|$)
+GA|Gabon|🇬🇦|gabon|gabonese[ -_]*republic|(^|[^a-z0-9])gab([^a-z0-9]|$)|(^|[^a-z0-9])ga([^a-z0-9]|$)
+GD|Grenada|🇬🇩|grenada|(^|[^a-z0-9])grd([^a-z0-9]|$)|(^|[^a-z0-9])gd([^a-z0-9]|$)
+GE|Georgia|🇬🇪|georgia|(^|[^a-z0-9])geo([^a-z0-9]|$)|(^|[^a-z0-9])ge([^a-z0-9]|$)
+GF|French Guiana|🇬🇫|french[ -_]*guiana|(^|[^a-z0-9])guf([^a-z0-9]|$)|(^|[^a-z0-9])gf([^a-z0-9]|$)
+GG|Guernsey|🇬🇬|guernsey|(^|[^a-z0-9])ggy([^a-z0-9]|$)|(^|[^a-z0-9])gg([^a-z0-9]|$)
+GH|加纳|🇬🇭|加纳|迦納|ghana|accra|(^|[^a-z0-9])gh([^a-z0-9]|$)|(^|[^a-z0-9])gha([^a-z0-9]|$)|阿克拉|republic[ -_]*of[ -_]*ghana
+GI|Gibraltar|🇬🇮|gibraltar|(^|[^a-z0-9])gib([^a-z0-9]|$)|(^|[^a-z0-9])gi([^a-z0-9]|$)
+GL|Greenland|🇬🇱|greenland|(^|[^a-z0-9])grl([^a-z0-9]|$)|(^|[^a-z0-9])gl([^a-z0-9]|$)
+GM|Gambia|🇬🇲|gambia|republic[ -_]*of[ -_]*the[ -_]*gambia|(^|[^a-z0-9])gmb([^a-z0-9]|$)|(^|[^a-z0-9])gm([^a-z0-9]|$)
+GN|Guinea|🇬🇳|guinea|republic[ -_]*of[ -_]*guinea|(^|[^a-z0-9])gin([^a-z0-9]|$)|(^|[^a-z0-9])gn([^a-z0-9]|$)
+GP|Guadeloupe|🇬🇵|guadeloupe|(^|[^a-z0-9])glp([^a-z0-9]|$)|(^|[^a-z0-9])gp([^a-z0-9]|$)
+GQ|Equatorial Guinea|🇬🇶|equatorial[ -_]*guinea|republic[ -_]*of[ -_]*equatorial[ -_]*guinea|(^|[^a-z0-9])gnq([^a-z0-9]|$)|(^|[^a-z0-9])gq([^a-z0-9]|$)
+GS|South Georgia and the South Sandwich Islands|🇬🇸|south[ -_]*georgia[ -_]*and[ -_]*the[ -_]*south[ -_]*sandwich[ -_]*islands|(^|[^a-z0-9])sgs([^a-z0-9]|$)|(^|[^a-z0-9])gs([^a-z0-9]|$)
+GT|Guatemala|🇬🇹|guatemala|republic[ -_]*of[ -_]*guatemala|(^|[^a-z0-9])gtm([^a-z0-9]|$)|(^|[^a-z0-9])gt([^a-z0-9]|$)
+GU|Guam|🇬🇺|guam|(^|[^a-z0-9])gum([^a-z0-9]|$)|(^|[^a-z0-9])gu([^a-z0-9]|$)
+GW|Guinea-Bissau|🇬🇼|guinea[ -_]*bissau|republic[ -_]*of[ -_]*guinea[ -_]*bissau|(^|[^a-z0-9])gnb([^a-z0-9]|$)|(^|[^a-z0-9])gw([^a-z0-9]|$)
+GY|Guyana|🇬🇾|guyana|republic[ -_]*of[ -_]*guyana|(^|[^a-z0-9])guy([^a-z0-9]|$)|(^|[^a-z0-9])gy([^a-z0-9]|$)
+HM|Heard Island and McDonald Islands|🇭🇲|heard[ -_]*island[ -_]*and[ -_]*mcdonald[ -_]*islands|(^|[^a-z0-9])hmd([^a-z0-9]|$)|(^|[^a-z0-9])hm([^a-z0-9]|$)
+HN|Honduras|🇭🇳|honduras|republic[ -_]*of[ -_]*honduras|(^|[^a-z0-9])hnd([^a-z0-9]|$)|(^|[^a-z0-9])hn([^a-z0-9]|$)
+HT|Haiti|🇭🇹|haiti|republic[ -_]*of[ -_]*haiti|(^|[^a-z0-9])hti([^a-z0-9]|$)|(^|[^a-z0-9])ht([^a-z0-9]|$)
+IM|Isle of Man|🇮🇲|isle[ -_]*of[ -_]*man|(^|[^a-z0-9])imn([^a-z0-9]|$)|(^|[^a-z0-9])im([^a-z0-9]|$)
+IO|British Indian Ocean Territory|🇮🇴|british[ -_]*indian[ -_]*ocean[ -_]*territory|(^|[^a-z0-9])iot([^a-z0-9]|$)|(^|[^a-z0-9])io([^a-z0-9]|$)
+IQ|伊拉克|🇮🇶|伊拉克|iraq|baghdad|(^|[^a-z0-9])iq([^a-z0-9]|$)|(^|[^a-z0-9])irq([^a-z0-9]|$)|巴格达|republic[ -_]*of[ -_]*iraq
+IR|伊朗|🇮🇷|伊朗|iran|tehran|(^|[^a-z0-9])ir([^a-z0-9]|$)|(^|[^a-z0-9])irn([^a-z0-9]|$)|德黑兰|iran,[ -_]*islamic[ -_]*republic[ -_]*of|islamic[ -_]*republic[ -_]*of[ -_]*iran
+JE|Jersey|🇯🇪|jersey|(^|[^a-z0-9])jey([^a-z0-9]|$)|(^|[^a-z0-9])je([^a-z0-9]|$)
+JM|Jamaica|🇯🇲|jamaica|(^|[^a-z0-9])jam([^a-z0-9]|$)|(^|[^a-z0-9])jm([^a-z0-9]|$)
+JO|约旦|🇯🇴|约旦|約旦|jordan|amman|(^|[^a-z0-9])jo([^a-z0-9]|$)|(^|[^a-z0-9])jor([^a-z0-9]|$)|安曼|hashemite[ -_]*kingdom[ -_]*of[ -_]*jordan
+KE|肯尼亚|🇰🇪|肯尼亚|肯尼亞|kenya|nairobi|(^|[^a-z0-9])ke([^a-z0-9]|$)|(^|[^a-z0-9])ken([^a-z0-9]|$)|内罗毕|republic[ -_]*of[ -_]*kenya
+KG|Kyrgyzstan|🇰🇬|kyrgyzstan|kyrgyz[ -_]*republic|(^|[^a-z0-9])kgz([^a-z0-9]|$)|(^|[^a-z0-9])kg([^a-z0-9]|$)
+KH|Cambodia|🇰🇭|cambodia|kingdom[ -_]*of[ -_]*cambodia|(^|[^a-z0-9])khm([^a-z0-9]|$)|(^|[^a-z0-9])kh([^a-z0-9]|$)
+KI|Kiribati|🇰🇮|kiribati|republic[ -_]*of[ -_]*kiribati|(^|[^a-z0-9])kir([^a-z0-9]|$)|(^|[^a-z0-9])ki([^a-z0-9]|$)
+KM|Comoros|🇰🇲|comoros|union[ -_]*of[ -_]*the[ -_]*comoros|(^|[^a-z0-9])com([^a-z0-9]|$)|(^|[^a-z0-9])km([^a-z0-9]|$)
+KN|Saint Kitts and Nevis|🇰🇳|saint[ -_]*kitts[ -_]*and[ -_]*nevis|(^|[^a-z0-9])kna([^a-z0-9]|$)|(^|[^a-z0-9])kn([^a-z0-9]|$)
+KP|Korea, Democratic People's Republic of|🇰🇵|korea,[ -_]*democratic[ -_]*people's[ -_]*republic[ -_]*of|democratic[ -_]*people's[ -_]*republic[ -_]*of[ -_]*korea|(^|[^a-z0-9])prk([^a-z0-9]|$)|(^|[^a-z0-9])kp([^a-z0-9]|$)
+KW|科威特|🇰🇼|科威特|kuwait|(^|[^a-z0-9])kw([^a-z0-9]|$)|(^|[^a-z0-9])kwt([^a-z0-9]|$)|state[ -_]*of[ -_]*kuwait
+KY|Cayman Islands|🇰🇾|cayman[ -_]*islands|(^|[^a-z0-9])cym([^a-z0-9]|$)|(^|[^a-z0-9])ky([^a-z0-9]|$)
+KZ|Kazakhstan|🇰🇿|kazakhstan|republic[ -_]*of[ -_]*kazakhstan|(^|[^a-z0-9])kaz([^a-z0-9]|$)|(^|[^a-z0-9])kz([^a-z0-9]|$)
+LA|Lao People's Democratic Republic|🇱🇦|lao[ -_]*people's[ -_]*democratic[ -_]*republic|(^|[^a-z0-9])lao([^a-z0-9]|$)
+LB|黎巴嫩|🇱🇧|黎巴嫩|lebanon|beirut|(^|[^a-z0-9])lb([^a-z0-9]|$)|(^|[^a-z0-9])lbn([^a-z0-9]|$)|贝鲁特|lebanese[ -_]*republic
+LC|Saint Lucia|🇱🇨|saint[ -_]*lucia|(^|[^a-z0-9])lca([^a-z0-9]|$)|(^|[^a-z0-9])lc([^a-z0-9]|$)
+LI|Liechtenstein|🇱🇮|liechtenstein|principality[ -_]*of[ -_]*liechtenstein|(^|[^a-z0-9])lie([^a-z0-9]|$)
+LK|Sri Lanka|🇱🇰|sri[ -_]*lanka|democratic[ -_]*socialist[ -_]*republic[ -_]*of[ -_]*sri[ -_]*lanka|(^|[^a-z0-9])lka([^a-z0-9]|$)|(^|[^a-z0-9])lk([^a-z0-9]|$)
+LR|Liberia|🇱🇷|liberia|republic[ -_]*of[ -_]*liberia|(^|[^a-z0-9])lbr([^a-z0-9]|$)|(^|[^a-z0-9])lr([^a-z0-9]|$)
+LS|Lesotho|🇱🇸|lesotho|kingdom[ -_]*of[ -_]*lesotho|(^|[^a-z0-9])lso([^a-z0-9]|$)|(^|[^a-z0-9])ls([^a-z0-9]|$)
+LY|Libya|🇱🇾|libya|(^|[^a-z0-9])lby([^a-z0-9]|$)|(^|[^a-z0-9])ly([^a-z0-9]|$)
+MA|摩洛哥|🇲🇦|摩洛哥|morocco|casablanca|rabat|(^|[^a-z0-9])ma([^a-z0-9]|$)|(^|[^a-z0-9])mar([^a-z0-9]|$)|卡萨布兰卡|kingdom[ -_]*of[ -_]*morocco
+MC|Monaco|🇲🇨|monaco|principality[ -_]*of[ -_]*monaco|(^|[^a-z0-9])mco([^a-z0-9]|$)|(^|[^a-z0-9])mc([^a-z0-9]|$)
+MD|Moldova, Republic of|🇲🇩|moldova,[ -_]*republic[ -_]*of|republic[ -_]*of[ -_]*moldova|(^|[^a-z0-9])mda([^a-z0-9]|$)|(^|[^a-z0-9])md([^a-z0-9]|$)
+ME|Montenegro|🇲🇪|montenegro|(^|[^a-z0-9])mne([^a-z0-9]|$)
+MF|Saint Martin (French part)|🇲🇫|saint[ -_]*martin[ -_]*\(french[ -_]*part\)|(^|[^a-z0-9])maf([^a-z0-9]|$)|(^|[^a-z0-9])mf([^a-z0-9]|$)
+MG|Madagascar|🇲🇬|madagascar|republic[ -_]*of[ -_]*madagascar|(^|[^a-z0-9])mdg([^a-z0-9]|$)|(^|[^a-z0-9])mg([^a-z0-9]|$)
+MH|Marshall Islands|🇲🇭|marshall[ -_]*islands|republic[ -_]*of[ -_]*the[ -_]*marshall[ -_]*islands|(^|[^a-z0-9])mhl([^a-z0-9]|$)|(^|[^a-z0-9])mh([^a-z0-9]|$)
+MK|North Macedonia|🇲🇰|north[ -_]*macedonia|republic[ -_]*of[ -_]*north[ -_]*macedonia|(^|[^a-z0-9])mkd([^a-z0-9]|$)|(^|[^a-z0-9])mk([^a-z0-9]|$)
+ML|Mali|🇲🇱|mali|republic[ -_]*of[ -_]*mali|(^|[^a-z0-9])mli([^a-z0-9]|$)|(^|[^a-z0-9])ml([^a-z0-9]|$)
+MM|Myanmar|🇲🇲|myanmar|republic[ -_]*of[ -_]*myanmar|(^|[^a-z0-9])mmr([^a-z0-9]|$)|(^|[^a-z0-9])mm([^a-z0-9]|$)
+MN|Mongolia|🇲🇳|mongolia|(^|[^a-z0-9])mng([^a-z0-9]|$)|(^|[^a-z0-9])mn([^a-z0-9]|$)
+MP|Northern Mariana Islands|🇲🇵|northern[ -_]*mariana[ -_]*islands|commonwealth[ -_]*of[ -_]*the[ -_]*northern[ -_]*mariana[ -_]*islands|(^|[^a-z0-9])mnp([^a-z0-9]|$)|(^|[^a-z0-9])mp([^a-z0-9]|$)
+MQ|Martinique|🇲🇶|martinique|(^|[^a-z0-9])mtq([^a-z0-9]|$)|(^|[^a-z0-9])mq([^a-z0-9]|$)
+MR|Mauritania|🇲🇷|mauritania|islamic[ -_]*republic[ -_]*of[ -_]*mauritania|(^|[^a-z0-9])mrt([^a-z0-9]|$)|(^|[^a-z0-9])mr([^a-z0-9]|$)
+MS|Montserrat|🇲🇸|montserrat|(^|[^a-z0-9])msr([^a-z0-9]|$)|(^|[^a-z0-9])ms([^a-z0-9]|$)
+MT|Malta|🇲🇹|malta|republic[ -_]*of[ -_]*malta|(^|[^a-z0-9])mlt([^a-z0-9]|$)|(^|[^a-z0-9])mt([^a-z0-9]|$)
+MU|Mauritius|🇲🇺|mauritius|republic[ -_]*of[ -_]*mauritius|(^|[^a-z0-9])mus([^a-z0-9]|$)|(^|[^a-z0-9])mu([^a-z0-9]|$)
+MV|Maldives|🇲🇻|maldives|republic[ -_]*of[ -_]*maldives|(^|[^a-z0-9])mdv([^a-z0-9]|$)|(^|[^a-z0-9])mv([^a-z0-9]|$)
+MW|Malawi|🇲🇼|malawi|republic[ -_]*of[ -_]*malawi|(^|[^a-z0-9])mwi([^a-z0-9]|$)|(^|[^a-z0-9])mw([^a-z0-9]|$)
+MZ|Mozambique|🇲🇿|mozambique|republic[ -_]*of[ -_]*mozambique|(^|[^a-z0-9])moz([^a-z0-9]|$)|(^|[^a-z0-9])mz([^a-z0-9]|$)
+NA|Namibia|🇳🇦|namibia|republic[ -_]*of[ -_]*namibia|(^|[^a-z0-9])nam([^a-z0-9]|$)|(^|[^a-z0-9])na([^a-z0-9]|$)
+NC|New Caledonia|🇳🇨|new[ -_]*caledonia|(^|[^a-z0-9])ncl([^a-z0-9]|$)|(^|[^a-z0-9])nc([^a-z0-9]|$)
+NE|Niger|🇳🇪|niger|republic[ -_]*of[ -_]*the[ -_]*niger|(^|[^a-z0-9])ner([^a-z0-9]|$)|(^|[^a-z0-9])ne([^a-z0-9]|$)
+NF|Norfolk Island|🇳🇫|norfolk[ -_]*island|(^|[^a-z0-9])nfk([^a-z0-9]|$)|(^|[^a-z0-9])nf([^a-z0-9]|$)
+NI|Nicaragua|🇳🇮|nicaragua|republic[ -_]*of[ -_]*nicaragua|(^|[^a-z0-9])nic([^a-z0-9]|$)|(^|[^a-z0-9])ni([^a-z0-9]|$)
+NP|Nepal|🇳🇵|nepal|federal[ -_]*democratic[ -_]*republic[ -_]*of[ -_]*nepal|(^|[^a-z0-9])npl([^a-z0-9]|$)|(^|[^a-z0-9])np([^a-z0-9]|$)
+NR|Nauru|🇳🇷|nauru|republic[ -_]*of[ -_]*nauru|(^|[^a-z0-9])nru([^a-z0-9]|$)|(^|[^a-z0-9])nr([^a-z0-9]|$)
+NU|Niue|🇳🇺|niue|(^|[^a-z0-9])niu([^a-z0-9]|$)|(^|[^a-z0-9])nu([^a-z0-9]|$)
+OM|阿曼|🇴🇲|阿曼|oman|muscat|(^|[^a-z0-9])om([^a-z0-9]|$)|(^|[^a-z0-9])omn([^a-z0-9]|$)|马斯喀特|sultanate[ -_]*of[ -_]*oman
+PA|巴拿马|🇵🇦|巴拿马|巴拿馬|panama|(^|[^a-z0-9])pa([^a-z0-9]|$)|(^|[^a-z0-9])pan([^a-z0-9]|$)|republic[ -_]*of[ -_]*panama
+PF|French Polynesia|🇵🇫|french[ -_]*polynesia|(^|[^a-z0-9])pyf([^a-z0-9]|$)|(^|[^a-z0-9])pf([^a-z0-9]|$)
+PG|Papua New Guinea|🇵🇬|papua[ -_]*new[ -_]*guinea|independent[ -_]*state[ -_]*of[ -_]*papua[ -_]*new[ -_]*guinea|(^|[^a-z0-9])png([^a-z0-9]|$)|(^|[^a-z0-9])pg([^a-z0-9]|$)
+PM|Saint Pierre and Miquelon|🇵🇲|saint[ -_]*pierre[ -_]*and[ -_]*miquelon|(^|[^a-z0-9])spm([^a-z0-9]|$)|(^|[^a-z0-9])pm([^a-z0-9]|$)
+PN|Pitcairn|🇵🇳|pitcairn|(^|[^a-z0-9])pcn([^a-z0-9]|$)|(^|[^a-z0-9])pn([^a-z0-9]|$)
+PR|波多黎各|🇵🇷|波多黎各|puerto[ -_]*rico|san[ -_]*juan|(^|[^a-z0-9])pr([^a-z0-9]|$)|(^|[^a-z0-9])pri([^a-z0-9]|$)
+PS|Palestine, State of|🇵🇸|palestine,[ -_]*state[ -_]*of|the[ -_]*state[ -_]*of[ -_]*palestine|(^|[^a-z0-9])pse([^a-z0-9]|$)|(^|[^a-z0-9])ps([^a-z0-9]|$)
+PW|Palau|🇵🇼|palau|republic[ -_]*of[ -_]*palau|(^|[^a-z0-9])plw([^a-z0-9]|$)|(^|[^a-z0-9])pw([^a-z0-9]|$)
+PY|巴拉圭|🇵🇾|巴拉圭|paraguay|asuncion|asunción|(^|[^a-z0-9])py([^a-z0-9]|$)|(^|[^a-z0-9])pry([^a-z0-9]|$)|亚松森|republic[ -_]*of[ -_]*paraguay
+QA|卡塔尔|🇶🇦|卡塔尔|卡塔爾|qatar|doha|(^|[^a-z0-9])qa([^a-z0-9]|$)|(^|[^a-z0-9])qat([^a-z0-9]|$)|多哈|state[ -_]*of[ -_]*qatar
+RE|Réunion|🇷🇪|réunion|(^|[^a-z0-9])reu([^a-z0-9]|$)|(^|[^a-z0-9])re([^a-z0-9]|$)
+RW|Rwanda|🇷🇼|rwanda|rwandese[ -_]*republic|(^|[^a-z0-9])rwa([^a-z0-9]|$)|(^|[^a-z0-9])rw([^a-z0-9]|$)
+SB|Solomon Islands|🇸🇧|solomon[ -_]*islands|(^|[^a-z0-9])slb([^a-z0-9]|$)|(^|[^a-z0-9])sb([^a-z0-9]|$)
+SC|Seychelles|🇸🇨|seychelles|republic[ -_]*of[ -_]*seychelles|(^|[^a-z0-9])syc([^a-z0-9]|$)|(^|[^a-z0-9])sc([^a-z0-9]|$)
+SD|Sudan|🇸🇩|sudan|republic[ -_]*of[ -_]*the[ -_]*sudan|(^|[^a-z0-9])sdn([^a-z0-9]|$)|(^|[^a-z0-9])sd([^a-z0-9]|$)
+SH|Saint Helena, Ascension and Tristan da Cunha|🇸🇭|saint[ -_]*helena,[ -_]*ascension[ -_]*and[ -_]*tristan[ -_]*da[ -_]*cunha|(^|[^a-z0-9])shn([^a-z0-9]|$)|(^|[^a-z0-9])sh([^a-z0-9]|$)
+SJ|Svalbard and Jan Mayen|🇸🇯|svalbard[ -_]*and[ -_]*jan[ -_]*mayen|(^|[^a-z0-9])sjm([^a-z0-9]|$)|(^|[^a-z0-9])sj([^a-z0-9]|$)
+SL|Sierra Leone|🇸🇱|sierra[ -_]*leone|republic[ -_]*of[ -_]*sierra[ -_]*leone|(^|[^a-z0-9])sle([^a-z0-9]|$)|(^|[^a-z0-9])sl([^a-z0-9]|$)
+SM|San Marino|🇸🇲|san[ -_]*marino|republic[ -_]*of[ -_]*san[ -_]*marino|(^|[^a-z0-9])smr([^a-z0-9]|$)|(^|[^a-z0-9])sm([^a-z0-9]|$)
+SN|Senegal|🇸🇳|senegal|republic[ -_]*of[ -_]*senegal|(^|[^a-z0-9])sen([^a-z0-9]|$)|(^|[^a-z0-9])sn([^a-z0-9]|$)
+SO|Somalia|🇸🇴|somalia|federal[ -_]*republic[ -_]*of[ -_]*somalia|(^|[^a-z0-9])som([^a-z0-9]|$)
+SR|Suriname|🇸🇷|suriname|republic[ -_]*of[ -_]*suriname|(^|[^a-z0-9])sur([^a-z0-9]|$)|(^|[^a-z0-9])sr([^a-z0-9]|$)
+SS|South Sudan|🇸🇸|south[ -_]*sudan|republic[ -_]*of[ -_]*south[ -_]*sudan|(^|[^a-z0-9])ssd([^a-z0-9]|$)|(^|[^a-z0-9])ss([^a-z0-9]|$)
+ST|Sao Tome and Principe|🇸🇹|sao[ -_]*tome[ -_]*and[ -_]*principe|democratic[ -_]*republic[ -_]*of[ -_]*sao[ -_]*tome[ -_]*and[ -_]*principe|(^|[^a-z0-9])stp([^a-z0-9]|$)|(^|[^a-z0-9])st([^a-z0-9]|$)
+SV|El Salvador|🇸🇻|el[ -_]*salvador|republic[ -_]*of[ -_]*el[ -_]*salvador|(^|[^a-z0-9])slv([^a-z0-9]|$)|(^|[^a-z0-9])sv([^a-z0-9]|$)
+SX|Sint Maarten (Dutch part)|🇸🇽|sint[ -_]*maarten[ -_]*\(dutch[ -_]*part\)|(^|[^a-z0-9])sxm([^a-z0-9]|$)|(^|[^a-z0-9])sx([^a-z0-9]|$)
+SY|Syrian Arab Republic|🇸🇾|syrian[ -_]*arab[ -_]*republic|(^|[^a-z0-9])syr([^a-z0-9]|$)|(^|[^a-z0-9])sy([^a-z0-9]|$)
+SZ|Eswatini|🇸🇿|eswatini|kingdom[ -_]*of[ -_]*eswatini|(^|[^a-z0-9])swz([^a-z0-9]|$)|(^|[^a-z0-9])sz([^a-z0-9]|$)
+TC|Turks and Caicos Islands|🇹🇨|turks[ -_]*and[ -_]*caicos[ -_]*islands|(^|[^a-z0-9])tca([^a-z0-9]|$)|(^|[^a-z0-9])tc([^a-z0-9]|$)
+TD|Chad|🇹🇩|chad|republic[ -_]*of[ -_]*chad|(^|[^a-z0-9])tcd([^a-z0-9]|$)|(^|[^a-z0-9])td([^a-z0-9]|$)
+TF|French Southern Territories|🇹🇫|french[ -_]*southern[ -_]*territories|(^|[^a-z0-9])atf([^a-z0-9]|$)|(^|[^a-z0-9])tf([^a-z0-9]|$)
+TG|Togo|🇹🇬|togo|togolese[ -_]*republic|(^|[^a-z0-9])tgo([^a-z0-9]|$)|(^|[^a-z0-9])tg([^a-z0-9]|$)
+TJ|Tajikistan|🇹🇯|tajikistan|republic[ -_]*of[ -_]*tajikistan|(^|[^a-z0-9])tjk([^a-z0-9]|$)|(^|[^a-z0-9])tj([^a-z0-9]|$)
+TK|Tokelau|🇹🇰|tokelau|(^|[^a-z0-9])tkl([^a-z0-9]|$)|(^|[^a-z0-9])tk([^a-z0-9]|$)
+TL|Timor-Leste|🇹🇱|timor[ -_]*leste|democratic[ -_]*republic[ -_]*of[ -_]*timor[ -_]*leste|(^|[^a-z0-9])tls([^a-z0-9]|$)|(^|[^a-z0-9])tl([^a-z0-9]|$)
+TM|Turkmenistan|🇹🇲|turkmenistan|(^|[^a-z0-9])tkm([^a-z0-9]|$)|(^|[^a-z0-9])tm([^a-z0-9]|$)
+TN|突尼斯|🇹🇳|突尼斯|tunisia|tunis|(^|[^a-z0-9])tn([^a-z0-9]|$)|(^|[^a-z0-9])tun([^a-z0-9]|$)|republic[ -_]*of[ -_]*tunisia
+TO|Tonga|🇹🇴|tonga|kingdom[ -_]*of[ -_]*tonga|(^|[^a-z0-9])ton([^a-z0-9]|$)
+TT|Trinidad and Tobago|🇹🇹|trinidad[ -_]*and[ -_]*tobago|republic[ -_]*of[ -_]*trinidad[ -_]*and[ -_]*tobago|(^|[^a-z0-9])tto([^a-z0-9]|$)|(^|[^a-z0-9])tt([^a-z0-9]|$)
+TV|Tuvalu|🇹🇻|tuvalu|(^|[^a-z0-9])tuv([^a-z0-9]|$)|(^|[^a-z0-9])tv([^a-z0-9]|$)
+TZ|坦桑尼亚|🇹🇿|坦桑尼亚|坦桑尼亞|tanzania|dar[ -_]*es[ -_]*salaam|(^|[^a-z0-9])tz([^a-z0-9]|$)|(^|[^a-z0-9])tza([^a-z0-9]|$)|tanzania,[ -_]*united[ -_]*republic[ -_]*of|united[ -_]*republic[ -_]*of[ -_]*tanzania
+UG|乌干达|🇺🇬|乌干达|烏干達|uganda|kampala|(^|[^a-z0-9])ug([^a-z0-9]|$)|(^|[^a-z0-9])uga([^a-z0-9]|$)|republic[ -_]*of[ -_]*uganda
+UM|United States Minor Outlying Islands|🇺🇲|united[ -_]*states[ -_]*minor[ -_]*outlying[ -_]*islands|(^|[^a-z0-9])umi([^a-z0-9]|$)|(^|[^a-z0-9])um([^a-z0-9]|$)
+UY|乌拉圭|🇺🇾|乌拉圭|烏拉圭|uruguay|montevideo|(^|[^a-z0-9])uy([^a-z0-9]|$)|(^|[^a-z0-9])ury([^a-z0-9]|$)|蒙得维的亚|eastern[ -_]*republic[ -_]*of[ -_]*uruguay
+UZ|Uzbekistan|🇺🇿|uzbekistan|republic[ -_]*of[ -_]*uzbekistan|(^|[^a-z0-9])uzb([^a-z0-9]|$)|(^|[^a-z0-9])uz([^a-z0-9]|$)
+VA|Holy See (Vatican City State)|🇻🇦|holy[ -_]*see[ -_]*\(vatican[ -_]*city[ -_]*state\)|(^|[^a-z0-9])vat([^a-z0-9]|$)|(^|[^a-z0-9])va([^a-z0-9]|$)
+VC|Saint Vincent and the Grenadines|🇻🇨|saint[ -_]*vincent[ -_]*and[ -_]*the[ -_]*grenadines|(^|[^a-z0-9])vct([^a-z0-9]|$)|(^|[^a-z0-9])vc([^a-z0-9]|$)
+VE|委内瑞拉|🇻🇪|委内瑞拉|委內瑞拉|venezuela|caracas|(^|[^a-z0-9])ve([^a-z0-9]|$)|(^|[^a-z0-9])ven([^a-z0-9]|$)|加拉加斯|venezuela,[ -_]*bolivarian[ -_]*republic[ -_]*of|bolivarian[ -_]*republic[ -_]*of[ -_]*venezuela
+VG|Virgin Islands, British|🇻🇬|virgin[ -_]*islands,[ -_]*british|british[ -_]*virgin[ -_]*islands|(^|[^a-z0-9])vgb([^a-z0-9]|$)|(^|[^a-z0-9])vg([^a-z0-9]|$)
+VI|Virgin Islands, U.S.|🇻🇮|virgin[ -_]*islands,[ -_]*u\.s\.|virgin[ -_]*islands[ -_]*of[ -_]*the[ -_]*united[ -_]*states|(^|[^a-z0-9])vir([^a-z0-9]|$)|(^|[^a-z0-9])vi([^a-z0-9]|$)
+VU|Vanuatu|🇻🇺|vanuatu|republic[ -_]*of[ -_]*vanuatu|(^|[^a-z0-9])vut([^a-z0-9]|$)|(^|[^a-z0-9])vu([^a-z0-9]|$)
+WF|Wallis and Futuna|🇼🇫|wallis[ -_]*and[ -_]*futuna|(^|[^a-z0-9])wlf([^a-z0-9]|$)|(^|[^a-z0-9])wf([^a-z0-9]|$)
+WS|Samoa|🇼🇸|samoa|independent[ -_]*state[ -_]*of[ -_]*samoa|(^|[^a-z0-9])wsm([^a-z0-9]|$)|(^|[^a-z0-9])ws([^a-z0-9]|$)
+YE|Yemen|🇾🇪|yemen|republic[ -_]*of[ -_]*yemen|(^|[^a-z0-9])yem([^a-z0-9]|$)|(^|[^a-z0-9])ye([^a-z0-9]|$)
+YT|Mayotte|🇾🇹|mayotte|(^|[^a-z0-9])myt([^a-z0-9]|$)|(^|[^a-z0-9])yt([^a-z0-9]|$)
+ZM|Zambia|🇿🇲|zambia|republic[ -_]*of[ -_]*zambia|(^|[^a-z0-9])zmb([^a-z0-9]|$)|(^|[^a-z0-9])zm([^a-z0-9]|$)
+ZW|Zimbabwe|🇿🇼|zimbabwe|republic[ -_]*of[ -_]*zimbabwe|(^|[^a-z0-9])zwe([^a-z0-9]|$)|(^|[^a-z0-9])zw([^a-z0-9]|$)
+XK|科索沃|🇽🇰|科索沃|kosovo|pristina|(^|[^a-z0-9])xk([^a-z0-9]|$)|(^|[^a-z0-9])xkx([^a-z0-9]|$)
 EOF_COUNTRY_MAP
 }
 
