@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.6"
+MGATE_VERSION="0.3.8"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -46,6 +46,7 @@ WEB_FAVICON_SVG_FILE="$WEB_DIR/favicon.svg"
 WEB_TOKEN_FILE="$DATA_DIR/web.token"
 WEB_PID_FILE="$RUN_DIR/mgate-web.pid"
 WEB_LOG_FILE="$LOG_DIR/mgate-web.log"
+WEB_JOB_DIR="$RUN_DIR/web-jobs"
 WEB_OPENWRT_SERVICE_FILE="$SERVICE_DIR/mgate-web.init"
 WEB_SYSTEMD_SERVICE_FILE="$SERVICE_DIR/mgate-web.service"
 WEB_OPENWRT_SERVICE_LINK="/etc/init.d/mgate-web"
@@ -62,6 +63,8 @@ GITHUB_API_LATEST="https://api.github.com/repos/$REPO/releases/latest"
 DEFAULT_MIHOMO_VERSION="${MGATE_DEFAULT_MIHOMO_VERSION:-v1.19.25}"
 DEFAULT_GITHUB_PROXY="https://gh-proxy.fastly.eu.org/"
 DEFAULT_SELF_URL="${MGATE_DEFAULT_SELF_URL:-https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh}"
+MGATE_CONNECT_TIMEOUT="${MGATE_CONNECT_TIMEOUT:-20}"
+MGATE_DOWNLOAD_TIMEOUT="${MGATE_DOWNLOAD_TIMEOUT:-180}"
 SELF_URL_FILE="$DATA_DIR/self.url"
 
 SUB_URL_FILE="$DATA_DIR/sub.url"
@@ -175,7 +178,7 @@ ensure_dirs() {
 
 ensure_web_dirs() {
     ensure_dirs
-    mkdir -p "$WEB_DIR" "$WEB_CGI_DIR" "$WEB_STATIC_DIR" || die "failed to create $WEB_DIR"
+    mkdir -p "$WEB_DIR" "$WEB_CGI_DIR" "$WEB_STATIC_DIR" "$WEB_JOB_DIR" || die "failed to create $WEB_DIR"
 }
 
 realpath_simple() {
@@ -297,11 +300,11 @@ save_self_url_if_available() {
 fetch_to_stdout() {
     url="$1"
     if have curl; then
-        curl -fsSL --connect-timeout 15 --max-time 30 "$url"
+        curl -fsSL --connect-timeout "$MGATE_CONNECT_TIMEOUT" --max-time "$MGATE_DOWNLOAD_TIMEOUT" "$url"
         return $?
     fi
     if have wget; then
-        wget -T 30 -qO- "$url"
+        wget -T "$MGATE_DOWNLOAD_TIMEOUT" -qO- "$url"
         return $?
     fi
     return 127
@@ -311,11 +314,16 @@ download_file() {
     url="$1"
     out="$2"
     if have curl; then
-        curl -fL --connect-timeout 30 -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$out" "$url"
+        curl -fL \
+            --connect-timeout "$MGATE_CONNECT_TIMEOUT" \
+            --max-time "$MGATE_DOWNLOAD_TIMEOUT" \
+            -H "Cache-Control: no-cache" \
+            -H "Pragma: no-cache" \
+            -o "$out" "$url"
         return $?
     fi
     if have wget; then
-        wget -O "$out" "$url"
+        wget -T "$MGATE_DOWNLOAD_TIMEOUT" -O "$out" "$url"
         return $?
     fi
     die "curl or wget is required"
@@ -1135,10 +1143,11 @@ MGATE="__MGATE_PATH__"
 TOKEN_FILE="__WEB_TOKEN_FILE__"
 CONFIG_FILE="__CONFIG_FILE__"
 WEB_PORT="__WEB_PORT__"
+WEB_JOB_DIR="__WEB_JOB_DIR__"
 DEFAULT_MIXED_PORT="__DEFAULT_MIXED_PORT__"
 DEFAULT_HTTP_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_SOCKS_PORT="$DEFAULT_MIXED_PORT"
-FAVICON_VER="0.3.5"
+FAVICON_VER="0.3.7"
 
 html_escape() {
     sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
@@ -1271,16 +1280,99 @@ EOF
 run_output_page() {
     title="$1"
     shift
-    output="$($MGATE "$@" 2>&1)"
-    rc=$?
     header
     page_start "$title"
     nav
     printf '<div class="card"><h2>%s</h2><pre>' "$(printf '%s' "$title" | html_escape)"
+    output="$($MGATE "$@" 2>&1)"
+    rc=$?
     printf '%s\n' "$output" | html_escape
     printf '\nexit code: %s' "$rc" | html_escape
     printf '</pre></div>\n'
     page_end
+}
+
+job_cleanup() {
+    mkdir -p "$WEB_JOB_DIR" 2>/dev/null || return 0
+    # Keep the newest 20 jobs. Each job has .log/.status/.meta files.
+    ls -1t "$WEB_JOB_DIR"/*.status 2>/dev/null | sed -n '21,$p' | while IFS= read -r st; do
+        base="${st%.status}"
+        rm -f "$base.status" "$base.log" "$base.meta" 2>/dev/null || true
+    done
+}
+
+job_id_new() {
+    ts="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
+    printf '%s-%s\n' "$ts" "$$"
+}
+
+job_page() {
+    id="$1"
+    case "$id" in ''|*/*|*..*|*\\*) id="" ;; esac
+    header
+    page_start "任务状态"
+    nav
+    if [ -z "$id" ]; then
+        cat <<'EOF'
+<div class="card"><h2>任务不存在</h2><p>无效的任务 ID。</p></div>
+EOF
+        page_end
+        return 0
+    fi
+    base="$WEB_JOB_DIR/$id"
+    status="$(sed -n '1p' "$base.status" 2>/dev/null)"
+    [ -n "$status" ] || status="unknown"
+    title="$(sed -n '1p' "$base.meta" 2>/dev/null)"
+    [ -n "$title" ] || title="$id"
+    if [ "$status" = "running" ]; then
+        cat <<'EOF'
+<script>
+setTimeout(function(){ window.location.reload(); }, 2000);
+</script>
+EOF
+    fi
+    printf '<div class="card"><h2>%s</h2>' "$(printf '%s' "$title" | html_escape)"
+    printf '<p>任务 ID：<span class="code">%s</span></p>' "$(printf '%s' "$id" | html_escape)"
+    printf '<p>状态：<span class="pill">%s</span></p>' "$(printf '%s' "$status" | html_escape)"
+    if [ "$status" = "running" ]; then
+        printf '<p class="muted">任务正在后台执行，页面会自动刷新。</p>'
+    fi
+    printf '<pre>'
+    if [ -f "$base.log" ]; then
+        tail -n 200 "$base.log" 2>/dev/null | html_escape
+    else
+        printf '暂无日志' | html_escape
+    fi
+    printf '</pre>'
+    printf '<p><a class="btn" href="/cgi-bin/mgate.cgi?action=job&id=%s">刷新</a> <a class="btn" href="/cgi-bin/mgate.cgi?action=status">返回首页</a></p>' "$(printf '%s' "$id" | html_escape)"
+    printf '</div>\n'
+    page_end
+}
+
+run_job_page() {
+    title="$1"
+    shift
+    mkdir -p "$WEB_JOB_DIR" 2>/dev/null || { run_output_page "$title" "$@"; return 0; }
+    job_cleanup
+    id="$(job_id_new)"
+    base="$WEB_JOB_DIR/$id"
+    printf 'running\n' > "$base.status"
+    printf '%s\n' "$title" > "$base.meta"
+    (
+        printf '[STEP] 开始执行：%s\n' "$title"
+        printf '[INFO] 命令：mgate'
+        for a in "$@"; do printf ' %s' "$a"; done
+        printf '\n'
+        "$MGATE" "$@"
+        rc=$?
+        printf '[INFO] exit code: %s\n' "$rc"
+        if [ "$rc" -eq 0 ]; then
+            printf 'success\n' > "$base.status"
+        else
+            printf 'failed\n' > "$base.status"
+        fi
+    ) </dev/null > "$base.log" 2>&1 &
+    job_page "$id"
 }
 
 summary_card() {
@@ -1294,6 +1386,9 @@ summary_card() {
 }
 
 status_page() {
+    header
+    page_start "状态"
+    nav
     status_out="$($MGATE status 2>&1)"
     version_out="$($MGATE version 2>&1)"
 
@@ -1318,9 +1413,6 @@ status_page() {
         cfg_class="warn"
     fi
 
-    header
-    page_start "状态"
-    nav
     cat <<'EOF'
 <div class="card"><h2>状态概览</h2><div class="grid">
 EOF
@@ -1447,10 +1539,10 @@ EOF
 }
 
 account_password_page() {
-    out="$($MGATE account-password 2>&1)"
     header
     page_start "账号密码"
     nav
+    out="$($MGATE account-password 2>&1)"
     cat <<'EOF'
 <div class="card">
 <h2>代理账号默认密码</h2>
@@ -1473,10 +1565,10 @@ EOF
 
 
 sub_status_page() {
-    out="$($MGATE sub-status 2>&1)"
     header
     page_start "订阅状态"
     nav
+    out="$($MGATE sub-status 2>&1)"
     cat <<'EOF'
 <div class="card">
 <h2>订阅状态</h2>
@@ -1494,10 +1586,10 @@ EOF
 }
 
 sub_set_page() {
-    out="$($MGATE sub-status 2>&1)"
     header
     page_start "设置订阅"
     nav
+    out="$($MGATE sub-status 2>&1)"
     cat <<'EOF'
 <div class="card">
 <h2>设置/替换订阅链接</h2>
@@ -1520,11 +1612,11 @@ EOF
 logs_page() {
     lines="$1"
     case "$lines" in 50|100|200) : ;; *) lines="100" ;; esac
-    output="$($MGATE logs "$lines" 2>&1)"
-    rc=$?
     header
     page_start "日志"
     nav
+    output="$($MGATE logs "$lines" 2>&1)"
+    rc=$?
     cat <<EOF
 <div class="card"><h2>最近日志</h2><div class="split">
 <a class="btn" href="/cgi-bin/mgate.cgi?action=logs&lines=50">50 行</a>
@@ -1588,6 +1680,7 @@ fi
 
 case "$action" in
     status) status_page ;;
+    job) job_page "$(param_get "${QUERY_STRING:-}" id)" ;;
     version) run_output_page "版本" version ;;
     doctor) run_output_page "系统诊断" doctor ;;
     proxy-info) proxy_info_page ;;
@@ -1596,18 +1689,18 @@ case "$action" in
     sub-set) sub_set_page ;;
     sub-set-do)
         sub_url="$(url_decode "$(param_get "$post_body" sub_url)")"
-        run_output_page "设置/替换订阅" sub-set "$sub_url"
+        run_job_page "设置/替换订阅" sub-set "$sub_url"
         ;;
     account-password-set)
         pw="$(param_get "$post_body" password)"
-        run_output_page "修改代理账号默认密码" account-password set "$pw"
+        run_job_page "修改代理账号默认密码" account-password set "$pw"
         ;;
-    start) run_output_page "启动服务" start ;;
+    start) run_job_page "启动服务" start ;;
     test) run_output_page "测试配置" test ;;
     logs) logs_page "$lines" ;;
     config) run_output_page "当前配置" config ;;
     backups) run_output_page "备份列表" backups ;;
-    backup) run_output_page "创建备份" backup web ;;
+    backup) run_job_page "创建备份" backup web ;;
     token) token_page ;;
     confirm)
         case "$target" in
@@ -1617,11 +1710,11 @@ case "$action" in
         ;;
     do)
         case "$target" in
-            stop) run_output_page "停止服务" stop ;;
-            restart) run_output_page "重启服务" restart ;;
-            self-update) run_output_page "自更新 mgate" self-update ;;
-            sub-update) run_output_page "更新订阅" sub-update ;;
-            sub-clear) run_output_page "清除订阅" sub-clear ;;
+            stop) run_job_page "停止服务" stop ;;
+            restart) run_job_page "重启服务" restart ;;
+            self-update) run_job_page "自更新 mgate" self-update ;;
+            sub-update) run_job_page "更新订阅" sub-update ;;
+            sub-clear) run_job_page "清除订阅" sub-clear ;;
             token-reset)
                 header "Set-Cookie: mgate_token=deleted; Path=/; Max-Age=0"
                 page_start "Token 已重置"
@@ -1638,7 +1731,10 @@ case "$action" in
 <div class="card"><h2>Web 管理即将关闭</h2><p>请稍等几秒后关闭此页面。</p></div>
 EOF
                 page_end
-                (sleep 1; "$MGATE" web-disable >/dev/null 2>&1) &
+                (
+                    sleep 1
+                    "$MGATE" web-disable >/dev/null 2>&1
+                ) </dev/null >/dev/null 2>&1 &
                 ;;
             *) status_page ;;
         esac
@@ -1653,6 +1749,7 @@ EOF_WEB_CGI
         -e "s#__WEB_TOKEN_FILE__#$WEB_TOKEN_FILE#g" \
         -e "s#__CONFIG_FILE__#$CONFIG_FILE#g" \
         -e "s#__WEB_PORT__#$WEB_PORT#g" \
+        -e "s#__WEB_JOB_DIR__#$WEB_JOB_DIR#g" \
         -e "s#__DEFAULT_MIXED_PORT__#$DEFAULT_MIXED_PORT#g" \
         -e "s#__DEFAULT_HTTP_PORT__#$DEFAULT_HTTP_PORT#g" \
         -e "s#__DEFAULT_SOCKS_PORT__#$DEFAULT_SOCKS_PORT#g" \
@@ -2883,6 +2980,15 @@ sub_update_from_url() {
     [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在，请先执行：mgate install-core"
     ensure_sub_dirs
 
+    sub_lock="$RUN_DIR/sub-update.lock"
+    sub_lock_acquired=0
+    if mkdir "$sub_lock" 2>/dev/null; then
+        sub_lock_acquired=1
+        trap 'if [ "${sub_lock_acquired:-0}" = "1" ]; then rmdir "$RUN_DIR/sub-update.lock" 2>/dev/null || true; fi' EXIT INT TERM
+    else
+        die "订阅更新正在进行中，请稍后再试"
+    fi
+
     work="$TMP_DIR/sub-update.$$"
     rm -rf "$work"
     mkdir -p "$work" || die "创建临时目录失败：$work"
@@ -2935,6 +3041,11 @@ sub_update_from_url() {
         warn "测试错误日志：$SUB_LAST_LOG_FILE"
         sed 's/^/[DETAIL] /' "$test_out" 2>/dev/null | tail -n 80
         hint "可执行 mgate sub-debug 查看最近一次订阅失败详情"
+        if [ "${sub_lock_acquired:-0}" = "1" ]; then
+            rmdir "$sub_lock" 2>/dev/null || true
+            sub_lock_acquired=0
+            trap - EXIT INT TERM
+        fi
         return 1
     fi
 
@@ -2956,6 +3067,11 @@ sub_update_from_url() {
     ok "订阅配置已更新"
     service_restart
     rm -rf "$work"
+    if [ "${sub_lock_acquired:-0}" = "1" ]; then
+        rmdir "$sub_lock" 2>/dev/null || true
+        sub_lock_acquired=0
+        trap - EXIT INT TERM
+    fi
 }
 
 
