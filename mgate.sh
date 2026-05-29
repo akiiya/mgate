@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.13"
+MGATE_VERSION="0.3.14"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -970,7 +970,7 @@ extract_mgate_version() {
 validate_mgate_script() {
     file="$1"
     [ -s "$file" ] || die "下载内容为空"
-    sh -n "$file" >/dev/null 2>&1 || die "下载内容不是有效 shell 脚本"
+    /bin/sh -n "$file" >/dev/null 2>&1 || die "下载内容不是有效 shell 脚本"
     grep -q 'APP_NAME="mgate"' "$file" || die "下载内容不是有效 mgate 脚本：缺少 APP_NAME"
     grep -q '^MGATE_VERSION=' "$file" || die "下载内容不是有效 mgate 脚本：缺少 MGATE_VERSION"
     grep -q 'main "\$@"' "$file" || die "下载内容不是有效 mgate 脚本：缺少入口调用"
