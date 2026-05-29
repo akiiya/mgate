@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.8"
+MGATE_VERSION="0.3.9"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1187,14 +1187,11 @@ is_logged_in() {
     [ -n "$exp" ] && [ "$got" = "$exp" ]
 }
 
+_CGI_EXTRA_HEADER=""
 header() {
-    printf 'Content-Type: text/html; charset=utf-8\r\n'
-    printf 'Cache-Control: no-store\r\n'
-    printf 'Connection: close\r\n'
     if [ -n "${1:-}" ]; then
-        printf '%s\r\n' "$1"
+        _CGI_EXTRA_HEADER="$1"
     fi
-    printf '\r\n'
 }
 
 page_start() {
@@ -1646,6 +1643,13 @@ target="$(param_get "$post_body" target)"
 [ -n "$target" ] || target="$(param_get "${QUERY_STRING:-}" target)"
 lines="$(param_get "${QUERY_STRING:-}" lines)"
 
+# Buffer all HTML output to a temp file so we can send Content-Length.
+# Without Content-Length, HTTP/1.1 keep-alive causes Chrome to spin forever
+# waiting for the connection to close.
+_CGI_BODY="/tmp/.mgate-cgi-$$"
+exec 3>&1
+exec 1>"$_CGI_BODY"
+
 if [ "$action" = "login" ]; then
     token="$(param_get "$post_body" token)"
     exp="$(expected_token)"
@@ -1657,90 +1661,94 @@ if [ "$action" = "login" ]; then
 <div class="card"><h2>登录成功</h2><p><a class="btn primary" href="/cgi-bin/mgate.cgi?action=status">进入首页</a></p></div>
 EOF
         page_end
-        exit 0
+    else
+        login_page "Token 错误"
     fi
-    login_page "Token 错误"
-    exit 0
-fi
-
-if [ "$action" = "logout" ]; then
+elif [ "$action" = "logout" ]; then
     header "Set-Cookie: mgate_token=deleted; Path=/; Max-Age=0"
     page_start "Logout"
     cat <<'EOF'
 <div class="card"><h2>已退出</h2><p><a class="btn" href="/cgi-bin/mgate.cgi">重新登录</a></p></div>
 EOF
     page_end
-    exit 0
-fi
-
-if ! is_logged_in; then
+elif ! is_logged_in; then
     login_page ""
-    exit 0
-fi
-
-case "$action" in
-    status) status_page ;;
-    job) job_page "$(param_get "${QUERY_STRING:-}" id)" ;;
-    version) run_output_page "版本" version ;;
-    doctor) run_output_page "系统诊断" doctor ;;
-    proxy-info) proxy_info_page ;;
-    account-password) account_password_page ;;
-    sub-status) sub_status_page ;;
-    sub-set) sub_set_page ;;
-    sub-set-do)
-        sub_url="$(url_decode "$(param_get "$post_body" sub_url)")"
-        run_job_page "设置/替换订阅" sub-set "$sub_url"
-        ;;
-    account-password-set)
-        pw="$(param_get "$post_body" password)"
-        run_job_page "修改代理账号默认密码" account-password set "$pw"
-        ;;
-    start) run_job_page "启动服务" start ;;
-    test) run_output_page "测试配置" test ;;
-    logs) logs_page "$lines" ;;
-    config) run_output_page "当前配置" config ;;
-    backups) run_output_page "备份列表" backups ;;
-    backup) run_job_page "创建备份" backup web ;;
-    token) token_page ;;
-    confirm)
-        case "$target" in
-            stop|restart|self-update|web-disable|token-reset|sub-update|sub-clear) confirm_page "$target" ;;
-            *) status_page ;;
-        esac
-        ;;
-    do)
-        case "$target" in
-            stop) run_job_page "停止服务" stop ;;
-            restart) run_job_page "重启服务" restart ;;
-            self-update) run_job_page "自更新 mgate" self-update ;;
-            sub-update) run_job_page "更新订阅" sub-update ;;
-            sub-clear) run_job_page "清除订阅" sub-clear ;;
-            token-reset)
-                header "Set-Cookie: mgate_token=deleted; Path=/; Max-Age=0"
-                page_start "Token 已重置"
-                out="$($MGATE web-token reset 2>&1)"
-                printf '<div class="card"><h2>Token 已重置</h2><pre>'
-                printf '%s\n' "$out" | html_escape
-                printf '</pre><p><a class="btn" href="/cgi-bin/mgate.cgi">重新登录</a></p></div>\n'
-                page_end
-                ;;
-            web-disable)
-                header
-                page_start "关闭 Web 管理"
-                cat <<'EOF'
+else
+    case "$action" in
+        status) status_page ;;
+        job) job_page "$(param_get "${QUERY_STRING:-}" id)" ;;
+        version) run_output_page "版本" version ;;
+        doctor) run_output_page "系统诊断" doctor ;;
+        proxy-info) proxy_info_page ;;
+        account-password) account_password_page ;;
+        sub-status) sub_status_page ;;
+        sub-set) sub_set_page ;;
+        sub-set-do)
+            sub_url="$(url_decode "$(param_get "$post_body" sub_url)")"
+            run_job_page "设置/替换订阅" sub-set "$sub_url"
+            ;;
+        account-password-set)
+            pw="$(param_get "$post_body" password)"
+            run_job_page "修改代理账号默认密码" account-password set "$pw"
+            ;;
+        start) run_job_page "启动服务" start ;;
+        test) run_output_page "测试配置" test ;;
+        logs) logs_page "$lines" ;;
+        config) run_output_page "当前配置" config ;;
+        backups) run_output_page "备份列表" backups ;;
+        backup) run_job_page "创建备份" backup web ;;
+        token) token_page ;;
+        confirm)
+            case "$target" in
+                stop|restart|self-update|web-disable|token-reset|sub-update|sub-clear) confirm_page "$target" ;;
+                *) status_page ;;
+            esac
+            ;;
+        do)
+            case "$target" in
+                stop) run_job_page "停止服务" stop ;;
+                restart) run_job_page "重启服务" restart ;;
+                self-update) run_job_page "自更新 mgate" self-update ;;
+                sub-update) run_job_page "更新订阅" sub-update ;;
+                sub-clear) run_job_page "清除订阅" sub-clear ;;
+                token-reset)
+                    header "Set-Cookie: mgate_token=deleted; Path=/; Max-Age=0"
+                    page_start "Token 已重置"
+                    out="$($MGATE web-token reset 2>&1)"
+                    printf '<div class="card"><h2>Token 已重置</h2><pre>'
+                    printf '%s\n' "$out" | html_escape
+                    printf '</pre><p><a class="btn" href="/cgi-bin/mgate.cgi">重新登录</a></p></div>\n'
+                    page_end
+                    ;;
+                web-disable)
+                    page_start "关闭 Web 管理"
+                    cat <<'EOF'
 <div class="card"><h2>Web 管理即将关闭</h2><p>请稍等几秒后关闭此页面。</p></div>
 EOF
-                page_end
-                (
-                    sleep 1
-                    "$MGATE" web-disable >/dev/null 2>&1
-                ) </dev/null >/dev/null 2>&1 &
-                ;;
-            *) status_page ;;
-        esac
-        ;;
-    *) status_page ;;
-esac
+                    page_end
+                    (
+                        sleep 1
+                        "$MGATE" web-disable >/dev/null 2>&1
+                    ) </dev/null >/dev/null 2>&1 &
+                    ;;
+                *) status_page ;;
+            esac
+            ;;
+        *) status_page ;;
+    esac
+fi
+
+exec 1>&3
+exec 3>&-
+_CGI_BODY_LEN="$(wc -c < "$_CGI_BODY" 2>/dev/null || echo 0)"
+printf 'Content-Type: text/html; charset=utf-8\r\n'
+printf 'Content-Length: %s\r\n' "$_CGI_BODY_LEN"
+printf 'Cache-Control: no-store\r\n'
+printf 'Connection: close\r\n'
+[ -n "$_CGI_EXTRA_HEADER" ] && printf '%s\r\n' "$_CGI_EXTRA_HEADER"
+printf '\r\n'
+cat "$_CGI_BODY"
+rm -f "$_CGI_BODY"
 exit 0
 EOF_WEB_CGI
 
