@@ -1,0 +1,5 @@
+# Force LF line endings for shell scripts on all platforms.
+# This prevents CRLF contamination on Windows that would break
+# heredoc terminators when the script runs on Linux/embedded devices.
+* text=auto
+*.sh text eol=lf
