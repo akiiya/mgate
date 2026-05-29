@@ -15,6 +15,8 @@
 * 🧭 根据用户名自动分流到不同代理组
 * 🛡️ 未匹配流量默认拒绝
 * ⚙️ 支持服务管理和开机自启
+* 🧭 支持 TUI 菜单管理
+* 🌍 支持轻量级 Web 管理页面
 * 🔁 支持从 GitHub 自更新 mgate 管理脚本
 * 📁 所有文件都存放在 `/opt/mgate`
 * 🧹 支持完整卸载
@@ -24,6 +26,7 @@
 ```text
 SOCKS5 端口：31800
 HTTP   端口：31801
+Web    端口：31888
 
 默认用户：
 DE / JP / US / UK
@@ -72,7 +75,7 @@ mgate status
 mgate
 ```
 
-会进入交互式菜单，可进行初始化工作区、更新管理脚本、安装内核、启动服务、停止服务、编辑配置、查看日志、卸载等操作。
+会进入交互式菜单，可进行初始化工作区、更新管理脚本、安装内核、启动服务、停止服务、编辑配置、查看日志、Web 管理、卸载等操作。
 
 ## ⌨️ 常用命令
 
@@ -103,6 +106,88 @@ mgate version          # 查看版本
 > `mgate install` 用于初始化或修复本地工作区，不会从 GitHub 拉取最新 `mgate.sh`。
 > 如需更新管理脚本，请使用 `mgate self-update` 或 `mgate update`。
 
+## 🌍 Web 管理
+
+`mgate` 支持轻量级 Web 管理页面，基于设备自带的 `busybox httpd` / `httpd` 实现，不依赖 Node.js、Python、PHP 或数据库。
+
+Web 管理默认关闭，需要手动开启：
+
+```sh
+mgate web-enable
+```
+
+开启后，在同一 WiFi / 局域网内访问：
+
+```text
+http://设备IP:31888
+```
+
+例如：
+
+```text
+http://192.168.8.1:31888
+```
+
+首次开启时会生成 Web Token，登录 Web 页面时需要输入该 Token。
+
+### Web 管理命令
+
+```sh
+mgate web-enable       # 开启 Web 管理
+mgate web-disable      # 关闭 Web 管理并关闭开机自启
+mgate web-start        # 启动 Web 管理服务
+mgate web-stop         # 停止 Web 管理服务
+mgate web-restart      # 重启 Web 管理服务
+mgate web-status       # 查看 Web 管理状态
+
+mgate web-token        # 查看 Web Token
+mgate web-token reset  # 重置 Web Token
+mgate web-refresh      # 重新生成 Web 页面文件
+```
+
+### Web 管理页面支持
+
+当前 Web 页面支持：
+
+```text
+查看状态
+查看版本
+启动服务
+停止服务
+重启服务
+测试配置
+查看日志
+查看配置
+查看代理连接信息
+查看 / 重置 Web Token
+自更新 mgate 管理脚本
+关闭 Web 管理
+```
+
+### Web 文件位置
+
+Web 文件由 `mgate.sh` 动态生成，位于：
+
+```text
+/opt/mgate/web/
+├── index.html
+├── favicon.svg
+├── favicon.ico
+├── static/
+│   └── style.css
+└── cgi-bin/
+    └── mgate.cgi
+```
+
+如果更新了 mgate 管理脚本，并且想刷新 Web 页面文件，可以执行：
+
+```sh
+mgate web-refresh
+mgate web-restart
+```
+
+> Web 管理只建议在局域网内使用，不要暴露到公网。
+
 ## 🔁 自更新
 
 更新 mgate 管理脚本：
@@ -128,6 +213,9 @@ mgate update
 6. 保留 Mihomo 内核、配置和服务状态
 ```
 
+> 自更新不会自动刷新 Web 页面文件。
+> 如需刷新 Web 文件，请执行 `mgate web-refresh`。
+
 ## 📂 工作目录
 
 ```text
@@ -139,6 +227,7 @@ mgate update
 │   ├── config.yaml          # 主配置文件
 │   └── config.example.yaml  # 示例配置
 ├── service/
+├── web/
 ├── logs/
 ├── run/
 ├── backups/
@@ -162,6 +251,12 @@ mgate.sh
 
 ```text
 mgate
+```
+
+Web 服务名：
+
+```text
+mgate-web
 ```
 
 ## 🧩 配置
@@ -270,6 +365,12 @@ systemd
 plain background mode
 ```
 
+Web 管理依赖：
+
+```text
+busybox httpd 或 httpd
+```
+
 ## 🧠 支持架构
 
 ```text
@@ -302,7 +403,9 @@ mgate uninstall
 /opt/mgate
 /usr/bin/mgate
 /etc/init.d/mgate
+/etc/init.d/mgate-web
 /etc/systemd/system/mgate.service
+/etc/systemd/system/mgate-web.service
 ```
 
 默认需要输入：
@@ -322,7 +425,9 @@ mgate uninstall --yes
 ## 🛡️ 安全提醒
 
 * 不要把 HTTP / SOCKS5 代理端口直接暴露到公网
+* 不要把 Web 管理端口暴露到公网
 * 使用强密码
+* 妥善保管 Web Token
 * 不要提交真实节点 UUID 和密码到 GitHub
 * 尽量只在 LAN 内使用
 * 如需公网访问，请配合防火墙限制来源 IP
