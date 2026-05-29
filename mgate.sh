@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.11"
+MGATE_VERSION="0.3.12"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -706,9 +706,11 @@ Wants=network.target
 [Service]
 Type=simple
 WorkingDirectory=$WORKDIR
+ExecStartPre=/bin/sleep 10
 ExecStart=$CORE_BIN -d $CONFIG_DIR
 Restart=always
-RestartSec=5
+RestartSec=10
+StartLimitIntervalSec=0
 LimitNOFILE=65535
 
 [Install]
@@ -1889,9 +1891,11 @@ Wants=network.target
 [Service]
 Type=simple
 WorkingDirectory=$WORKDIR
+ExecStartPre=/bin/sleep 10
 ExecStart=$httpd_cmd -f -p $WEB_LISTEN:$WEB_PORT -h $WEB_DIR
 Restart=always
-RestartSec=5
+RestartSec=10
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
