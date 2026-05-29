@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.9"
+MGATE_VERSION="0.3.10"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1368,8 +1368,8 @@ run_job_page() {
         else
             printf 'failed\n' > "$base.status"
         fi
-    ) </dev/null > "$base.log" 2>&1 &
-    job_page "$id"
+    ) </dev/null > "$base.log" 2>&1 3>&- &
+    _CGI_LOCATION="/cgi-bin/mgate.cgi?action=job&id=$id"
 }
 
 summary_card() {
@@ -1646,6 +1646,7 @@ lines="$(param_get "${QUERY_STRING:-}" lines)"
 # Buffer all HTML output to a temp file so we can send Content-Length.
 # Without Content-Length, HTTP/1.1 keep-alive causes Chrome to spin forever
 # waiting for the connection to close.
+_CGI_LOCATION=""
 _CGI_BODY="/tmp/.mgate-cgi-$$"
 exec 3>&1
 exec 1>"$_CGI_BODY"
@@ -1740,15 +1741,25 @@ fi
 
 exec 1>&3
 exec 3>&-
-_CGI_BODY_LEN="$(wc -c < "$_CGI_BODY" 2>/dev/null || echo 0)"
-printf 'Content-Type: text/html; charset=utf-8\r\n'
-printf 'Content-Length: %s\r\n' "$_CGI_BODY_LEN"
-printf 'Cache-Control: no-store\r\n'
-printf 'Connection: close\r\n'
-[ -n "$_CGI_EXTRA_HEADER" ] && printf '%s\r\n' "$_CGI_EXTRA_HEADER"
-printf '\r\n'
-cat "$_CGI_BODY"
-rm -f "$_CGI_BODY"
+if [ -n "$_CGI_LOCATION" ]; then
+    printf 'Status: 302 Found\r\n'
+    printf 'Location: %s\r\n' "$_CGI_LOCATION"
+    printf 'Content-Length: 0\r\n'
+    printf 'Connection: close\r\n'
+    [ -n "$_CGI_EXTRA_HEADER" ] && printf '%s\r\n' "$_CGI_EXTRA_HEADER"
+    printf '\r\n'
+    rm -f "$_CGI_BODY"
+else
+    _CGI_BODY_LEN="$(wc -c < "$_CGI_BODY" 2>/dev/null || echo 0)"
+    printf 'Content-Type: text/html; charset=utf-8\r\n'
+    printf 'Content-Length: %s\r\n' "$_CGI_BODY_LEN"
+    printf 'Cache-Control: no-store\r\n'
+    printf 'Connection: close\r\n'
+    [ -n "$_CGI_EXTRA_HEADER" ] && printf '%s\r\n' "$_CGI_EXTRA_HEADER"
+    printf '\r\n'
+    cat "$_CGI_BODY"
+    rm -f "$_CGI_BODY"
+fi
 exit 0
 EOF_WEB_CGI
 
