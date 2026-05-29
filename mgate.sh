@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.2.6"
+MGATE_VERSION="0.2.8"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1108,13 +1108,13 @@ ensure_web_token() {
 generate_web_index() {
     cat > "$WEB_INDEX_FILE" <<'EOF_WEB_INDEX'
 <!doctype html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/mgate.cgi"><link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.2.6"><title>mgate</title></head><body><a href="/cgi-bin/mgate.cgi">mgate Web</a></body></html>
+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/mgate.cgi"><link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.2.8"><title>mgate</title></head><body><a href="/cgi-bin/mgate.cgi">mgate Web</a></body></html>
 EOF_WEB_INDEX
 }
 
 generate_web_style() {
     cat > "$WEB_CSS_FILE" <<'EOF_WEB_CSS'
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;margin:0;background:#f6f7f9;color:#222}.wrap{max-width:1080px;margin:0 auto;padding:20px}.card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}h1{font-size:24px;margin:0 0 8px}h2{font-size:18px;margin:0 0 12px}h3{font-size:15px;margin:0 0 6px}.muted{color:#666;font-size:13px}.nav{display:flex;flex-wrap:wrap;gap:8px}.btn,button{display:inline-block;border:1px solid #bbb;border-radius:8px;background:#fff;color:#222;padding:8px 12px;text-decoration:none;font-size:14px;cursor:pointer}.btn:hover,button:hover{background:#f0f0f0}.danger{border-color:#c33;color:#a00}.primary{border-color:#2673d9;color:#0756b1}.good{border-color:#16a34a}.warn{border-color:#d97706}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.mini{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px}.mini strong{display:block;font-size:16px;margin-top:4px;word-break:break-word}.mini span{color:#666;font-size:12px}.table{width:100%;border-collapse:collapse}.table th,.table td{border-bottom:1px solid #eee;padding:8px;text-align:left;vertical-align:top;font-size:13px}.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#f2f2f2;border-radius:6px;padding:2px 5px;word-break:break-all}pre{background:#111;color:#eee;padding:12px;border-radius:8px;overflow:auto;white-space:pre-wrap;word-break:break-word}.row{margin:8px 0}input[type=password],input[type=text]{padding:8px;border:1px solid #bbb;border-radius:6px;min-width:260px}.footer{margin-top:20px;color:#777;font-size:12px}.split{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.pill{display:inline-block;border:1px solid #ddd;border-radius:999px;padding:3px 8px;font-size:12px;color:#555;background:#fafafa}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;margin:0;background:#f6f7f9;color:#222}.wrap{max-width:1080px;margin:0 auto;padding:20px}.card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}h1{font-size:24px;margin:0 0 8px}h2{font-size:18px;margin:0 0 12px}h3{font-size:15px;margin:0 0 6px}.muted{color:#666;font-size:13px}.nav{display:flex;flex-wrap:wrap;gap:8px}.btn,button{display:inline-block;border:1px solid #bbb;border-radius:8px;background:#fff;color:#222;padding:8px 12px;text-decoration:none;font-size:14px;cursor:pointer}.btn:hover,button:hover{background:#f0f0f0}.danger{border-color:#c33;color:#a00}.primary{border-color:#2673d9;color:#0756b1}.good{border-color:#16a34a}.warn{border-color:#d97706}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.mini{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px}.mini strong{display:block;font-size:16px;margin-top:4px;word-break:break-word}.mini span{color:#666;font-size:12px}.table{width:100%;border-collapse:collapse}.table th,.table td{border-bottom:1px solid #eee;padding:8px;text-align:left;vertical-align:top;font-size:13px}.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#f2f2f2;border-radius:6px;padding:2px 5px;word-break:break-all}pre{background:#111;color:#eee;padding:12px;border-radius:8px;overflow:auto;white-space:pre-wrap;word-break:break-word}.row{margin:8px 0}input[type=password],input[type=text]{padding:8px;border:1px solid #bbb;border-radius:6px;min-width:260px}.footer{margin-top:20px;color:#777;font-size:12px}.split{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.pill{display:inline-block;border:1px solid #ddd;border-radius:999px;padding:3px 8px;font-size:12px;color:#555;background:#fafafa}details{margin:8px 0}summary{cursor:pointer;color:#0756b1}
 EOF_WEB_CSS
 }
 generate_mgate_cgi() {
@@ -1127,7 +1127,7 @@ CONFIG_FILE="__CONFIG_FILE__"
 WEB_PORT="__WEB_PORT__"
 DEFAULT_HTTP_PORT="__DEFAULT_HTTP_PORT__"
 DEFAULT_SOCKS_PORT="__DEFAULT_SOCKS_PORT__"
-FAVICON_VER="0.2.6"
+FAVICON_VER="0.2.8"
 
 html_escape() {
     sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
@@ -1202,6 +1202,8 @@ nav() {
 <a class="btn" href="/cgi-bin/mgate.cgi?action=test">测试配置</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=logs&lines=100">查看日志</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=config">查看配置</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=backups">备份</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=backup">创建备份</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=token">Token</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=self-update">自更新</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=web-disable">关闭 Web 管理</a>
@@ -1211,8 +1213,12 @@ EOF
 }
 
 page_end() {
+    host_display="${HTTP_HOST:-0.0.0.0:$WEB_PORT}"
     cat <<EOF
-<div class="footer">mgate Web 仅建议在局域网内使用，请不要暴露到公网。</div>
+<div class="footer">
+  <div>访问地址：<span class="code">http://$(printf '%s' "$host_display" | html_escape)</span></div>
+  <div>mgate Web 仅建议在局域网内使用，请不要暴露到公网。</div>
+</div>
 </div></body></html>
 EOF
 }
@@ -1351,7 +1357,7 @@ token_page() {
 <div class="card">
 <h2>Web Token</h2>
 <p class="muted">Token 保存在：<span class="code">$TOKEN_FILE</span></p>
-<p><span class="code">$(printf '%s' "$tok" | html_escape)</span></p>
+<details><summary>显示当前 Token</summary><p><span class="code">$(printf '%s' "$tok" | html_escape)</span></p></details>
 <p><a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=token-reset">重置 Token</a></p>
 </div>
 EOF
@@ -1494,6 +1500,8 @@ case "$action" in
     test) run_output_page "测试配置" test ;;
     logs) logs_page "$lines" ;;
     config) run_output_page "当前配置" config ;;
+    backups) run_output_page "备份列表" backups ;;
+    backup) run_output_page "创建备份" backup web ;;
     token) token_page ;;
     confirm)
         case "$target" in
@@ -1835,6 +1843,173 @@ remove_web_service_files() {
             ;;
         plain) : ;;
     esac
+}
+
+
+backup_copy_dir() {
+    src="$1"
+    dst="$2"
+    if [ -d "$src" ]; then
+        mkdir -p "$(dirname "$dst")" || return 1
+        cp -pR "$src" "$dst" || return 1
+    fi
+}
+
+create_backup() {
+    label="${1:-manual}"
+    ensure_dirs
+    ts="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
+    safe_label="$(printf '%s' "$label" | sed 's/[^A-Za-z0-9_.-]/_/g')"
+    [ -n "$safe_label" ] || safe_label="manual"
+    backup_id="$ts-$safe_label"
+    backup_dir="$BACKUP_DIR/$backup_id"
+
+    mkdir -p "$backup_dir" || die "创建备份目录失败：$backup_dir"
+
+    if [ -d "$CONFIG_DIR" ]; then
+        cp -pR "$CONFIG_DIR" "$backup_dir/config" || die "备份配置目录失败"
+    fi
+    if [ -d "$DATA_DIR" ]; then
+        cp -pR "$DATA_DIR" "$backup_dir/data" || die "备份数据目录失败"
+    fi
+    if [ -d "$SERVICE_DIR" ]; then
+        cp -pR "$SERVICE_DIR" "$backup_dir/service" 2>/dev/null || true
+    fi
+
+    {
+        printf 'id=%s\n' "$backup_id"
+        printf 'time=%s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)"
+        printf 'label=%s\n' "$safe_label"
+        printf 'mgate_version=%s\n' "$MGATE_VERSION"
+        printf 'workdir=%s\n' "$WORKDIR"
+    } > "$backup_dir/manifest.txt"
+
+    printf '%s\n' "$backup_id"
+}
+
+latest_backup_id() {
+    ensure_dirs
+    for d in $(ls -1dt "$BACKUP_DIR"/* 2>/dev/null); do
+        [ -d "$d" ] || continue
+        [ -f "$d/manifest.txt" ] || continue
+        basename "$d"
+        return 0
+    done
+    return 1
+}
+
+backup_exists() {
+    id="$1"
+    [ -n "$id" ] && [ -d "$BACKUP_DIR/$id" ] && [ -f "$BACKUP_DIR/$id/manifest.txt" ]
+}
+
+cmd_backup() {
+    need_root
+    label="${1:-manual}"
+    step "正在创建备份"
+    id="$(create_backup "$label")" || die "创建备份失败"
+    ok "备份已创建：$id"
+    info "备份目录：$BACKUP_DIR/$id"
+}
+
+cmd_backups() {
+    ensure_dirs
+    step "备份列表"
+    found=0
+    for d in $(ls -1dt "$BACKUP_DIR"/* 2>/dev/null); do
+        [ -d "$d" ] || continue
+        [ -f "$d/manifest.txt" ] || continue
+        id="$(basename "$d")"
+        time="$(sed -n 's/^time=//p' "$d/manifest.txt" 2>/dev/null | head -n 1)"
+        label="$(sed -n 's/^label=//p' "$d/manifest.txt" 2>/dev/null | head -n 1)"
+        [ -n "$time" ] || time="unknown"
+        [ -n "$label" ] || label="manual"
+        info "$id  time=$time  label=$label"
+        found=1
+    done
+    if [ "$found" = "0" ]; then
+        warn "暂无备份"
+    fi
+}
+
+choose_backup_interactive() {
+    cmd_backups
+    printf '请输入要恢复的备份 ID，或输入 latest 使用最新备份: '
+    read -r chosen
+    [ -n "$chosen" ] || return 1
+    printf '%s\n' "$chosen"
+}
+
+confirm_restore() {
+    id="$1"
+    if [ "${MGATE_ASSUME_YES:-0}" = "1" ] || [ "${2:-}" = "--yes" ] || [ "${2:-}" = "-y" ]; then
+        return 0
+    fi
+    warn "即将恢复备份：$id"
+    warn "当前配置和数据会先自动备份，然后被该备份覆盖。"
+    printf 'Type RESTORE to continue: '
+    read -r ans
+    [ "$ans" = "RESTORE" ] || die "restore cancelled"
+}
+
+cmd_restore() {
+    need_root
+    req="${1:-}"
+    yes_arg="${2:-}"
+
+    if [ -z "$req" ]; then
+        if [ -t 0 ]; then
+            req="$(choose_backup_interactive || true)"
+        fi
+        [ -n "$req" ] || die "请指定备份 ID，例如：mgate restore latest"
+    fi
+
+    if [ "$req" = "latest" ]; then
+        id="$(latest_backup_id || true)"
+        [ -n "$id" ] || die "没有可恢复的备份"
+    else
+        id="$req"
+    fi
+
+    backup_exists "$id" || die "备份不存在：$id"
+    src="$BACKUP_DIR/$id"
+
+    if [ -x "$CORE_BIN" ] && [ -f "$src/config/config.yaml" ]; then
+        step "正在测试备份配置"
+        if "$CORE_BIN" -t -f "$src/config/config.yaml" >/tmp/mgate-restore-test.out 2>&1; then
+            ok "备份配置测试通过"
+        else
+            err "备份配置测试失败，已取消恢复"
+            sed 's/^/[DETAIL] /' /tmp/mgate-restore-test.out 2>/dev/null | tail -n 30
+            rm -f /tmp/mgate-restore-test.out
+            return 1
+        fi
+        rm -f /tmp/mgate-restore-test.out
+    else
+        warn "跳过配置测试：Mihomo 内核或备份配置不存在"
+    fi
+
+    confirm_restore "$id" "$yes_arg"
+
+    pre_id="$(create_backup pre-restore)" || die "恢复前备份失败"
+    info "恢复前备份：$pre_id"
+
+    step "正在恢复备份：$id"
+    if [ -d "$src/config" ]; then
+        rm -rf "$CONFIG_DIR"
+        cp -pR "$src/config" "$CONFIG_DIR" || die "恢复配置失败"
+    fi
+    if [ -d "$src/data" ]; then
+        rm -rf "$DATA_DIR"
+        cp -pR "$src/data" "$DATA_DIR" || die "恢复数据失败"
+    fi
+    if [ -d "$src/service" ]; then
+        rm -rf "$SERVICE_DIR"
+        cp -pR "$src/service" "$SERVICE_DIR" 2>/dev/null || true
+    fi
+
+    ok "备份已恢复：$id"
+    hint "建议执行：mgate test && mgate restart"
 }
 
 cmd_config() {
@@ -2189,6 +2364,9 @@ Usage:
   mgate test                Test config
   mgate logs [50|100|200]   Show recent logs
   mgate doctor              Run system diagnostics
+  mgate backup [label]       Create config/data backup
+  mgate backups             List backups
+  mgate restore [id|latest]  Restore a backup
   mgate version             Show versions
 
   mgate web-enable          Enable and start Web manager
@@ -2220,35 +2398,42 @@ menu() {
         say "mgate - Mobile Gateway Manager"
         say "Workspace: $WORKDIR"
         say ""
+        say "安装与更新"
         say "1)  初始化/修复 mgate 工作区"
         say "2)  更新 mgate 管理脚本（从 GitHub）"
         say "3)  安装/更新 Mihomo 内核"
         say "4)  卸载 Mihomo 内核"
         say "5)  完整卸载 mgate"
         say ""
+        say "服务管理"
         say "6)  启动服务"
         say "7)  停止服务"
         say "8)  重启服务"
         say "9)  查看服务状态"
-        say ""
         say "10) 设置开机启动"
         say "11) 关闭开机启动"
         say ""
+        say "配置与诊断"
         say "12) 查看配置"
         say "13) 编辑配置"
         say "14) 测试配置"
         say "15) 查看日志"
         say "16) 系统诊断"
-        say "17) 查看版本"
+        say "20) 查看版本"
+        say ""
+        say "备份与恢复"
+        say "17) 创建备份"
+        say "18) 查看备份列表"
+        say "19) 恢复备份"
         say ""
         say "Web 管理"
-        say "18) 开启 Web 管理"
-        say "19) 关闭 Web 管理"
-        say "20) 启动 Web 管理"
-        say "21) 停止 Web 管理"
-        say "22) 查看 Web 管理状态"
-        say "23) 重置 Web 管理 Token"
-        say "24) 刷新 Web 管理文件"
+        say "21) 开启 Web 管理"
+        say "22) 关闭 Web 管理"
+        say "23) 启动 Web 管理"
+        say "24) 停止 Web 管理"
+        say "25) 查看 Web 管理状态"
+        say "26) 重置 Web 管理 Token"
+        say "27) 刷新 Web 管理文件"
         say ""
         say "0)  退出"
         printf '请选择: '
@@ -2270,14 +2455,17 @@ menu() {
             14) cmd_test; pause_enter ;;
             15) cmd_logs; pause_enter ;;
             16) cmd_doctor; pause_enter ;;
-            17) cmd_version; pause_enter ;;
-            18) web_enable; pause_enter ;;
-            19) web_disable; pause_enter ;;
-            20) web_start; pause_enter ;;
-            21) web_stop; pause_enter ;;
-            22) web_status; pause_enter ;;
-            23) web_token reset; pause_enter ;;
-            24) web_refresh; pause_enter ;;
+            17) cmd_backup; pause_enter ;;
+            18) cmd_backups; pause_enter ;;
+            19) cmd_restore; pause_enter ;;
+            20) cmd_version; pause_enter ;;
+            21) web_enable; pause_enter ;;
+            22) web_disable; pause_enter ;;
+            23) web_start; pause_enter ;;
+            24) web_stop; pause_enter ;;
+            25) web_status; pause_enter ;;
+            26) web_token reset; pause_enter ;;
+            27) web_refresh; pause_enter ;;
             0) exit 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
@@ -2310,6 +2498,9 @@ main() {
         test) cmd_test "$@" ;;
         logs) cmd_logs "$@" ;;
         doctor) cmd_doctor "$@" ;;
+        backup) cmd_backup "$@" ;;
+        backups) cmd_backups "$@" ;;
+        restore) cmd_restore "$@" ;;
         version) cmd_version "$@" ;;
         web-enable) web_enable "$@" ;;
         web-disable) web_disable "$@" ;;
