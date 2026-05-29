@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.2.5"
+MGATE_VERSION="0.2.6"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1108,7 +1108,7 @@ ensure_web_token() {
 generate_web_index() {
     cat > "$WEB_INDEX_FILE" <<'EOF_WEB_INDEX'
 <!doctype html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/mgate.cgi"><link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.2.5"><title>mgate</title></head><body><a href="/cgi-bin/mgate.cgi">mgate Web</a></body></html>
+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/mgate.cgi"><link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.2.6"><title>mgate</title></head><body><a href="/cgi-bin/mgate.cgi">mgate Web</a></body></html>
 EOF_WEB_INDEX
 }
 
@@ -1127,7 +1127,7 @@ CONFIG_FILE="__CONFIG_FILE__"
 WEB_PORT="__WEB_PORT__"
 DEFAULT_HTTP_PORT="__DEFAULT_HTTP_PORT__"
 DEFAULT_SOCKS_PORT="__DEFAULT_SOCKS_PORT__"
-FAVICON_VER="0.2.5"
+FAVICON_VER="0.2.6"
 
 html_escape() {
     sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
@@ -1194,6 +1194,7 @@ nav() {
 <div class="card"><div class="nav">
 <a class="btn" href="/cgi-bin/mgate.cgi?action=status">首页</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=version">版本</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=doctor">诊断</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=proxy-info">连接信息</a>
 <a class="btn primary" href="/cgi-bin/mgate.cgi?action=start">启动服务</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=stop">停止服务</a>
@@ -1487,6 +1488,7 @@ fi
 case "$action" in
     status) status_page ;;
     version) run_output_page "版本" version ;;
+    doctor) run_output_page "系统诊断" doctor ;;
     proxy-info) proxy_info_page ;;
     start) run_output_page "启动服务" start ;;
     test) run_output_page "测试配置" test ;;
@@ -1893,6 +1895,258 @@ cmd_logs() {
             ;;
     esac
 }
+
+config_listener_port() {
+    name="$1"
+    def="$2"
+    if [ -f "$CONFIG_FILE" ]; then
+        p="$(awk -v n="$name" '
+            $0 ~ "name:[[:space:]]*" n {found=1}
+            found && $1=="port:" {print $2; exit}
+            found && /^  - name:/ && $0 !~ n {found=0}
+        ' "$CONFIG_FILE" 2>/dev/null | head -n 1)"
+        if [ -n "$p" ]; then
+            printf '%s\n' "$p"
+            return 0
+        fi
+    fi
+    printf '%s\n' "$def"
+}
+
+is_tcp_port_listening() {
+    port="$1"
+    case "$port" in ''|*[!0-9]*) return 2 ;; esac
+
+    if have ss; then
+        ss -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" {found=1} END{exit !found}' && return 0
+    fi
+
+    if have netstat; then
+        netstat -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" {found=1} END{exit !found}' && return 0
+    fi
+
+    hex="$(printf '%04X' "$port" 2>/dev/null | tr 'A-F' 'a-f')"
+    [ -n "$hex" ] || return 2
+    for f in /proc/net/tcp /proc/net/tcp6; do
+        [ -r "$f" ] || continue
+        awk -v p="$hex" 'BEGIN{found=0} NR>1 {local=tolower($2); state=$4; if (local ~ ":" p "$" && state=="0A") found=1} END{exit !found}' "$f" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+doctor_ok() {
+    ok "$1"
+    DOCTOR_OK=$((DOCTOR_OK + 1))
+}
+
+doctor_warn() {
+    warn "$1"
+    DOCTOR_WARN=$((DOCTOR_WARN + 1))
+}
+
+doctor_fail() {
+    err "$1"
+    DOCTOR_FAIL=$((DOCTOR_FAIL + 1))
+}
+
+check_required_cmd() {
+    label="$1"
+    shift
+    for c in "$@"; do
+        if have "$c"; then
+            doctor_ok "$label：$c"
+            return 0
+        fi
+    done
+    doctor_fail "$label：未找到 $*"
+    return 1
+}
+
+check_optional_cmd() {
+    label="$1"
+    shift
+    for c in "$@"; do
+        if have "$c"; then
+            doctor_ok "$label：$c"
+            return 0
+        fi
+    done
+    doctor_warn "$label：未找到 $*"
+    return 1
+}
+
+check_port() {
+    label="$1"
+    port="$2"
+    case "$port" in ''|*[!0-9]*) doctor_warn "$label 端口无效：$port"; return 1 ;; esac
+    if is_tcp_port_listening "$port"; then
+        doctor_ok "$label 端口监听中：$port"
+    else
+        doctor_warn "$label 端口未监听：$port"
+    fi
+}
+
+cmd_doctor() {
+    DOCTOR_OK=0
+    DOCTOR_WARN=0
+    DOCTOR_FAIL=0
+
+    info "mgate 版本：$MGATE_VERSION"
+    info "工作目录：$WORKDIR"
+    info "服务模式：$(detect_service_mode)"
+
+    say ""
+    step "检查基础命令"
+    check_required_cmd "下载工具" curl wget
+    check_required_cmd "解压工具" gzip gunzip
+    check_optional_cmd "日志工具" logread journalctl
+    check_optional_cmd "端口检查工具" ss netstat
+    check_optional_cmd "Web 服务" busybox httpd
+
+    say ""
+    step "检查工作目录"
+    for d in "$WORKDIR" "$BIN_DIR" "$CONFIG_DIR" "$SERVICE_DIR" "$LOG_DIR" "$RUN_DIR" "$BACKUP_DIR" "$TMP_DIR" "$DATA_DIR"; do
+        if [ -d "$d" ]; then
+            doctor_ok "目录存在：$d"
+        else
+            doctor_warn "目录不存在：$d"
+        fi
+    done
+
+    say ""
+    step "检查 Mihomo 内核"
+    if [ -x "$CORE_BIN" ]; then
+        core_ver="$($CORE_BIN -v 2>/dev/null || true)"
+        [ -n "$core_ver" ] || core_ver="$CORE_BIN"
+        doctor_ok "Mihomo 内核可执行：$core_ver"
+    elif [ -f "$CORE_BIN" ]; then
+        doctor_fail "Mihomo 内核存在但不可执行：$CORE_BIN"
+    else
+        doctor_fail "Mihomo 内核不存在：$CORE_BIN"
+    fi
+
+    say ""
+    step "检查配置"
+    if [ -f "$CONFIG_FILE" ]; then
+        doctor_ok "配置文件存在：$CONFIG_FILE"
+        if [ -x "$CORE_BIN" ]; then
+            if "$CORE_BIN" -t -f "$CONFIG_FILE" >/tmp/mgate-doctor-config.out 2>&1; then
+                doctor_ok "配置语法测试通过"
+            else
+                doctor_fail "配置语法测试失败"
+                sed 's/^/[DETAIL] /' /tmp/mgate-doctor-config.out 2>/dev/null | tail -n 20
+            fi
+            rm -f /tmp/mgate-doctor-config.out
+        else
+            doctor_warn "跳过配置测试：Mihomo 内核不可用"
+        fi
+    else
+        doctor_fail "配置文件不存在：$CONFIG_FILE"
+    fi
+
+    say ""
+    step "检查 mgate 服务"
+    mode="$(detect_service_mode)"
+    case "$mode" in
+        openwrt)
+            [ -x "$OPENWRT_SERVICE_LINK" ] && doctor_ok "OpenWrt 服务入口存在：$OPENWRT_SERVICE_LINK" || doctor_warn "OpenWrt 服务入口不存在：$OPENWRT_SERVICE_LINK"
+            if [ -x "$OPENWRT_SERVICE_LINK" ] && "$OPENWRT_SERVICE_LINK" status >/dev/null 2>&1; then
+                doctor_ok "mgate 服务运行中"
+            else
+                doctor_warn "mgate 服务未运行"
+            fi
+            ;;
+        systemd)
+            [ -e "$SYSTEMD_SERVICE_LINK" ] && doctor_ok "systemd 服务入口存在：$SYSTEMD_SERVICE_LINK" || doctor_warn "systemd 服务入口不存在：$SYSTEMD_SERVICE_LINK"
+            active="$(systemctl is-active mgate.service 2>/dev/null || true)"
+            enabled="$(systemctl is-enabled mgate.service 2>/dev/null || true)"
+            [ "$active" = "active" ] && doctor_ok "mgate 服务运行中：$active" || doctor_warn "mgate 服务状态：${active:-unknown}"
+            [ "$enabled" = "enabled" ] && doctor_ok "mgate 开机自启：$enabled" || doctor_warn "mgate 开机自启：${enabled:-unknown}"
+            ;;
+        plain)
+            if fallback_status_quiet; then
+                doctor_ok "mgate plain 模式运行中，PID：$(cat "$PID_FILE" 2>/dev/null)"
+            else
+                doctor_warn "mgate plain 模式未运行"
+            fi
+            ;;
+    esac
+
+    say ""
+    step "检查代理端口"
+    http_port="$(config_listener_port http-users "$DEFAULT_HTTP_PORT")"
+    socks_port="$(config_listener_port socks-users "$DEFAULT_SOCKS_PORT")"
+    check_port "HTTP 代理" "$http_port"
+    check_port "SOCKS5 代理" "$socks_port"
+
+    say ""
+    step "检查 Web 管理"
+    if [ -d "$WEB_DIR" ]; then
+        doctor_ok "Web 目录存在：$WEB_DIR"
+    else
+        doctor_warn "Web 目录不存在：$WEB_DIR"
+    fi
+    [ -x "$WEB_CGI_FILE" ] && doctor_ok "Web CGI 可执行：$WEB_CGI_FILE" || doctor_warn "Web CGI 不可执行或不存在：$WEB_CGI_FILE"
+    [ -s "$WEB_TOKEN_FILE" ] && doctor_ok "Web Token 已生成：$WEB_TOKEN_FILE" || doctor_warn "Web Token 未生成"
+    case "$mode" in
+        openwrt)
+            [ -x "$WEB_OPENWRT_SERVICE_LINK" ] && doctor_ok "OpenWrt Web 服务入口存在：$WEB_OPENWRT_SERVICE_LINK" || doctor_warn "OpenWrt Web 服务入口不存在：$WEB_OPENWRT_SERVICE_LINK"
+            ;;
+        systemd)
+            [ -e "$WEB_SYSTEMD_SERVICE_LINK" ] && doctor_ok "systemd Web 服务入口存在：$WEB_SYSTEMD_SERVICE_LINK" || doctor_warn "systemd Web 服务入口不存在：$WEB_SYSTEMD_SERVICE_LINK"
+            ;;
+        plain)
+            :
+            ;;
+    esac
+    check_port "Web 管理" "$WEB_PORT"
+
+    say ""
+    step "检查资源"
+    if have df; then
+        avail="$(df -k "$WORKDIR" 2>/dev/null | awk 'NR==2 {print $4}')"
+        if [ -n "$avail" ]; then
+            if [ "$avail" -lt 10240 ] 2>/dev/null; then
+                doctor_warn "磁盘可用空间偏低：${avail}KB"
+            else
+                doctor_ok "磁盘可用空间：${avail}KB"
+            fi
+        else
+            doctor_warn "无法读取磁盘空间"
+        fi
+    else
+        doctor_warn "无法检查磁盘空间：df 不存在"
+    fi
+
+    if have free; then
+        mem_avail="$(free -k 2>/dev/null | awk '/Mem:/ {print $7}')"
+        [ -n "$mem_avail" ] || mem_avail="$(free -k 2>/dev/null | awk '/Mem:/ {print $4}')"
+        if [ -n "$mem_avail" ]; then
+            if [ "$mem_avail" -lt 32768 ] 2>/dev/null; then
+                doctor_warn "可用内存偏低：${mem_avail}KB"
+            else
+                doctor_ok "可用内存：${mem_avail}KB"
+            fi
+        else
+            doctor_warn "无法读取内存信息"
+        fi
+    else
+        doctor_warn "无法检查内存：free 不存在"
+    fi
+
+    say ""
+    info "诊断汇总：OK=$DOCTOR_OK WARN=$DOCTOR_WARN ERROR=$DOCTOR_FAIL"
+    if [ "$DOCTOR_FAIL" -gt 0 ]; then
+        err "诊断发现严重问题，请优先处理 ERROR 项"
+        return 1
+    fi
+    if [ "$DOCTOR_WARN" -gt 0 ]; then
+        warn "诊断完成，有 WARN 项需要关注"
+        return 0
+    fi
+    ok "诊断完成，未发现明显问题"
+}
+
 cmd_version() {
     info "mgate 版本：$MGATE_VERSION"
     info "工作目录：$WORKDIR"
@@ -1934,6 +2188,7 @@ Usage:
   mgate edit                Edit config
   mgate test                Test config
   mgate logs [50|100|200]   Show recent logs
+  mgate doctor              Run system diagnostics
   mgate version             Show versions
 
   mgate web-enable          Enable and start Web manager
@@ -1983,16 +2238,17 @@ menu() {
         say "13) 编辑配置"
         say "14) 测试配置"
         say "15) 查看日志"
-        say "16) 查看版本"
+        say "16) 系统诊断"
+        say "17) 查看版本"
         say ""
         say "Web 管理"
-        say "17) 开启 Web 管理"
-        say "18) 关闭 Web 管理"
-        say "19) 启动 Web 管理"
-        say "20) 停止 Web 管理"
-        say "21) 查看 Web 管理状态"
-        say "22) 重置 Web 管理 Token"
-        say "23) 刷新 Web 管理文件"
+        say "18) 开启 Web 管理"
+        say "19) 关闭 Web 管理"
+        say "20) 启动 Web 管理"
+        say "21) 停止 Web 管理"
+        say "22) 查看 Web 管理状态"
+        say "23) 重置 Web 管理 Token"
+        say "24) 刷新 Web 管理文件"
         say ""
         say "0)  退出"
         printf '请选择: '
@@ -2013,14 +2269,15 @@ menu() {
             13) cmd_edit; pause_enter ;;
             14) cmd_test; pause_enter ;;
             15) cmd_logs; pause_enter ;;
-            16) cmd_version; pause_enter ;;
-            17) web_enable; pause_enter ;;
-            18) web_disable; pause_enter ;;
-            19) web_start; pause_enter ;;
-            20) web_stop; pause_enter ;;
-            21) web_status; pause_enter ;;
-            22) web_token reset; pause_enter ;;
-            23) web_refresh; pause_enter ;;
+            16) cmd_doctor; pause_enter ;;
+            17) cmd_version; pause_enter ;;
+            18) web_enable; pause_enter ;;
+            19) web_disable; pause_enter ;;
+            20) web_start; pause_enter ;;
+            21) web_stop; pause_enter ;;
+            22) web_status; pause_enter ;;
+            23) web_token reset; pause_enter ;;
+            24) web_refresh; pause_enter ;;
             0) exit 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
@@ -2052,6 +2309,7 @@ main() {
         edit) cmd_edit "$@" ;;
         test) cmd_test "$@" ;;
         logs) cmd_logs "$@" ;;
+        doctor) cmd_doctor "$@" ;;
         version) cmd_version "$@" ;;
         web-enable) web_enable "$@" ;;
         web-disable) web_disable "$@" ;;
