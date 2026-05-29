@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.3"
+MGATE_VERSION="0.3.5"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -51,8 +51,10 @@ WEB_SYSTEMD_SERVICE_FILE="$SERVICE_DIR/mgate-web.service"
 WEB_OPENWRT_SERVICE_LINK="/etc/init.d/mgate-web"
 WEB_SYSTEMD_SERVICE_LINK="/etc/systemd/system/mgate-web.service"
 
-DEFAULT_SOCKS_PORT="${SOCKS_PORT:-31800}"
-DEFAULT_HTTP_PORT="${HTTP_PORT:-31801}"
+DEFAULT_MIXED_PORT="${MIXED_PORT:-31800}"
+# Backward-compatible internal aliases. The default proxy entry is now a single mixed listener.
+DEFAULT_SOCKS_PORT="$DEFAULT_MIXED_PORT"
+DEFAULT_HTTP_PORT="$DEFAULT_MIXED_PORT"
 
 REPO="MetaCubeX/mihomo"
 GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
@@ -474,10 +476,10 @@ mode: rule
 log-level: warning
 ipv6: false
 
-# HTTP and SOCKS5 listeners share this authentication list.
+# Mixed listener supports both HTTP and SOCKS5 proxy protocols on one port.
 # Client examples:
-#   HTTP   http://DE:change_me_de@192.168.8.1:__HTTP_PORT__
-#   SOCKS5 socks5://DE:change_me_de@192.168.8.1:__SOCKS_PORT__
+#   HTTP   http://DE:change_me_de@192.168.8.1:__MIXED_PORT__
+#   SOCKS5 socks5://DE:change_me_de@192.168.8.1:__MIXED_PORT__
 authentication:
   - "DE:change_me_de"
   - "JP:change_me_jp"
@@ -485,16 +487,11 @@ authentication:
   - "UK:change_me_uk"
 
 listeners:
-  - name: socks-users
-    type: socks
+  - name: mixed-users
+    type: mixed
     listen: 0.0.0.0
-    port: __SOCKS_PORT__
+    port: __MIXED_PORT__
     udp: true
-
-  - name: http-users
-    type: http
-    listen: 0.0.0.0
-    port: __HTTP_PORT__
 
 proxies:
   - name: node-DE
@@ -585,6 +582,7 @@ EOF_CONFIG
 
 render_config_content() {
     generate_config_content | sed \
+        -e "s/__MIXED_PORT__/$DEFAULT_MIXED_PORT/g" \
         -e "s/__SOCKS_PORT__/$DEFAULT_SOCKS_PORT/g" \
         -e "s/__HTTP_PORT__/$DEFAULT_HTTP_PORT/g"
 }
@@ -624,16 +622,15 @@ Core:
 Config:
   $CONFIG_FILE
 
-Default listeners:
-  SOCKS5: 0.0.0.0:$DEFAULT_SOCKS_PORT
-  HTTP:   0.0.0.0:$DEFAULT_HTTP_PORT
+Default listener:
+  Mixed:  0.0.0.0:$DEFAULT_MIXED_PORT
 
 Default users:
   DE / JP / US / UK
 
 Client examples:
-  http://DE:change_me_de@192.168.8.1:$DEFAULT_HTTP_PORT
-  socks5://DE:change_me_de@192.168.8.1:$DEFAULT_SOCKS_PORT
+  http://DE:change_me_de@192.168.8.1:$DEFAULT_MIXED_PORT
+  socks5://DE:change_me_de@192.168.8.1:$DEFAULT_MIXED_PORT
 
 Common commands:
   mgate                 Enter TUI menu
@@ -656,8 +653,7 @@ Environment overrides:
   MGATE_SELF_PROXY=https://.../     set self-update proxy; default follows MGATE_GITHUB_PROXY
   MGATE_GITHUB_PROXY=https://.../   set GitHub proxy prefix; default is $DEFAULT_GITHUB_PROXY
   MGATE_GITHUB_PROXY=direct         disable GitHub proxy and use direct download
-  SOCKS_PORT=31800                override default SOCKS5 port during config generation
-  HTTP_PORT=31801                 override default HTTP port during config generation
+  MIXED_PORT=31800                override default mixed proxy port during config generation
 EOF_README
 }
 
@@ -1139,9 +1135,10 @@ MGATE="__MGATE_PATH__"
 TOKEN_FILE="__WEB_TOKEN_FILE__"
 CONFIG_FILE="__CONFIG_FILE__"
 WEB_PORT="__WEB_PORT__"
-DEFAULT_HTTP_PORT="__DEFAULT_HTTP_PORT__"
-DEFAULT_SOCKS_PORT="__DEFAULT_SOCKS_PORT__"
-FAVICON_VER="0.3.3"
+DEFAULT_MIXED_PORT="__DEFAULT_MIXED_PORT__"
+DEFAULT_HTTP_PORT="$DEFAULT_MIXED_PORT"
+DEFAULT_SOCKS_PORT="$DEFAULT_MIXED_PORT"
+FAVICON_VER="0.3.5"
 
 html_escape() {
     sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
@@ -1151,6 +1148,12 @@ param_get() {
     data="$1"
     key="$2"
     printf '%s' "&$data&" | sed -n "s/.*[&]$key=\([^&]*\).*/\1/p" | head -n 1
+}
+
+url_decode() {
+    # Decode application/x-www-form-urlencoded values. BusyBox printf supports \xHH on common builds.
+    v="$(printf '%s' "$1" | sed 's/+/ /g; s/%/\\x/g')"
+    printf '%b' "$v"
 }
 
 read_post_body() {
@@ -1211,6 +1214,10 @@ nav() {
 <a class="btn" href="/cgi-bin/mgate.cgi?action=doctor">诊断</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=proxy-info">连接信息</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=account-password">账号密码</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=sub-status">订阅状态</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=sub-set">设置订阅</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-update">更新订阅</a>
+<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-clear">清除订阅</a>
 <a class="btn primary" href="/cgi-bin/mgate.cgi?action=start">启动服务</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=stop">停止服务</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=restart">重启服务</a>
@@ -1321,8 +1328,8 @@ EOF
     summary_card "Mihomo 内核" "$core_line" "$core_class"
     summary_card "开机自启" "$boot_line" "$boot_class"
     summary_card "配置文件" "$cfg_line" "$cfg_class"
-    summary_card "HTTP 代理" "$DEFAULT_HTTP_PORT" ""
-    summary_card "SOCKS5 代理" "$DEFAULT_SOCKS_PORT" ""
+    summary_card "Mixed 代理" "$DEFAULT_MIXED_PORT" ""
+    summary_card "支持协议" "HTTP / SOCKS5" ""
     cat <<'EOF'
 </div></div>
 EOF
@@ -1344,6 +1351,8 @@ confirm_page() {
         self-update) label="从 GitHub 更新 mgate 管理脚本" ;;
         web-disable) label="关闭 Web 管理" ;;
         token-reset) label="重置 Web 管理 Token" ;;
+        sub-update) label="更新订阅并重建配置" ;;
+        sub-clear) label="清除订阅设置和缓存" ;;
     esac
     header
     page_start "Confirm"
@@ -1396,8 +1405,7 @@ listener_port() {
 proxy_info_page() {
     host="${HTTP_HOST:-设备IP}"
     host="${host%%:*}"
-    http_port="$(listener_port http-users "$DEFAULT_HTTP_PORT")"
-    socks_port="$(listener_port socks-users "$DEFAULT_SOCKS_PORT")"
+    mixed_port="$(listener_port mixed-users "$DEFAULT_MIXED_PORT")"
 
     header
     page_start "连接信息"
@@ -1405,6 +1413,7 @@ proxy_info_page() {
     cat <<EOF
 <div class="card">
 <h2>代理连接信息</h2>
+<p class="muted">Mixed 端口同时支持 HTTP 和 SOCKS5 协议。客户端里仍需选择对应代理协议，但端口统一使用 $mixed_port。</p>
 <p class="muted">如果密码包含特殊字符，请在客户端代理 URL 中进行 URL 编码。</p>
 <table class="table"><thead><tr><th>用户</th><th>HTTP 代理</th><th>SOCKS5 代理</th></tr></thead><tbody>
 EOF
@@ -1422,8 +1431,8 @@ EOF
             [ -n "$entry" ] || continue
             user="${entry%%:*}"
             pass="${entry#*:}"
-            http_url="http://$user:$pass@$host:$http_port"
-            socks_url="socks5://$user:$pass@$host:$socks_port"
+            http_url="http://$user:$pass@$host:$mixed_port"
+            socks_url="socks5://$user:$pass@$host:$mixed_port"
             printf '<tr><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td><span class="code">%s</span></td></tr>\n' \
                 "$(printf '%s' "$user" | html_escape)" \
                 "$(printf '%s' "$http_url" | html_escape)" \
@@ -1436,7 +1445,6 @@ EOF
 EOF
     page_end
 }
-
 
 account_password_page() {
     out="$($MGATE account-password 2>&1)"
@@ -1459,6 +1467,52 @@ EOF
 </form>
 <p class="muted">密码建议只使用字母和数字，不要包含空格、冒号或引号。修改后会重新更新订阅配置。</p>
 </div>
+EOF
+    page_end
+}
+
+
+sub_status_page() {
+    out="$($MGATE sub-status 2>&1)"
+    header
+    page_start "订阅状态"
+    nav
+    cat <<'EOF'
+<div class="card">
+<h2>订阅状态</h2>
+<pre>
+EOF
+    printf '%s\n' "$out" | html_escape
+    cat <<'EOF'
+</pre>
+<p><a class="btn primary" href="/cgi-bin/mgate.cgi?action=sub-set">设置/替换订阅</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-update">更新订阅</a>
+<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-clear">清除订阅</a></p>
+</div>
+EOF
+    page_end
+}
+
+sub_set_page() {
+    out="$($MGATE sub-status 2>&1)"
+    header
+    page_start "设置订阅"
+    nav
+    cat <<'EOF'
+<div class="card">
+<h2>设置/替换订阅链接</h2>
+<p class="muted">仅支持 Clash / Mihomo YAML 订阅。提交后会立即拉取订阅、识别国家/地区、生成账号和配置。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="sub-set-do">
+<div class="row"><input type="text" name="sub_url" placeholder="https://example.com/clash.yaml" autocomplete="off"></div>
+<div class="row"><button class="primary" type="submit">保存并立即更新</button></div>
+</form>
+</div>
+<div class="card"><h2>当前订阅状态</h2><pre>
+EOF
+    printf '%s\n' "$out" | html_escape
+    cat <<'EOF'
+</pre></div>
 EOF
     page_end
 }
@@ -1538,6 +1592,12 @@ case "$action" in
     doctor) run_output_page "系统诊断" doctor ;;
     proxy-info) proxy_info_page ;;
     account-password) account_password_page ;;
+    sub-status) sub_status_page ;;
+    sub-set) sub_set_page ;;
+    sub-set-do)
+        sub_url="$(url_decode "$(param_get "$post_body" sub_url)")"
+        run_output_page "设置/替换订阅" sub-set "$sub_url"
+        ;;
     account-password-set)
         pw="$(param_get "$post_body" password)"
         run_output_page "修改代理账号默认密码" account-password set "$pw"
@@ -1551,7 +1611,7 @@ case "$action" in
     token) token_page ;;
     confirm)
         case "$target" in
-            stop|restart|self-update|web-disable|token-reset) confirm_page "$target" ;;
+            stop|restart|self-update|web-disable|token-reset|sub-update|sub-clear) confirm_page "$target" ;;
             *) status_page ;;
         esac
         ;;
@@ -1560,6 +1620,8 @@ case "$action" in
             stop) run_output_page "停止服务" stop ;;
             restart) run_output_page "重启服务" restart ;;
             self-update) run_output_page "自更新 mgate" self-update ;;
+            sub-update) run_output_page "更新订阅" sub-update ;;
+            sub-clear) run_output_page "清除订阅" sub-clear ;;
             token-reset)
                 header "Set-Cookie: mgate_token=deleted; Path=/; Max-Age=0"
                 page_start "Token 已重置"
@@ -1591,6 +1653,7 @@ EOF_WEB_CGI
         -e "s#__WEB_TOKEN_FILE__#$WEB_TOKEN_FILE#g" \
         -e "s#__CONFIG_FILE__#$CONFIG_FILE#g" \
         -e "s#__WEB_PORT__#$WEB_PORT#g" \
+        -e "s#__DEFAULT_MIXED_PORT__#$DEFAULT_MIXED_PORT#g" \
         -e "s#__DEFAULT_HTTP_PORT__#$DEFAULT_HTTP_PORT#g" \
         -e "s#__DEFAULT_SOCKS_PORT__#$DEFAULT_SOCKS_PORT#g" \
         "$WEB_CGI_FILE"
@@ -2295,10 +2358,8 @@ cmd_doctor() {
 
     say ""
     step "检查代理端口"
-    http_port="$(config_listener_port http-users "$DEFAULT_HTTP_PORT")"
-    socks_port="$(config_listener_port socks-users "$DEFAULT_SOCKS_PORT")"
-    check_port "HTTP 代理" "$http_port"
-    check_port "SOCKS5 代理" "$socks_port"
+    mixed_port="$(config_listener_port mixed-users "$DEFAULT_MIXED_PORT")"
+    check_port "Mixed 代理" "$mixed_port"
 
     say ""
     step "检查 Web 管理"
@@ -2574,16 +2635,11 @@ EOF_SUB_CONFIG
     cat >> "$out" <<EOF_SUB_CONFIG
 
 listeners:
-  - name: socks-users
-    type: socks
+  - name: mixed-users
+    type: mixed
     listen: 0.0.0.0
-    port: $DEFAULT_SOCKS_PORT
+    port: $DEFAULT_MIXED_PORT
     udp: true
-
-  - name: http-users
-    type: http
-    listen: 0.0.0.0
-    port: $DEFAULT_HTTP_PORT
 
 proxy-providers:
   mgate-sub:
@@ -2814,6 +2870,35 @@ cmd_sub_clear() {
     hint "如需重新生成手动模板：FORCE=1 mgate install"
 }
 
+
+cmd_proxy_info() {
+    host="设备IP"
+    mixed_port="$(config_listener_port mixed-users "$DEFAULT_MIXED_PORT")"
+    info "Mixed 代理端口：$mixed_port"
+    info "同一个端口同时支持 HTTP 和 SOCKS5 协议"
+    if [ -f "$CONFIG_FILE" ]; then
+        step "代理连接信息"
+        awk '
+            /^authentication:/ {on=1; next}
+            /^[A-Za-z0-9_-]+:/ {if(on) exit}
+            on && /^[[:space:]]*-[[:space:]]*"/ {
+                line=$0
+                sub(/^[^"]*"/, "", line)
+                sub(/"[[:space:]]*$/, "", line)
+                print line
+            }
+        ' "$CONFIG_FILE" | while IFS= read -r entry; do
+            [ -n "$entry" ] || continue
+            user="${entry%%:*}"
+            pass="${entry#*:}"
+            info "$user HTTP  : http://$user:$pass@$host:$mixed_port"
+            info "$user SOCKS5: socks5://$user:$pass@$host:$mixed_port"
+        done
+    else
+        warn "配置文件不存在：$CONFIG_FILE"
+    fi
+}
+
 cmd_version() {
     info "mgate 版本：$MGATE_VERSION"
     info "工作目录：$WORKDIR"
@@ -2870,10 +2955,13 @@ $APP_NAME - $APP_DESC
   mgate sub-set <url>       设置/替换订阅并立即更新配置
   mgate sub-update          拉取已保存订阅并更新配置
   mgate sub-status          查看订阅状态和账号
-  mgate account-password    查看/修改代理账号默认密码
-  mgate passwd              account-password 的别名
   mgate sub-debug           查看最近一次订阅失败详情
   mgate sub-clear           清除订阅设置和缓存
+
+账号与连接：
+  mgate account-password    查看/修改代理账号默认密码
+  mgate passwd              account-password 的别名
+  mgate proxy-info          查看代理连接信息
 
 Web 管理：
   mgate web-enable          开启 Web 管理
@@ -2927,21 +3015,25 @@ menu() {
         say "20) 设置/替换订阅"
         say "21) 更新订阅"
         say "22) 查看订阅状态"
-        say "23) 查看/修改代理账号默认密码"
-        say "24) 查看订阅调试信息"
-        say "25) 清除订阅设置"
+        say "23) 查看订阅调试信息"
+        say "24) 清除订阅设置"
+        say ""
+        say "账号与连接"
+        say "25) 查看代理账号默认密码"
+        say "26) 修改代理账号默认密码"
+        say "27) 查看代理连接信息"
         say ""
         say "版本信息"
-        say "26) 查看版本"
+        say "28) 查看版本"
         say ""
         say "Web 管理"
-        say "27) 开启 Web 管理"
-        say "28) 关闭 Web 管理"
-        say "29) 启动 Web 管理"
-        say "30) 停止 Web 管理"
-        say "31) 查看 Web 管理状态"
-        say "32) 重置 Web 管理 Token"
-        say "33) 刷新 Web 管理文件"
+        say "29) 开启 Web 管理"
+        say "30) 关闭 Web 管理"
+        say "31) 启动 Web 管理"
+        say "32) 停止 Web 管理"
+        say "33) 查看 Web 管理状态"
+        say "34) 重置 Web 管理 Token"
+        say "35) 刷新 Web 管理文件"
         say ""
         say "0)  退出"
         printf '请选择: '
@@ -2969,17 +3061,19 @@ menu() {
             20) cmd_sub_set; pause_enter ;;
             21) cmd_sub_update; pause_enter ;;
             22) cmd_sub_status; pause_enter ;;
-            23) cmd_account_password; pause_enter ;;
-            24) cmd_sub_debug; pause_enter ;;
-            25) cmd_sub_clear; pause_enter ;;
-            26) cmd_version; pause_enter ;;
-            27) web_enable; pause_enter ;;
-            28) web_disable; pause_enter ;;
-            29) web_start; pause_enter ;;
-            30) web_stop; pause_enter ;;
-            31) web_status; pause_enter ;;
-            32) web_token reset; pause_enter ;;
-            33) web_refresh; pause_enter ;;
+            23) cmd_sub_debug; pause_enter ;;
+            24) cmd_sub_clear; pause_enter ;;
+            25) cmd_account_password; pause_enter ;;
+            26) cmd_account_password set; pause_enter ;;
+            27) cmd_proxy_info; pause_enter ;;
+            28) cmd_version; pause_enter ;;
+            29) web_enable; pause_enter ;;
+            30) web_disable; pause_enter ;;
+            31) web_start; pause_enter ;;
+            32) web_stop; pause_enter ;;
+            33) web_status; pause_enter ;;
+            34) web_token reset; pause_enter ;;
+            35) web_refresh; pause_enter ;;
             0) exit 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
@@ -3019,6 +3113,7 @@ main() {
         sub-update) cmd_sub_update "$@" ;;
         sub-status) cmd_sub_status "$@" ;;
         account-password|passwd) cmd_account_password "$@" ;;
+        proxy-info) cmd_proxy_info "$@" ;;
         sub-debug) cmd_sub_debug "$@" ;;
         sub-clear) cmd_sub_clear "$@" ;;
         version) cmd_version "$@" ;;
