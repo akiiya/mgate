@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.2.8"
+MGATE_VERSION="0.2.9"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1019,6 +1019,7 @@ cmd_install() {
     ok "mgate 工作区初始化/修复完成"
     say ""
     hint "下一步：mgate edit && mgate test && mgate restart"
+    hint "如需更新 mgate 管理脚本：mgate self-update"
 }
 
 cmd_uninstall_core() {
@@ -1108,7 +1109,7 @@ ensure_web_token() {
 generate_web_index() {
     cat > "$WEB_INDEX_FILE" <<'EOF_WEB_INDEX'
 <!doctype html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/mgate.cgi"><link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.2.8"><title>mgate</title></head><body><a href="/cgi-bin/mgate.cgi">mgate Web</a></body></html>
+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/cgi-bin/mgate.cgi"><link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.2.9"><title>mgate</title></head><body><a href="/cgi-bin/mgate.cgi">mgate Web</a></body></html>
 EOF_WEB_INDEX
 }
 
@@ -1127,7 +1128,7 @@ CONFIG_FILE="__CONFIG_FILE__"
 WEB_PORT="__WEB_PORT__"
 DEFAULT_HTTP_PORT="__DEFAULT_HTTP_PORT__"
 DEFAULT_SOCKS_PORT="__DEFAULT_SOCKS_PORT__"
-FAVICON_VER="0.2.8"
+FAVICON_VER="0.2.9"
 
 html_escape() {
     sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
@@ -2343,55 +2344,52 @@ usage() {
     cat <<EOF_USAGE
 $APP_NAME - $APP_DESC
 
-Usage:
-  mgate                     Enter TUI menu
-  mgate install             Initialize/repair mgate workspace, core, config and service
-  mgate self-update         Update mgate manager script from GitHub
-  mgate update              Alias of self-update
-  mgate install-core        Install/update Mihomo core only
-  mgate uninstall-core      Remove Mihomo core only, keep config and manager
-  mgate uninstall [--yes]   Remove mgate completely
+用法：
+  mgate                     进入 TUI 菜单
 
-  mgate start               Start service
-  mgate stop                Stop service
-  mgate restart             Restart service
-  mgate status              Show service status
-  mgate enable              Enable boot start
-  mgate disable             Disable boot start
+安装与更新：
+  mgate install             初始化/修复 mgate 工作区
+  mgate self-update         从 GitHub 更新 mgate 管理脚本
+  mgate update              self-update 的别名
+  mgate install-core        安装/更新 Mihomo 内核
+  mgate uninstall-core      仅卸载 Mihomo 内核，保留配置和管理脚本
+  mgate uninstall [--yes]   完整卸载 mgate
 
-  mgate config              Show config
-  mgate edit                Edit config
-  mgate test                Test config
-  mgate logs [50|100|200]   Show recent logs
-  mgate doctor              Run system diagnostics
-  mgate backup [label]       Create config/data backup
-  mgate backups             List backups
-  mgate restore [id|latest]  Restore a backup
-  mgate version             Show versions
+服务管理：
+  mgate start               启动服务
+  mgate stop                停止服务
+  mgate restart             重启服务
+  mgate status              查看服务状态
+  mgate enable              设置开机启动
+  mgate disable             关闭开机启动
 
-  mgate web-enable          Enable and start Web manager
-  mgate web-disable         Disable and stop Web manager
-  mgate web-start           Start Web manager
-  mgate web-stop            Stop Web manager
-  mgate web-restart         Restart Web manager
-  mgate web-status          Show Web manager status
-  mgate web-token [reset]   Show or reset Web token
-  mgate web-refresh         Regenerate Web files
+配置与诊断：
+  mgate config              查看配置
+  mgate edit                编辑配置
+  mgate test                测试配置
+  mgate logs [50|100|200]   查看日志
+  mgate doctor              系统诊断
 
-  mgate help                Show this help
+备份与恢复：
+  mgate backup [label]      创建备份
+  mgate backups             查看备份列表
+  mgate restore [id|latest] 恢复备份
 
-Environment:
-  FORCE=1                         overwrite generated config after backup
-  MGATE_ASSUME_YES=1              skip uninstall confirmation
-  MGATE_MIHOMO_VERSION=v1.19.25   install a specific Mihomo version
-  MGATE_MIHOMO_ASSET=linux-arm64  force Mihomo release asset
-  MGATE_SELF_URL=https://.../       set mgate self-update URL
-  MGATE_SELF_PROXY=https://.../     set self-update proxy; default follows MGATE_GITHUB_PROXY
-  MGATE_GITHUB_PROXY=https://.../   set GitHub proxy prefix; default is $DEFAULT_GITHUB_PROXY
-  MGATE_GITHUB_PROXY=direct         disable GitHub proxy and use direct download
+Web 管理：
+  mgate web-enable          开启 Web 管理
+  mgate web-disable         关闭 Web 管理并关闭开机自启
+  mgate web-start           启动 Web 管理服务
+  mgate web-stop            停止 Web 管理服务
+  mgate web-restart         重启 Web 管理服务
+  mgate web-status          查看 Web 管理状态
+  mgate web-token [reset]   查看或重置 Web Token
+  mgate web-refresh         重新生成 Web 页面文件
+
+其他：
+  mgate version             查看版本
+  mgate help                查看帮助
 EOF_USAGE
 }
-
 menu() {
     while :; do
         say ""
@@ -2419,12 +2417,14 @@ menu() {
         say "14) 测试配置"
         say "15) 查看日志"
         say "16) 系统诊断"
-        say "20) 查看版本"
         say ""
         say "备份与恢复"
         say "17) 创建备份"
         say "18) 查看备份列表"
         say "19) 恢复备份"
+        say ""
+        say "版本信息"
+        say "20) 查看版本"
         say ""
         say "Web 管理"
         say "21) 开启 Web 管理"
