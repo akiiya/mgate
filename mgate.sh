@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.10"
+MGATE_VERSION="0.3.11"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1103,6 +1103,57 @@ find_httpd_cmd() {
     return 1
 }
 
+detect_package_manager() {
+    if have apt-get; then printf 'apt-get\n'; return 0; fi
+    if have apk;     then printf 'apk\n';     return 0; fi
+    if have opkg;    then printf 'opkg\n';    return 0; fi
+    if have yum;     then printf 'yum\n';     return 0; fi
+    if have dnf;     then printf 'dnf\n';     return 0; fi
+    return 1
+}
+
+ensure_httpd_available() {
+    find_httpd_cmd >/dev/null 2>&1 && return 0
+
+    warn "未找到可用的 httpd（需要 busybox httpd applet）"
+    pm="$(detect_package_manager 2>/dev/null || true)"
+    case "$pm" in
+        apt-get) hint "安装命令：apt-get install -y busybox" ;;
+        apk)     hint "安装命令：apk add busybox" ;;
+        opkg)    hint "安装命令：opkg update && opkg install busybox" ;;
+        yum|dnf) hint "安装命令：$pm install -y busybox" ;;
+        *)       hint "请手动安装包含 httpd applet 的 busybox 后重试" ; return 1 ;;
+    esac
+
+    if [ "${MGATE_ASSUME_YES:-0}" != "1" ] && [ ! -t 0 ]; then
+        err "非交互模式，请手动安装 busybox 后重试"
+        return 1
+    fi
+
+    if [ "${MGATE_ASSUME_YES:-0}" != "1" ]; then
+        printf '是否现在自动安装 busybox？[y/N] '
+        read -r _httpd_ans
+        case "$_httpd_ans" in
+            y|Y|yes|YES) : ;;
+            *) info "已取消，Web 管理不会启动"; return 1 ;;
+        esac
+    fi
+
+    step "正在安装 busybox..."
+    case "$pm" in
+        apt-get) apt-get install -y busybox ;;
+        apk)     apk add busybox ;;
+        opkg)    opkg update && opkg install busybox ;;
+        yum|dnf) "$pm" install -y busybox ;;
+    esac || die "busybox 安装失败，请手动安装后重试"
+
+    if find_httpd_cmd >/dev/null 2>&1; then
+        ok "busybox 安装成功，httpd 可用"
+        return 0
+    fi
+    die "安装后仍未找到 httpd applet，busybox 可能未包含 httpd，请检查"
+}
+
 generate_web_token_value() {
     token=""
     if [ -r /dev/urandom ]; then
@@ -1903,6 +1954,7 @@ web_fallback_stop() {
 
 web_start() {
     need_root
+    ensure_httpd_available || return 1
     mode="$(detect_service_mode)"
     case "$mode" in
         openwrt)
@@ -1943,6 +1995,7 @@ web_restart() {
 
 web_enable() {
     need_root
+    ensure_httpd_available || return 1
     ensure_web_token
     generate_web_files
     create_web_service_files
