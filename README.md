@@ -54,13 +54,13 @@ SOCKS5代理：socks5://用户:密码@设备IP:31800
 ### curl
 
 ```sh
-cd /tmp && rm -f mgate.sh && curl -fsSL -H "Cache-Control: no-cache" -o mgate.sh "https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh?ts=$(date +%s)" && sh mgate.sh install
+cd /tmp && rm -f mgate.sh && curl -fsSL -H "Cache-Control: no-cache" -o mgate.sh https://bit.ly/mgate-install && sh mgate.sh install
 ```
 
 ### wget
 
 ```sh
-cd /tmp && rm -f mgate.sh && wget -O mgate.sh "https://raw.githubusercontent.com/akiiya/mgate/main/mgate.sh?ts=$(date +%s)" && sh mgate.sh install
+cd /tmp && rm -f mgate.sh && wget -O mgate.sh https://bit.ly/mgate-install && sh mgate.sh install
 ```
 
 安装完成后，全局命令为：
