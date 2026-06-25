@@ -79,6 +79,8 @@ SUB_PROVIDER_FILE="$SUB_PROVIDER_DIR/sub.yaml"
 SUB_USER_AGENT="${MGATE_SUB_USER_AGENT:-Clash.Meta}"
 SUB_LAST_LOG_FILE="$LOG_DIR/sub-update.last.log"
 SUB_LAST_TMP_FILE="$DATA_DIR/sub.last_tmp"
+SUB_NODES_FILE="$DATA_DIR/sub.nodes"
+SUB_UNMATCHED_FILE="$DATA_DIR/sub.unmatched"
 
 # Keep output plain ASCII for embedded routers and SSH terminals.
 # No emoji, no ANSI color, no terminal control sequences.
@@ -1343,9 +1345,12 @@ run_output_page() {
 }
 
 job_cleanup() {
+    keep="${1:-20}"
+    case "$keep" in ''|*[!0-9]*) keep=20 ;; esac
+    first_delete=$((keep + 1))
     mkdir -p "$WEB_JOB_DIR" 2>/dev/null || return 0
-    # Keep the newest 20 jobs. Each job has .log/.status/.meta files.
-    ls -1t "$WEB_JOB_DIR"/*.status 2>/dev/null | sed -n '21,$p' | while IFS= read -r st; do
+    # Each job has .log/.status/.meta files. Keep only the newest status-backed jobs.
+    ls -1t "$WEB_JOB_DIR"/*.status 2>/dev/null | sed -n "${first_delete},\$p" | while IFS= read -r st; do
         base="${st%.status}"
         rm -f "$base.status" "$base.log" "$base.meta" 2>/dev/null || true
     done
@@ -1399,11 +1404,23 @@ EOF
     page_end
 }
 
-run_job_page() {
+run_job_page_delayed() {
+    delay="$1"
+    shift
     title="$1"
     shift
-    mkdir -p "$WEB_JOB_DIR" 2>/dev/null || { run_output_page "$title" "$@"; return 0; }
-    job_cleanup
+    if ! mkdir -p "$WEB_JOB_DIR" 2>/dev/null; then
+        header
+        page_start "$title"
+        nav
+        cat <<'EOF'
+<div class="card"><h2>任务未启动</h2><p>无法创建 Web 任务目录，请检查 /opt/mgate/run/web-jobs/ 权限。</p></div>
+EOF
+        page_end
+        return 0
+    fi
+    # Leave room for the new job so the directory is capped at 20 after creation.
+    job_cleanup 19
     id="$(job_id_new)"
     base="$WEB_JOB_DIR/$id"
     printf 'running\n' > "$base.status"
@@ -1413,6 +1430,14 @@ run_job_page() {
         printf '[INFO] 命令：mgate'
         for a in "$@"; do printf ' %s' "$a"; done
         printf '\n'
+        case "$delay" in
+            ''|0) : ;;
+            *[!0-9]*) : ;;
+            *)
+                printf '[INFO] %s 秒后执行，浏览器可先进入任务页。\n' "$delay"
+                sleep "$delay"
+                ;;
+        esac
         "$MGATE" "$@"
         rc=$?
         printf '[INFO] exit code: %s\n' "$rc"
@@ -1421,8 +1446,12 @@ run_job_page() {
         else
             printf 'failed\n' > "$base.status"
         fi
-    ) </dev/null > "$base.log" 2>&1 3>&- &
+    ) </dev/null > "$base.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
     _CGI_LOCATION="/cgi-bin/mgate.cgi?action=job&id=$id"
+}
+
+run_job_page() {
+    run_job_page_delayed 0 "$@"
 }
 
 summary_card() {
@@ -1544,9 +1573,20 @@ listener_port() {
     printf '%s\n' "$def"
 }
 
+request_proxy_host() {
+    host="${HTTP_HOST:-}"
+    host="${host#http://}"
+    host="${host#https://}"
+    host="${host%%/*}"
+    [ -n "$host" ] || host="设备IP"
+    case "$host" in
+        *:*) host="${host%%:*}" ;;
+    esac
+    printf '%s\n' "$host"
+}
+
 proxy_info_page() {
-    host="${HTTP_HOST:-设备IP}"
-    host="${host%%:*}"
+    host="$(request_proxy_host)"
     mixed_port="$(listener_port mixed-users "$DEFAULT_MIXED_PORT")"
 
     header
@@ -1774,17 +1814,7 @@ else
                     printf '</pre><p><a class="btn" href="/cgi-bin/mgate.cgi">重新登录</a></p></div>\n'
                     page_end
                     ;;
-                web-disable)
-                    page_start "关闭 Web 管理"
-                    cat <<'EOF'
-<div class="card"><h2>Web 管理即将关闭</h2><p>请稍等几秒后关闭此页面。</p></div>
-EOF
-                    page_end
-                    (
-                        sleep 1
-                        "$MGATE" web-disable >/dev/null 2>&1
-                    ) </dev/null >/dev/null 2>&1 &
-                    ;;
+                web-disable) run_job_page_delayed 2 "关闭 Web 管理" web-disable ;;
                 *) status_page ;;
             esac
             ;;
@@ -2616,14 +2646,14 @@ sub_fetch_to_file() {
     out="$2"
     ua="$SUB_USER_AGENT"
     if have curl; then
-        curl -fsSL --connect-timeout 20 --max-time 120 \
+        curl -fsSL --connect-timeout "$MGATE_CONNECT_TIMEOUT" --max-time "$MGATE_DOWNLOAD_TIMEOUT" \
             -A "$ua" \
             -H "Accept: application/yaml,text/yaml,text/plain,*/*" \
             -o "$out" "$url"
         return $?
     fi
     if have wget; then
-        wget -T 120 \
+        wget -T "$MGATE_DOWNLOAD_TIMEOUT" \
             --user-agent="$ua" \
             --header="Accept: application/yaml,text/yaml,text/plain,*/*" \
             -O "$out" "$url"
@@ -2941,6 +2971,43 @@ sub_detect_countries() {
     done
 }
 
+sub_generate_node_observability() {
+    names_file="$1"
+    nodes_file="$2"
+    unmatched_file="$3"
+    matches_file="$nodes_file.matches"
+    matched_idx_file="$nodes_file.idx"
+    : > "$nodes_file"
+    : > "$unmatched_file"
+    : > "$matches_file"
+    : > "$matched_idx_file"
+
+    country_map | while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        code="${line%%|*}"
+        rest="${line#*|}"
+        [ "$rest" != "$line" ] || continue
+        regex="${rest#*|}"
+        [ "$regex" != "$rest" ] || continue
+        [ -n "$regex" ] || continue
+        grep -Ein "$regex" "$names_file" 2>/dev/null | while IFS=: read -r idx node_name; do
+            [ -n "$idx" ] || continue
+            printf '%s\t%s\t%s\n' "$idx" "$code" "$node_name" >> "$matches_file"
+            printf '%s\n' "$idx" >> "$matched_idx_file"
+        done
+    done
+
+    awk '
+        FNR==NR {line[$1] = line[$1] $0 "\n"; next}
+        (FNR in line) {printf "%s", line[FNR]}
+    ' "$matches_file" "$names_file" > "$nodes_file"
+    awk '
+        FNR==NR {matched[$1]=1; next}
+        !(FNR in matched) {printf "%s\t%s\n", FNR, $0}
+    ' "$matched_idx_file" "$names_file" > "$unmatched_file"
+    rm -f "$matches_file" "$matched_idx_file" 2>/dev/null || true
+}
+
 generate_password() {
     if [ -r /dev/urandom ] && have tr && have head; then
         pw="$(tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 14)"
@@ -3072,6 +3139,8 @@ sub_update_from_url() {
     tmp_names="$work/names.txt"
     tmp_countries="$work/countries.txt"
     tmp_counts="$work/counts.txt"
+    tmp_nodes="$work/nodes.txt"
+    tmp_unmatched="$work/unmatched.txt"
     tmp_accounts="$work/accounts.txt"
     tmp_test_dir="$work/test-config"
     tmp_test_provider_dir="$tmp_test_dir/providers"
@@ -3092,6 +3161,7 @@ sub_update_from_url() {
     sub_detect_countries "$tmp_names" "$tmp_countries" "$tmp_counts"
     country_count="$(wc -l < "$tmp_countries" 2>/dev/null | awk '{print $1}')"
     [ "${country_count:-0}" -gt 0 ] 2>/dev/null || die "未识别到可用国家/地区，请检查节点命名"
+    sub_generate_node_observability "$tmp_names" "$tmp_nodes" "$tmp_unmatched"
     info "节点数量：$node_count"
     info "识别国家/地区：$country_count"
     cat "$tmp_counts" | while IFS='|' read -r code label count; do
@@ -3135,6 +3205,8 @@ sub_update_from_url() {
     cp "$tmp_accounts" "$SUB_ACCOUNTS_FILE" || die "写入账号文件失败"
     cp "$tmp_countries" "$SUB_COUNTRIES_FILE" || die "写入国家文件失败"
     cp "$tmp_counts" "$SUB_STATUS_FILE" || die "写入订阅状态失败"
+    cp "$tmp_nodes" "$SUB_NODES_FILE" || die "写入节点识别文件失败"
+    cp "$tmp_unmatched" "$SUB_UNMATCHED_FILE" || die "写入未匹配节点文件失败"
     printf '%s\n' "$url" > "$SUB_URL_FILE"
     date '+%Y-%m-%d %H:%M:%S' 2>/dev/null > "$SUB_LAST_UPDATE_FILE" || true
     cp "$tmp_config_final" "$CONFIG_FILE" || die "写入配置文件失败"
@@ -3251,6 +3323,20 @@ cmd_sub_status() {
     fi
 }
 
+cmd_sub_nodes() {
+    [ -s "$SUB_NODES_FILE" ] || die "no subscription data found; please run mgate sub-update"
+    cat "$SUB_NODES_FILE"
+}
+
+cmd_sub_unmatched() {
+    [ -f "$SUB_UNMATCHED_FILE" ] || die "no subscription data found; please run mgate sub-update"
+    if [ -s "$SUB_UNMATCHED_FILE" ]; then
+        cat "$SUB_UNMATCHED_FILE"
+    else
+        say "no unmatched nodes"
+    fi
+}
+
 cmd_sub_clear() {
     need_root
     say "这将清除订阅链接、订阅缓存和自动账号文件。当前 config.yaml 不会自动恢复为手动模板。"
@@ -3260,7 +3346,7 @@ cmd_sub_clear() {
         [ "$ans" = "CLEAR" ] || die "已取消"
     fi
     cmd_backup "pre-sub-clear" >/dev/null 2>&1 || true
-    rm -f "$SUB_URL_FILE" "$SUB_STATUS_FILE" "$SUB_COUNTRIES_FILE" "$SUB_ACCOUNTS_FILE" "$SUB_LAST_UPDATE_FILE" "$SUB_PROVIDER_FILE"
+    rm -f "$SUB_URL_FILE" "$SUB_STATUS_FILE" "$SUB_COUNTRIES_FILE" "$SUB_ACCOUNTS_FILE" "$SUB_LAST_UPDATE_FILE" "$SUB_PROVIDER_FILE" "$SUB_NODES_FILE" "$SUB_UNMATCHED_FILE"
     ok "订阅信息已清除"
     hint "如需重新生成手动模板：FORCE=1 mgate install"
 }
@@ -3350,6 +3436,8 @@ $APP_NAME - $APP_DESC
   mgate sub-set <url>       设置/替换订阅并立即更新配置
   mgate sub-update          拉取已保存订阅并更新配置
   mgate sub-status          查看订阅状态和账号
+  mgate sub-nodes           查看节点国家/地区识别结果
+  mgate sub-unmatched       查看未识别到国家/地区的节点
   mgate sub-debug           查看最近一次订阅失败详情
   mgate sub-clear           清除订阅设置和缓存
 
@@ -3507,6 +3595,8 @@ main() {
         sub-set) cmd_sub_set "$@" ;;
         sub-update) cmd_sub_update "$@" ;;
         sub-status) cmd_sub_status "$@" ;;
+        sub-nodes) cmd_sub_nodes "$@" ;;
+        sub-unmatched) cmd_sub_unmatched "$@" ;;
         account-password|passwd) cmd_account_password "$@" ;;
         proxy-info) cmd_proxy_info "$@" ;;
         sub-debug) cmd_sub_debug "$@" ;;
