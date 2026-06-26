@@ -1,534 +1,326 @@
-# 🚀 mgate
+# mgate.sh
 
-`mgate` 是一个面向 **随身 WiFi / OpenWrt / 嵌入式 Linux** 的轻量级 Mihomo 网关管理脚本。
+`mgate.sh` 是面向刷 Debian 的随身 WiFi / 小型 Linux 设备的本地网关管理脚本。安装后全局命令为 `mgate`，默认工作目录为 `/opt/mgate`。
 
-它可以自动安装 Mihomo core，并提供统一命令管理代理入口。
-默认使用 **Mixed 代理端口**，同一个端口同时支持 HTTP 和 SOCKS5，并支持根据用户名自动分流到不同国家或地区的代理节点。
+项目坚持单文件主入口：核心逻辑、Web CGI、systemd service、配置模板等都由 `mgate.sh` 生成或管理。当前定位已经不只是本地代理脚本，而是本机 AP、NAT fallback、TProxy 透明代理和 Mihomo 管理的轻量网关工具。
 
-## ✨ 特性
+## 当前能力
 
-* 📶 适合随身 WiFi、OpenWrt、嵌入式 Linux
-* 🧠 自动识别 CPU 架构
-* ⬇️ 自动下载并安装 Mihomo 内核
-* 🌐 默认使用 Mixed 端口，同时支持 HTTP / SOCKS5
-* 👥 多用户认证
-* 🧭 根据用户名自动分流到不同代理组
-* 🔁 支持 Clash / Mihomo YAML 订阅
-* 🗺️ 支持自动识别订阅节点国家/地区
-* 🔐 支持统一设置代理账号默认密码
-* 🧭 支持 TUI 菜单管理
-* 🌍 支持轻量级 Web 管理页面
-* 🩺 支持系统诊断
-* 💾 支持配置备份与恢复
-* 🔁 支持从 GitHub 自更新 mgate 管理脚本
-* 📁 所有文件都存放在 `/opt/mgate`
-* 🧹 支持完整卸载
+- Mihomo core 安装、更新、启动、停止、状态、日志、诊断。
+- 默认 `mixed-port` 单端口代理，支持 HTTP / SOCKS5 认证。
+- Clash / Mihomo YAML 订阅更新、失败不覆盖当前可用配置。
+- 根据订阅节点名识别国家/地区并生成代理组。
+- `sub-nodes` / `sub-unmatched` 查看节点识别结果和未匹配节点。
+- TUI 菜单管理常用操作。
+- Web 管理后台，慢操作通过后台 job 执行。
+- Web 连接信息基于 `HTTP_HOST` 动态展示。
+- AP 热点最小闭环：mgate 只管理 `ap0`。
+- 普通 NAT gateway fallback：`ap0 -> wlan0` IPv4 NAT 出网。
+- TProxy 透明代理闭环：AP 客户端流量可进入 Mihomo `tproxy-port`。
+- `tproxy-health` / `tproxy-doctor` / `tproxy-debug` 排障命令。
+- `ap-json` / `gateway-json` / `tproxy-json` / `status-json` 只读 JSON 状态输出。
+- `preflight` 和 Git 行尾策略防止 CRLF 破坏 `/bin/sh` 解析。
 
-## 📌 默认设计
+## 典型网络路径
 
-```text
-Mixed 代理端口：31800
-Web 管理端口：31888
-
-订阅账号默认密码：
-12345678
-
-默认规则：
-用户名 JP -> JP 代理组
-用户名 US -> US 代理组
-用户名 DE -> DE 代理组
-其他未匹配流量 -> REJECT
-```
-
-Mixed 端口同时支持：
+普通 NAT fallback：
 
 ```text
-HTTP  代理：http://用户:密码@设备IP:31800
-SOCKS5代理：socks5://用户:密码@设备IP:31800
+手机 -> ap0 -> Debian IPv4 NAT -> wlan0 -> 上级 WiFi -> 公网
 ```
 
-## 🚀 安装
+TProxy 透明代理：
 
-> 不建议使用 `curl | sh`。请先下载 `mgate.sh`，再执行安装。
-
-### curl
-
-```sh
-cd /tmp && rm -f mgate.sh && curl -fsSL -H "Cache-Control: no-cache" -o mgate.sh https://bit.ly/mgate-install && sh mgate.sh install
+```text
+手机 -> ap0 -> iptables mangle/TPROXY -> mihomo tproxy-port 31802 -> TPROXY-OUT -> wlan0 -> 公网
 ```
 
-### wget
+## 默认值
 
-```sh
-cd /tmp && rm -f mgate.sh && wget -O mgate.sh https://bit.ly/mgate-install && sh mgate.sh install
+```text
+Web 管理端口:        31888
+mixed-port:          31800
+tproxy-port:         31802
+AP interface:        ap0
+upstream interface:  wlan0
+AP gateway:          10.88.0.1/24
+AP SSID:             mgate
+AP password:         mgate12345678
+TProxy mark:         0x1
+TProxy route table:  100
+TProxy chain:        MGATE_TPROXY
+工作目录:            /opt/mgate
 ```
 
-安装完成后，全局命令为：
+## 安装
+
+不建议使用 `curl | sh`。建议先下载脚本，再执行安装。
 
 ```sh
-mgate
+cd /tmp
+rm -f mgate.sh
+curl -fsSL -H "Cache-Control: no-cache" -o mgate.sh https://bit.ly/mgate-install
+sh mgate.sh install
 ```
 
-查看状态：
+如果只有 `wget`：
 
 ```sh
+cd /tmp
+rm -f mgate.sh
+wget -O mgate.sh https://bit.ly/mgate-install
+sh mgate.sh install
+```
+
+安装完成后：
+
+```sh
+mgate version
 mgate status
 ```
 
-## 🧭 TUI 菜单
+## TUI 菜单
 
-不带参数运行：
+运行下面任一命令进入 TUI：
 
 ```sh
 mgate
+mgate tui
 ```
 
-会进入交互式菜单，可进行安装、更新、服务管理、配置管理、订阅管理、账号管理、Web 管理、诊断、备份恢复和卸载等操作。
+TUI 提供基础服务、订阅管理、Web 管理、AP 热点管理、网关 / NAT 管理、TProxy 透明代理、状态 / 诊断 / JSON、备份 / 恢复等入口。危险操作会二次确认；启动 TProxy 需要输入 `yes` 强确认。
 
-## ⌨️ 常用命令
+## 常用命令
 
-### 安装与更新
+### 基础服务
 
 ```sh
-mgate install          # 初始化/修复 mgate 工作区
-mgate self-update      # 从 GitHub 更新 mgate 管理脚本
-mgate update           # self-update 的别名
-mgate install-core     # 安装/更新 Mihomo 内核
+mgate install
+mgate self-update
+mgate update
+mgate install-core
+mgate start
+mgate stop
+mgate restart
+mgate status
+mgate enable
+mgate disable
+mgate test
+mgate doctor
+mgate logs 100
+mgate version
+mgate preflight
 ```
 
-> `mgate install` 用于初始化或修复本地工作区，不会从 GitHub 拉取最新 `mgate.sh`。
-> 如需更新管理脚本，请使用 `mgate self-update` 或 `mgate update`。
-
-### 服务管理
-
-```sh
-mgate start            # 启动服务
-mgate stop             # 停止服务
-mgate restart          # 重启服务
-mgate status           # 查看服务状态
-mgate enable           # 设置开机启动
-mgate disable          # 关闭开机启动
-```
-
-### 配置与诊断
-
-```sh
-mgate config           # 查看配置
-mgate edit             # 编辑配置
-mgate test             # 测试配置
-mgate logs             # 查看日志
-mgate doctor           # 系统诊断
-mgate version          # 查看版本
-```
-
-### 账号与连接
-
-```sh
-mgate account-password             # 查看代理账号默认密码
-mgate account-password set <密码>  # 修改代理账号默认密码
-
-mgate passwd                       # account-password 的别名
-mgate passwd set <密码>            # 修改代理账号默认密码
-
-mgate proxy-info                   # 查看代理连接信息
-```
-
-默认代理账号密码为：
-
-```text
-12345678
-```
-
-修改默认密码后，如果已经启用订阅模式，`mgate` 会重新生成账号和配置。
-
-### 备份与恢复
-
-```sh
-mgate backup [名称]          # 创建备份
-mgate backups               # 查看备份列表
-mgate restore latest        # 恢复最新备份
-mgate restore <备份ID>       # 恢复指定备份
-```
-
-备份内容包括：
-
-```text
-/opt/mgate/config/
-/opt/mgate/data/
-/opt/mgate/service/
-```
-
-恢复前会自动创建一份 `pre-restore` 备份，避免误操作后无法回退。
-
-## 🔁 订阅管理
-
-`mgate` 支持 Clash / Mihomo YAML 格式订阅。
-
-### 设置或替换订阅
-
-```sh
-mgate sub-set "你的订阅链接"
-```
-
-该命令会：
-
-```text
-1. 保存新的订阅链接
-2. 立即拉取订阅
-3. 自动识别节点国家/地区
-4. 自动生成代理账号
-5. 自动生成 proxy-provider / proxy-groups / rules
-6. 测试配置
-7. 测试通过后重启服务
-```
-
-如果再次执行 `sub-set`，会替换原订阅链接，并立即重新生成最新账号和配置。
-
-### 更新订阅
-
-```sh
-mgate sub-update
-```
-
-会使用已保存的订阅链接重新拉取最新节点，并更新账号组和节点组。
-
-### 查看订阅状态
-
-```sh
-mgate sub-status
-```
-
-会显示：
-
-```text
-订阅链接
-上次更新时间
-识别到的国家/地区
-自动生成的账号
-未识别节点数量
-```
-
-### 清除订阅
-
-```sh
-mgate sub-clear
-```
-
-会清除订阅链接、订阅缓存和自动账号。
-
-## 🌍 Web 管理
-
-`mgate` 支持轻量级 Web 管理页面，基于设备自带的 `busybox httpd` / `httpd` 实现，不依赖 Node.js、Python、PHP 或数据库。
-
-Web 管理默认关闭，需要手动开启：
+### Web 管理
 
 ```sh
 mgate web-enable
+mgate web-disable
+mgate web-start
+mgate web-stop
+mgate web-restart
+mgate web-status
+mgate web-token
+mgate web-token reset
+mgate web-refresh
 ```
 
-开启后，在同一 WiFi / 局域网内访问：
+默认访问地址：
 
 ```text
 http://设备IP:31888
 ```
 
-例如：
+Web 慢操作会进入 job 页面，不应让浏览器长时间等待 CGI 同步执行。
 
-```text
-http://192.168.8.1:31888
-```
-
-首次开启时会生成 Web Token，登录 Web 页面时需要输入该 Token。
-
-### Web 管理命令
+### 订阅管理
 
 ```sh
-mgate web-enable       # 开启 Web 管理
-mgate web-disable      # 关闭 Web 管理并关闭开机自启
-mgate web-start        # 启动 Web 管理服务
-mgate web-stop         # 停止 Web 管理服务
-mgate web-restart      # 重启 Web 管理服务
-mgate web-status       # 查看 Web 管理状态
-
-mgate web-token        # 查看 Web Token
-mgate web-token reset  # 重置 Web Token
-mgate web-refresh      # 重新生成 Web 页面文件
+mgate sub-set <url>
+mgate sub-update
+mgate sub-status
+mgate sub-debug
+mgate sub-clear
+mgate sub-nodes
+mgate sub-unmatched
 ```
 
-### Web 页面支持
+订阅更新失败时不会覆盖当前可用配置。`sub-nodes` 用于查看节点识别成了哪些国家/地区，`sub-unmatched` 用于查看未识别节点。
 
-当前 Web 页面支持：
-
-```text
-查看状态
-查看版本
-启动服务
-停止服务
-重启服务
-测试配置
-查看日志
-查看配置
-查看代理连接信息
-查看 / 修改代理账号默认密码
-查看 / 重置 Web Token
-订阅状态
-设置订阅
-更新订阅
-清除订阅
-创建备份
-系统诊断
-自更新 mgate 管理脚本
-关闭 Web 管理
-```
-
-### Web 文件位置
-
-Web 文件由 `mgate.sh` 动态生成，位于：
-
-```text
-/opt/mgate/web/
-├── index.html
-├── favicon.svg
-├── favicon.ico
-├── static/
-│   └── style.css
-└── cgi-bin/
-    └── mgate.cgi
-```
-
-如果更新了 mgate 管理脚本，并且想刷新 Web 页面文件，可以执行：
+### 账号与连接
 
 ```sh
-mgate web-refresh
-mgate web-restart
-```
-
-> Web 管理只建议在局域网内使用，不要暴露到公网。
-
-## 🔌 客户端连接
-
-假设设备 IP 是：
-
-```text
-192.168.8.1
-```
-
-如果账号是：
-
-```text
-JP:12345678
-```
-
-HTTP 代理：
-
-```text
-http://JP:12345678@192.168.8.1:31800
-```
-
-SOCKS5 代理：
-
-```text
-socks5://JP:12345678@192.168.8.1:31800
-```
-
-也可以直接查看当前连接信息：
-
-```sh
+mgate account-password
+mgate account-password set <password>
 mgate proxy-info
 ```
 
-测试出口：
+默认代理端口：
+
+```text
+HTTP:   http://用户:密码@设备IP:31800
+SOCKS5: socks5://用户:密码@设备IP:31800
+```
+
+Web 页面中的设备地址优先根据当前请求的 `HTTP_HOST` 展示。
+
+### AP 热点
 
 ```sh
-curl -x http://JP:12345678@127.0.0.1:31800 https://ipinfo.io/country
-curl -x socks5h://JP:12345678@127.0.0.1:31800 https://ipinfo.io/country
+mgate ap-check
+mgate ap-install-deps
+mgate ap-config
+mgate ap-status
+mgate ap-start
+mgate ap-stop
+mgate ap-json
 ```
 
-## 📂 工作目录
+`ap-start` 只管理 `ap0`，使用 `/opt/mgate/run/ap/` 下的隔离 hostapd/dnsmasq 配置。本项目不承诺所有无线网卡都支持 managed + AP 并发；需要真机验证。
 
-```text
-/opt/mgate/
-├── mgate                    # 安装后的管理脚本
-├── bin/
-│   └── mihomo               # Mihomo 内核
-├── config/
-│   ├── config.yaml          # 主配置文件
-│   ├── config.example.yaml  # 示例配置
-│   └── providers/
-│       └── sub.yaml         # 订阅 provider
-├── service/
-├── web/
-├── logs/
-├── run/
-├── backups/
-├── tmp/
-└── data/
-```
-
-仓库脚本文件：
-
-```text
-mgate.sh
-```
-
-安装后全局命令：
-
-```text
-/usr/bin/mgate -> /opt/mgate/mgate
-```
-
-服务名：
-
-```text
-mgate
-```
-
-Web 服务名：
-
-```text
-mgate-web
-```
-
-## 🧩 配置
-
-主配置文件：
-
-```text
-/opt/mgate/config/config.yaml
-```
-
-编辑配置：
+### NAT gateway fallback
 
 ```sh
-mgate edit
+mgate gateway-check
+mgate gateway-start
+mgate gateway-stop
+mgate gateway-status
+mgate gateway-debug
+mgate gateway-doctor
+mgate gateway-json
 ```
 
-测试配置：
+NAT fallback 使用 mgate 自己的 iptables chain，不删除系统其它 NAT 规则。`gateway-stop` 只清理 mgate 写入的 NAT gateway 规则。
+
+### TProxy 透明代理
 
 ```sh
-mgate test
+mgate tproxy-check
+mgate tproxy-status
+mgate tproxy-plan
+mgate tproxy-dry-run
+mgate tproxy-start
+mgate tproxy-stop
+mgate tproxy-health
+mgate tproxy-doctor
+mgate tproxy-debug
+mgate tproxy-json
 ```
 
-修改配置后重启：
+`tproxy-start` 会在确认环境健康后添加 Mihomo `tproxy-port: 31802`、ip rule、route table 100、iptables mangle chain，并保留 NAT fallback。失败会尝试自动回滚。`tproxy-stop` 清理 mgate TProxy 规则并回到 NAT fallback。
+
+### JSON 状态输出
 
 ```sh
-mgate restart
+mgate ap-json
+mgate gateway-json
+mgate tproxy-json
+mgate status-json
 ```
 
-默认配置核心结构：
+这些命令是只读接口，供 Web 首页和未来安全调用方使用。字段名应保持稳定。
 
-```yaml
-authentication:
-  - "JP:12345678"
-  - "US:12345678"
-  - "DE:12345678"
+## 安全边界
 
-listeners:
-  - name: mixed-users
-    type: mixed
-    listen: 0.0.0.0
-    port: 31800
-    udp: true
+mgate 的网络边界是保守的：
 
-rules:
-  - IN-USER,JP,JP
-  - IN-USER,US,US
-  - IN-USER,DE,DE
-  - MATCH,REJECT
-```
+- 不接管 `wlan0`。
+- 不重配或 flush `wlan0` 地址。
+- 不停止 NetworkManager。
+- 不停止 `wpa_supplicant`。
+- 不停止 `systemd-networkd`。
+- 不覆盖 `/etc/hostapd/hostapd.conf`。
+- 不覆盖 `/etc/dnsmasq.conf`。
+- AP 使用 `/opt/mgate/run/ap/` 下的隔离配置。
+- NAT fallback 保留，TProxy 不删除普通 NAT 能力。
+- TProxy 启动失败必须回滚，`tproxy-stop` 可回到 NAT fallback。
+- 不把 mgate-agent / mgate-cloud 的实现混入本仓库。
 
-订阅模式下，`mgate` 会自动生成：
+## 真机验收建议
 
-```text
-authentication
-proxy-providers
-proxy-groups
-rules
-```
-
-## 🖥️ 支持系统
-
-* OpenWrt
-* 类 OpenWrt 系统
-* 嵌入式 Linux
-* Debian / Ubuntu
-* 其他带有 POSIX shell 的 Linux 系统
-
-服务管理支持：
-
-```text
-OpenWrt init.d / procd
-systemd
-plain background mode
-```
-
-Web 管理依赖：
-
-```text
-busybox httpd 或 httpd
-```
-
-## 🧠 支持架构
-
-```text
-x86_64 / amd64 -> linux-amd64-compatible
-i386 / i686    -> linux-386
-aarch64        -> linux-arm64
-armv7l         -> linux-armv7
-armv6l         -> linux-armv6
-mips           -> linux-mips-softfloat
-mipsel         -> linux-mipsle-softfloat
-```
-
-## 🧹 卸载
-
-仅卸载 Mihomo 内核：
+### AP
 
 ```sh
-mgate uninstall-core
+mgate ap-check
+mgate ap-start
+mgate ap-status
+ip addr show ap0
+mgate ap-stop
 ```
 
-完整卸载：
+手机应能搜索到默认 SSID `mgate` 并获得 `10.88.0.x` 地址。
+
+### NAT gateway
 
 ```sh
-mgate uninstall
+mgate ap-start
+mgate gateway-start
+mgate gateway-status
+mgate gateway-doctor
 ```
 
-完整卸载会删除：
+手机连接 AP 后应能通过普通 NAT 出网。
 
-```text
-/opt/mgate
-/usr/bin/mgate
-/etc/init.d/mgate
-/etc/init.d/mgate-web
-/etc/systemd/system/mgate.service
-/etc/systemd/system/mgate-web.service
-```
-
-默认需要输入：
-
-```text
-UNINSTALL
-```
-
-确认卸载。
-
-跳过确认：
+### TProxy
 
 ```sh
-mgate uninstall --yes
+mgate tproxy-check
+mgate tproxy-plan
+mgate tproxy-start
+mgate tproxy-status
+mgate tproxy-health
+mgate tproxy-doctor
+iptables -t mangle -L MGATE_TPROXY -n -v
+mgate tproxy-stop
+mgate gateway-doctor
 ```
 
-## 🛡️ 安全提醒
+开启 TProxy 后，AP 客户端流量应进入 Mihomo；停止 TProxy 后应回到 NAT fallback。
 
-* 不要把 Mixed 代理端口直接暴露到公网
-* 不要把 Web 管理端口暴露到公网
-* 订阅账号默认密码是 `12345678`，建议按需修改
-* 妥善保管 Web Token
-* 不要提交真实节点 UUID、订阅链接和密码到 GitHub
-* 尽量只在 LAN 内使用
-* 如需公网访问，请配合防火墙限制来源 IP
+### Web
 
-## 📄 License
+```sh
+mgate web-refresh
+sh -n /opt/mgate/web/cgi-bin/mgate.cgi
+mgate web-restart
+mgate web-status
+```
 
-MIT License
+浏览器访问：
+
+```text
+http://设备IP:31888
+```
+
+首页应显示 AP / gateway / NAT fallback / TProxy / final health 摘要；诊断页面应通过 job 页面展示，不应卡住浏览器。
+
+### JSON
+
+```sh
+mgate ap-json
+mgate gateway-json
+mgate tproxy-json
+mgate status-json
+```
+
+执行前后不应改变 iptables、ip rule、ip route 或 `config.yaml`。
+
+## 故障排查
+
+优先使用这些命令收集状态：
+
+```sh
+mgate preflight
+mgate doctor
+mgate sub-nodes
+mgate sub-unmatched
+mgate gateway-doctor
+mgate gateway-debug
+mgate tproxy-health
+mgate tproxy-doctor
+mgate tproxy-debug
+mgate status-json
+```
+
+如果 TProxy 节点不可用，Mihomo 日志中可能出现 `dial TPROXY-OUT`、`connect error`、`timeout` 等错误。此时先确认订阅节点健康，再决定是否停止 TProxy 回到 NAT fallback。
