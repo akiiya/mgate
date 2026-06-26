@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc1"
+MGATE_VERSION="0.4.0-rc2"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -62,6 +62,12 @@ AP_OWNER_FILE="$AP_RUN_DIR/ap0.owner"
 AP_HOSTAPD_LOG_FILE="$LOG_DIR/ap-hostapd.log"
 AP_DNSMASQ_LOG_FILE="$LOG_DIR/ap-dnsmasq.log"
 AP_DEP_PACKAGES="hostapd dnsmasq iw iproute2"
+
+GATEWAY_RUN_DIR="$RUN_DIR/gateway"
+GATEWAY_IP_FORWARD_PREV="$GATEWAY_RUN_DIR/ip_forward.prev"
+GATEWAY_BACKEND_FILE="$GATEWAY_RUN_DIR/backend"
+GATEWAY_NAT_CHAIN="MGATE_NAT_POSTROUTING"
+GATEWAY_FORWARD_CHAIN="MGATE_FORWARD"
 
 DEFAULT_MIXED_PORT="${MIXED_PORT:-31800}"
 # Backward-compatible internal aliases. The default proxy entry is now a single mixed listener.
@@ -198,6 +204,11 @@ ensure_web_dirs() {
 ensure_ap_dirs() {
     ensure_dirs
     mkdir -p "$AP_RUN_DIR" || die "failed to create $AP_RUN_DIR"
+}
+
+ensure_gateway_dirs() {
+    ensure_dirs
+    mkdir -p "$GATEWAY_RUN_DIR" || die "failed to create $GATEWAY_RUN_DIR"
 }
 
 realpath_simple() {
@@ -2446,7 +2457,7 @@ ap_channel_hw_mode() {
 }
 
 ap_validate_start_config() {
-    [ "$AP_IF" = "ap0" ] || die "v0.4.0-rc1 only manages ap0; config interface=$AP_IF is not allowed"
+    [ "$AP_IF" = "ap0" ] || die "v0.4.0 only manages ap0; config interface=$AP_IF is not allowed"
     [ -n "$AP_SSID" ] || die "AP ssid is empty"
     pass_len="$(printf '%s' "$AP_PASSWORD" | wc -c | awk '{print $1}')"
     [ "$pass_len" -ge 8 ] 2>/dev/null && [ "$pass_len" -le 63 ] 2>/dev/null || die "AP password must be 8-63 characters"
@@ -2477,7 +2488,6 @@ ap_write_dnsmasq_conf() {
 interface=$AP_IF
 bind-interfaces
 listen-address=$AP_IPADDR
-port=0
 dhcp-range=$AP_DHCP_START,$AP_DHCP_END,$AP_NETMASK,$AP_DHCP_LEASE
 dhcp-option=3,$AP_IPADDR
 dhcp-option=6,$AP_IPADDR
@@ -2827,7 +2837,7 @@ cmd_ap_start() {
 cmd_ap_stop() {
     need_root
     ap_load_config
-    [ "$AP_IF" = "ap0" ] || die "v0.4.0-rc1 only manages ap0; config interface=$AP_IF is not allowed"
+    [ "$AP_IF" = "ap0" ] || die "v0.4.0 only manages ap0; config interface=$AP_IF is not allowed"
     owned=0
     [ -f "$AP_OWNER_FILE" ] && owned=1
     ap_pid_running "$AP_DNSMASQ_PID_FILE" && owned=1
@@ -2855,6 +2865,199 @@ cmd_ap_stop() {
         info "$AP_IF does not exist"
     fi
     rm -f "$AP_OWNER_FILE" 2>/dev/null || true
+}
+
+# -----------------------------
+# NAT gateway: ap0 -> upstream only, no TProxy/mangle
+# -----------------------------
+gateway_subnet() {
+    prefix="$(ap_netmask_prefix "$AP_NETMASK")"
+    printf '%s/%s\n' "$AP_IPADDR" "$prefix"
+}
+
+gateway_have_iptables() {
+    have iptables
+}
+
+gateway_ip_forward_value() {
+    if [ -r /proc/sys/net/ipv4/ip_forward ]; then
+        sed -n '1p' /proc/sys/net/ipv4/ip_forward 2>/dev/null
+    else
+        printf 'unknown\n'
+    fi
+}
+
+gateway_rules_active() {
+    gateway_have_iptables || return 1
+    iptables -t nat -S "$GATEWAY_NAT_CHAIN" >/dev/null 2>&1 || return 1
+    iptables -S "$GATEWAY_FORWARD_CHAIN" >/dev/null 2>&1 || return 1
+    iptables -t nat -C POSTROUTING -j "$GATEWAY_NAT_CHAIN" >/dev/null 2>&1 || return 1
+    iptables -C FORWARD -j "$GATEWAY_FORWARD_CHAIN" >/dev/null 2>&1
+}
+
+gateway_check_env() {
+    ap_load_config
+    missing_count=0
+    info "checking NAT gateway dependencies..."
+    if have ip; then ok "ip: $(command -v ip 2>/dev/null)"; else missing "ip: required to inspect interfaces"; missing_count=1; fi
+    if gateway_have_iptables; then ok "iptables: $(command -v iptables 2>/dev/null)"; else missing "iptables: required for NAT gateway rules"; missing_count=1; fi
+    if [ -r /proc/sys/net/ipv4/ip_forward ]; then ok "ipv4 forwarding control: /proc/sys/net/ipv4/ip_forward"; else missing "ipv4 forwarding control: /proc/sys/net/ipv4/ip_forward not available"; missing_count=1; fi
+
+    info "checking gateway interfaces..."
+    if interface_exists "$AP_IF"; then
+        ok "$AP_IF exists"
+        ap_type="$(ap_iface_type "$AP_IF" || true)"
+        [ -n "$ap_type" ] || ap_type="unknown"
+        info "$AP_IF type: $ap_type"
+        [ "$ap_type" = "AP" ] || { warn "$AP_IF is not in AP mode"; missing_count=1; }
+        ap_link="$(ap_iface_link_state "$AP_IF")"
+        info "$AP_IF link: $ap_link"
+        [ "$ap_link" = "up" ] || { warn "$AP_IF link is not up"; missing_count=1; }
+        ap_ip="$(ap_ipv4_addr "$AP_IF" || true)"
+        [ -n "$ap_ip" ] || ap_ip="none"
+        info "$AP_IF ip: $ap_ip"
+        [ "$ap_ip" != "none" ] || { warn "$AP_IF has no IPv4 address"; missing_count=1; }
+    else
+        missing "$AP_IF: AP interface not found; run mgate ap-start first"
+        missing_count=1
+    fi
+    if interface_exists "$AP_UPSTREAM"; then
+        ok "$AP_UPSTREAM exists"
+    else
+        missing "$AP_UPSTREAM: upstream interface not found"
+        missing_count=1
+    fi
+
+    [ "$missing_count" = "0" ]
+}
+
+cmd_gateway_check() {
+    gateway_check_env
+}
+
+gateway_enable_ip_forward() {
+    ensure_gateway_dirs
+    [ -w /proc/sys/net/ipv4/ip_forward ] || die "cannot write /proc/sys/net/ipv4/ip_forward"
+    if [ ! -f "$GATEWAY_IP_FORWARD_PREV" ]; then
+        gateway_ip_forward_value > "$GATEWAY_IP_FORWARD_PREV" 2>/dev/null || true
+    fi
+    echo 1 > /proc/sys/net/ipv4/ip_forward || die "failed to enable IPv4 forwarding"
+    ok "IPv4 forwarding enabled"
+}
+
+gateway_restore_ip_forward() {
+    [ -w /proc/sys/net/ipv4/ip_forward ] || return 0
+    if [ -f "$GATEWAY_IP_FORWARD_PREV" ]; then
+        prev="$(sed -n '1p' "$GATEWAY_IP_FORWARD_PREV" 2>/dev/null || true)"
+        case "$prev" in
+            0|1)
+                echo "$prev" > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+                info "IPv4 forwarding restored to $prev"
+                ;;
+            *) warn "previous IPv4 forwarding state is unknown; leaving current value" ;;
+        esac
+        rm -f "$GATEWAY_IP_FORWARD_PREV" 2>/dev/null || true
+    else
+        info "no saved IPv4 forwarding state; leaving current value: $(gateway_ip_forward_value)"
+    fi
+}
+
+gateway_iptables_delete_jump_all() {
+    table="$1"
+    chain="$2"
+    target="$3"
+    while iptables -t "$table" -D "$chain" -j "$target" >/dev/null 2>&1; do
+        :
+    done
+}
+
+gateway_iptables_remove() {
+    gateway_have_iptables || return 0
+    gateway_iptables_delete_jump_all nat POSTROUTING "$GATEWAY_NAT_CHAIN"
+    iptables -t nat -F "$GATEWAY_NAT_CHAIN" >/dev/null 2>&1 || true
+    iptables -t nat -X "$GATEWAY_NAT_CHAIN" >/dev/null 2>&1 || true
+
+    gateway_iptables_delete_jump_all filter FORWARD "$GATEWAY_FORWARD_CHAIN"
+    iptables -F "$GATEWAY_FORWARD_CHAIN" >/dev/null 2>&1 || true
+    iptables -X "$GATEWAY_FORWARD_CHAIN" >/dev/null 2>&1 || true
+    rm -f "$GATEWAY_BACKEND_FILE" 2>/dev/null || true
+}
+
+gateway_iptables_apply() {
+    gateway_have_iptables || { err "iptables is required for NAT gateway"; return 1; }
+    subnet="$(gateway_subnet)"
+
+    gateway_iptables_remove
+
+    iptables -t nat -N "$GATEWAY_NAT_CHAIN" || return 1
+    iptables -t nat -A "$GATEWAY_NAT_CHAIN" -s "$subnet" -o "$AP_UPSTREAM" -j MASQUERADE || return 1
+    iptables -t nat -I POSTROUTING 1 -j "$GATEWAY_NAT_CHAIN" || return 1
+
+    iptables -N "$GATEWAY_FORWARD_CHAIN" || return 1
+    iptables -A "$GATEWAY_FORWARD_CHAIN" -i "$AP_IF" -o "$AP_UPSTREAM" -s "$subnet" -j ACCEPT || return 1
+    if iptables -A "$GATEWAY_FORWARD_CHAIN" -i "$AP_UPSTREAM" -o "$AP_IF" -d "$subnet" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+        :
+    elif iptables -A "$GATEWAY_FORWARD_CHAIN" -i "$AP_UPSTREAM" -o "$AP_IF" -d "$subnet" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+        :
+    else
+        err "iptables conntrack/state match is required for safe return forwarding"
+        gateway_iptables_remove
+        return 1
+    fi
+    iptables -I FORWARD 1 -j "$GATEWAY_FORWARD_CHAIN" || return 1
+    printf 'iptables\n' > "$GATEWAY_BACKEND_FILE" 2>/dev/null || true
+    ok "iptables NAT gateway rules installed"
+}
+
+cmd_gateway_start() {
+    need_root
+    ap_ensure_config
+    ap_load_config
+    ap_validate_start_config
+    gateway_check_env || die "NAT gateway environment is not ready"
+    ap_is_running_healthy || die "AP is not healthy; run mgate ap-start first"
+    gateway_enable_ip_forward
+    if ! gateway_iptables_apply; then
+        gateway_iptables_remove
+        gateway_restore_ip_forward
+        die "failed to install NAT gateway rules"
+    fi
+    ok "NAT gateway started: $AP_IF -> $AP_UPSTREAM"
+    warn "NAT gateway only enables regular IPv4 forwarding; no TProxy, mangle, or transparent proxy rules were enabled"
+}
+
+cmd_gateway_stop() {
+    need_root
+    ap_load_config
+    gateway_iptables_remove
+    ok "NAT gateway rules removed"
+    gateway_restore_ip_forward
+}
+
+cmd_gateway_status() {
+    ap_load_config
+    info "gateway mode: nat"
+    info "transparent proxy: not enabled"
+    info "ap interface: $AP_IF"
+    info "upstream interface: $AP_UPSTREAM"
+    info "subnet: $(gateway_subnet)"
+    info "ipv4 forwarding: $(gateway_ip_forward_value)"
+    if gateway_rules_active; then
+        info "nat rules active: yes"
+        info "backend: iptables"
+    else
+        info "nat rules active: no"
+        if gateway_have_iptables; then
+            info "backend: iptables available"
+        else
+            warn "backend: iptables missing"
+        fi
+    fi
+    if ap_is_running_healthy; then
+        info "ap healthy: yes"
+    else
+        warn "ap healthy: no"
+    fi
 }
 backup_copy_dir() {
     src="$1"
@@ -4133,6 +4336,12 @@ AP 管理：
   mgate ap-start            启动 ap0 热点和 DHCP
   mgate ap-stop             停止 mgate 管理的 ap0 热点
 
+NAT 网关：
+  mgate gateway-check       检查普通 NAT 网关环境
+  mgate gateway-start       启动 ap0 -> wlan0 IPv4 NAT 出网
+  mgate gateway-stop        停止 mgate NAT 规则并恢复 ip_forward
+  mgate gateway-status      查看 NAT 网关状态
+
 备份与恢复：
   mgate backup [label]      创建备份
   mgate backups             查看备份列表
@@ -4301,6 +4510,10 @@ main() {
         ap-config) cmd_ap_config "$@" ;;
         ap-start) cmd_ap_start "$@" ;;
         ap-stop) cmd_ap_stop "$@" ;;
+        gateway-check|nat-check) cmd_gateway_check "$@" ;;
+        gateway-start|nat-start) cmd_gateway_start "$@" ;;
+        gateway-stop|nat-stop) cmd_gateway_stop "$@" ;;
+        gateway-status|nat-status) cmd_gateway_status "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
