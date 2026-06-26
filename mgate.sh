@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.3.14"
+MGATE_VERSION="0.4.0-rc1"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -51,6 +51,17 @@ WEB_OPENWRT_SERVICE_FILE="$SERVICE_DIR/mgate-web.init"
 WEB_SYSTEMD_SERVICE_FILE="$SERVICE_DIR/mgate-web.service"
 WEB_OPENWRT_SERVICE_LINK="/etc/init.d/mgate-web"
 WEB_SYSTEMD_SERVICE_LINK="/etc/systemd/system/mgate-web.service"
+
+AP_CONFIG_FILE="$CONFIG_DIR/ap.conf"
+AP_RUN_DIR="$RUN_DIR/ap"
+AP_HOSTAPD_CONF="$AP_RUN_DIR/hostapd.conf"
+AP_DNSMASQ_CONF="$AP_RUN_DIR/dnsmasq.conf"
+AP_HOSTAPD_PID_FILE="$AP_RUN_DIR/hostapd.pid"
+AP_DNSMASQ_PID_FILE="$AP_RUN_DIR/dnsmasq.pid"
+AP_OWNER_FILE="$AP_RUN_DIR/ap0.owner"
+AP_HOSTAPD_LOG_FILE="$LOG_DIR/ap-hostapd.log"
+AP_DNSMASQ_LOG_FILE="$LOG_DIR/ap-dnsmasq.log"
+AP_DEP_PACKAGES="hostapd dnsmasq iw iproute2"
 
 DEFAULT_MIXED_PORT="${MIXED_PORT:-31800}"
 # Backward-compatible internal aliases. The default proxy entry is now a single mixed listener.
@@ -102,6 +113,7 @@ info() { _msg "INFO" "$@"; }
 ok() { _msg "OK" "$@"; }
 step() { _msg "STEP" "$@"; }
 hint() { _msg "TIP" "$@"; }
+missing() { _msg "MISSING" "$@"; }
 warn() { _msg "WARN" "$@" >&2; }
 err() { _msg "ERROR" "$@" >&2; }
 
@@ -181,6 +193,11 @@ ensure_dirs() {
 ensure_web_dirs() {
     ensure_dirs
     mkdir -p "$WEB_DIR" "$WEB_CGI_DIR" "$WEB_STATIC_DIR" "$WEB_JOB_DIR" || die "failed to create $WEB_DIR"
+}
+
+ensure_ap_dirs() {
+    ensure_dirs
+    mkdir -p "$AP_RUN_DIR" || die "failed to create $AP_RUN_DIR"
 }
 
 realpath_simple() {
@@ -2156,8 +2173,689 @@ remove_web_service_files() {
         plain) : ;;
     esac
 }
+# -----------------------------
+# AP management: ap0 only, no routing/NAT/TProxy
+# -----------------------------
+ap_default_config() {
+    cat <<'EOF_AP_CONFIG'
+ssid=mgate
+password=mgate12345678
+interface=ap0
+upstream=wlan0
+ipaddr=10.88.0.1
+netmask=255.255.255.0
+dhcp_start=10.88.0.100
+dhcp_end=10.88.0.200
+dhcp_lease=12h
+EOF_AP_CONFIG
+}
+
+ap_config_get() {
+    key="$1"
+    def="$2"
+    if [ -f "$AP_CONFIG_FILE" ]; then
+        awk -F= -v k="$key" -v d="$def" '
+            /^[[:space:]]*#/ {next}
+            {
+                name=$1
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+                if (name == k) {
+                    val=$0
+                    sub(/^[^=]*=/, "", val)
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+                    print val
+                    found=1
+                    exit
+                }
+            }
+            END {if (!found) print d}
+        ' "$AP_CONFIG_FILE" 2>/dev/null
+    else
+        printf '%s\n' "$def"
+    fi
+}
+
+ap_load_config() {
+    AP_SSID="$(ap_config_get ssid mgate)"
+    AP_PASSWORD="$(ap_config_get password mgate12345678)"
+    AP_IF="$(ap_config_get interface ap0)"
+    AP_UPSTREAM="$(ap_config_get upstream wlan0)"
+    AP_IPADDR="$(ap_config_get ipaddr 10.88.0.1)"
+    AP_NETMASK="$(ap_config_get netmask 255.255.255.0)"
+    AP_DHCP_START="$(ap_config_get dhcp_start 10.88.0.100)"
+    AP_DHCP_END="$(ap_config_get dhcp_end 10.88.0.200)"
+    AP_DHCP_LEASE="$(ap_config_get dhcp_lease 12h)"
+}
+
+ap_ensure_config() {
+    ensure_dirs
+    if [ ! -f "$AP_CONFIG_FILE" ]; then
+        ap_default_config > "$AP_CONFIG_FILE" || die "failed to write $AP_CONFIG_FILE"
+        chmod 600 "$AP_CONFIG_FILE" 2>/dev/null || true
+        ok "AP 配置已生成：$AP_CONFIG_FILE"
+    fi
+}
+
+ap_netmask_prefix() {
+    case "$1" in
+        255.255.255.255) printf '32\n' ;;
+        255.255.255.254) printf '31\n' ;;
+        255.255.255.252) printf '30\n' ;;
+        255.255.255.248) printf '29\n' ;;
+        255.255.255.240) printf '28\n' ;;
+        255.255.255.224) printf '27\n' ;;
+        255.255.255.192) printf '26\n' ;;
+        255.255.255.128) printf '25\n' ;;
+        255.255.255.0) printf '24\n' ;;
+        255.255.254.0) printf '23\n' ;;
+        255.255.252.0) printf '22\n' ;;
+        255.255.248.0) printf '21\n' ;;
+        255.255.240.0) printf '20\n' ;;
+        255.255.224.0) printf '19\n' ;;
+        255.255.192.0) printf '18\n' ;;
+        255.255.128.0) printf '17\n' ;;
+        255.255.0.0) printf '16\n' ;;
+        *) printf '24\n' ;;
+    esac
+}
+
+interface_exists() {
+    ifname="$1"
+    [ -d "/sys/class/net/$ifname" ] && return 0
+    have ip && ip link show dev "$ifname" >/dev/null 2>&1
+}
+
+ap_pid_running() {
+    pid_file="$1"
+    [ -f "$pid_file" ] || return 1
+    pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" >/dev/null 2>&1
+}
+
+ap_ipv4_addr() {
+    ifname="$1"
+    have ip || return 0
+    ip -4 addr show dev "$ifname" 2>/dev/null | awk '/inet / {print $2; exit}'
+}
+
+ap_ensure_iface_ip() {
+    ifname="$1"
+    ipaddr="$2"
+    prefix="$3"
+    if ! ip -4 addr show dev "$ifname" 2>/dev/null | grep -q "[[:space:]]$ipaddr/"; then
+        ip addr add "$ipaddr/$prefix" dev "$ifname" || return 1
+    fi
+    return 0
+}
+
+ap_iface_is_up() {
+    ifname="$1"
+    have ip || return 1
+    ip link show dev "$ifname" 2>/dev/null | grep -q '<[^>]*UP'
+}
+
+ap_iface_link_state() {
+    ifname="$1"
+    have ip || { printf 'unknown\n'; return 0; }
+    line="$(ip link show dev "$ifname" 2>/dev/null | sed -n '1p')"
+    if printf '%s\n' "$line" | grep -q '<[^>]*UP'; then
+        printf 'up\n'
+    elif [ -n "$line" ]; then
+        printf 'down\n'
+    else
+        printf 'missing\n'
+    fi
+}
 
 
+ap_iface_type() {
+    ifname="$1"
+    have iw || return 0
+    iw dev "$ifname" info 2>/dev/null | awk '/^[[:space:]]*type[[:space:]]/ {print $2; exit}'
+}
+
+ap_mark_unmanaged() {
+    ifname="$1"
+    if have nmcli; then
+        if nmcli device set "$ifname" managed no >/dev/null 2>&1; then
+            info "$ifname marked unmanaged in NetworkManager"
+        fi
+    fi
+}
+
+ap_wait_ap_ready() {
+    ifname="$1"
+    pid_file="$2"
+    ok_count=0
+    i=0
+    while [ "$i" -lt 8 ]; do
+        ap_pid_running "$pid_file" || return 1
+        if ap_iface_is_up "$ifname" && [ "$(ap_iface_type "$ifname")" = "AP" ]; then
+            ok_count=$((ok_count + 1))
+            [ "$ok_count" -ge 3 ] && return 0
+        else
+            ok_count=0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+ap_is_running_healthy() {
+    interface_exists "$AP_IF" || return 1
+    ap_pid_running "$AP_HOSTAPD_PID_FILE" || return 1
+    ap_pid_running "$AP_DNSMASQ_PID_FILE" || return 1
+    ap_iface_is_up "$AP_IF" || return 1
+    [ "$(ap_iface_type "$AP_IF")" = "AP" ] || return 1
+    ip -4 addr show dev "$AP_IF" 2>/dev/null | grep -q "[[:space:]]$AP_IPADDR/"
+}
+
+ap_iface_mac() {
+    ifname="$1"
+    if [ -r "/sys/class/net/$ifname/address" ]; then
+        sed -n '1p' "/sys/class/net/$ifname/address" 2>/dev/null
+        return 0
+    fi
+    have ip || return 0
+    ip link show dev "$ifname" 2>/dev/null | awk '/link\/ether/ {print $2; exit}'
+}
+
+ap_derive_mac() {
+    mac="$(printf '%s' "$1" | tr 'A-F' 'a-f')"
+    old_ifs="$IFS"
+    IFS=:
+    set -- $mac
+    IFS="$old_ifs"
+    [ "$#" -eq 6 ] || return 1
+    for octet in "$1" "$2" "$3" "$4" "$5" "$6"; do
+        case "$octet" in
+            [0-9a-f][0-9a-f]) : ;;
+            *) return 1 ;;
+        esac
+    done
+    case "$1" in
+        02) first="06" ;;
+        06) first="0a" ;;
+        0a) first="0e" ;;
+        0e) first="12" ;;
+        *) first="02" ;;
+    esac
+    printf '%s:%s:%s:%s:%s:%s\n' "$first" "$2" "$3" "$4" "$5" "$6"
+}
+
+ap_prepare_iface_mac() {
+    ifname="$1"
+    upstream="$2"
+    ap_mac="$(ap_iface_mac "$ifname" | sed -n '1p')"
+    upstream_mac="$(ap_iface_mac "$upstream" | sed -n '1p')"
+    [ -n "$ap_mac" ] || return 0
+    [ -n "$upstream_mac" ] || return 0
+    [ "$ap_mac" = "$upstream_mac" ] || return 0
+
+    new_mac="$(ap_derive_mac "$upstream_mac" || true)"
+    [ -n "$new_mac" ] || die "failed to derive a unique MAC for $ifname from $upstream"
+    ip link set "$ifname" address "$new_mac" || die "failed to set $ifname MAC address to $new_mac"
+    ok "$ifname MAC set to $new_mac"
+}
+
+ap_freq_to_channel() {
+    freq="$1"
+    case "$freq" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "$freq" -eq 2484 ] 2>/dev/null; then
+        printf '14\n'
+        return 0
+    fi
+    if [ "$freq" -ge 2412 ] 2>/dev/null && [ "$freq" -le 2472 ] 2>/dev/null; then
+        printf '%s\n' $(((freq - 2407) / 5))
+        return 0
+    fi
+    if [ "$freq" -ge 5000 ] 2>/dev/null && [ "$freq" -le 5900 ] 2>/dev/null; then
+        printf '%s\n' $(((freq - 5000) / 5))
+        return 0
+    fi
+    return 1
+}
+
+ap_upstream_channel() {
+    ifname="$1"
+    have iw || return 1
+    ch="$(iw dev "$ifname" info 2>/dev/null | awk '/channel/ {for(i=1;i<=NF;i++){if($i=="channel"){print $(i+1); exit}}}')"
+    if [ -n "$ch" ]; then
+        printf '%s\n' "$ch"
+        return 0
+    fi
+    link="$(iw dev "$ifname" link 2>/dev/null || true)"
+    printf '%s\n' "$link" | grep -qi 'Not connected' && return 1
+    freq="$(printf '%s\n' "$link" | awk '/freq:/ {print $2; exit}')"
+    [ -n "$freq" ] || return 1
+    ap_freq_to_channel "$freq"
+}
+
+ap_channel_hw_mode() {
+    ch="$1"
+    case "$ch" in ''|*[!0-9]*) printf 'g\n' ;; *)
+        if [ "$ch" -le 14 ] 2>/dev/null; then
+            printf 'g\n'
+        else
+            printf 'a\n'
+        fi
+        ;;
+    esac
+}
+
+ap_validate_start_config() {
+    [ "$AP_IF" = "ap0" ] || die "v0.4.0-rc1 only manages ap0; config interface=$AP_IF is not allowed"
+    [ -n "$AP_SSID" ] || die "AP ssid is empty"
+    pass_len="$(printf '%s' "$AP_PASSWORD" | wc -c | awk '{print $1}')"
+    [ "$pass_len" -ge 8 ] 2>/dev/null && [ "$pass_len" -le 63 ] 2>/dev/null || die "AP password must be 8-63 characters"
+}
+
+ap_write_hostapd_conf() {
+    channel="$1"
+    hw_mode="$(ap_channel_hw_mode "$channel")"
+    cat > "$AP_HOSTAPD_CONF" <<EOF_HOSTAPD
+interface=$AP_IF
+driver=nl80211
+ssid=$AP_SSID
+hw_mode=$hw_mode
+channel=$channel
+ieee80211n=1
+wmm_enabled=1
+auth_algs=1
+wpa=2
+wpa_passphrase=$AP_PASSWORD
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+EOF_HOSTAPD
+    chmod 600 "$AP_HOSTAPD_CONF" 2>/dev/null || true
+}
+
+ap_write_dnsmasq_conf() {
+    cat > "$AP_DNSMASQ_CONF" <<EOF_DNSMASQ
+interface=$AP_IF
+bind-interfaces
+listen-address=$AP_IPADDR
+port=0
+dhcp-range=$AP_DHCP_START,$AP_DHCP_END,$AP_NETMASK,$AP_DHCP_LEASE
+dhcp-option=3,$AP_IPADDR
+dhcp-option=6,$AP_IPADDR
+dhcp-authoritative
+log-facility=$AP_DNSMASQ_LOG_FILE
+EOF_DNSMASQ
+    chmod 600 "$AP_DNSMASQ_CONF" 2>/dev/null || true
+}
+
+ap_remove_owned_iface() {
+    [ -f "$AP_OWNER_FILE" ] || return 0
+    if interface_exists "$AP_IF"; then
+        have ip && ip link set "$AP_IF" down >/dev/null 2>&1 || true
+        if have iw; then
+            iw dev "$AP_IF" del >/dev/null 2>&1 || true
+        fi
+        if interface_exists "$AP_IF" && have ip; then
+            ip link delete "$AP_IF" >/dev/null 2>&1 || true
+        fi
+        if interface_exists "$AP_IF"; then
+            warn "$AP_IF still exists after cleanup; remove it manually if needed"
+        else
+            ok "$AP_IF removed"
+        fi
+    fi
+    rm -f "$AP_OWNER_FILE" 2>/dev/null || true
+}
+
+ap_cleanup_owned_state() {
+    ap_stop_pid "$AP_DNSMASQ_PID_FILE" "dnsmasq"
+    ap_stop_pid "$AP_HOSTAPD_PID_FILE" "hostapd"
+    ap_remove_owned_iface
+}
+
+ap_stop_pid() {
+    pid_file="$1"
+    label="$2"
+    if ap_pid_running "$pid_file"; then
+        pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
+        kill "$pid" >/dev/null 2>&1 || true
+        i=0
+        while kill -0 "$pid" >/dev/null 2>&1; do
+            i=$((i + 1))
+            [ "$i" -ge 8 ] && break
+            sleep 1
+        done
+        kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
+        ok "$label stopped"
+    else
+        info "$label not running"
+    fi
+    rm -f "$pid_file" 2>/dev/null || true
+}
+
+ap_cmd_path() {
+    command -v "$1" 2>/dev/null || true
+}
+
+ap_check_command() {
+    cmd="$1"
+    desc="$2"
+    path="$(ap_cmd_path "$cmd")"
+    if [ -n "$path" ]; then
+        ok "$cmd: $path"
+        return 0
+    fi
+    missing "$cmd: $desc"
+    return 1
+}
+
+ap_manual_install_hint() {
+    info "suggested command: apt-get update && apt-get install -y $AP_DEP_PACKAGES"
+}
+
+ap_run_check() {
+    ap_load_config
+    AP_CHECK_MISSING_DEPS=0
+    AP_CHECK_WIRELESS_READY=1
+
+    info "checking AP dependencies..."
+    ap_check_command ip "required to configure ap0 IP address" || AP_CHECK_MISSING_DEPS=1
+    ap_check_command iw "required to create ap0 and detect wlan channel" || AP_CHECK_MISSING_DEPS=1
+    ap_check_command hostapd "required to create WiFi AP" || AP_CHECK_MISSING_DEPS=1
+    ap_check_command dnsmasq "required to provide DHCP for AP clients" || AP_CHECK_MISSING_DEPS=1
+
+    info "checking wireless upstream..."
+    if interface_exists "$AP_UPSTREAM"; then
+        ok "$AP_UPSTREAM exists"
+    else
+        missing "$AP_UPSTREAM: wireless upstream interface not found"
+        AP_CHECK_WIRELESS_READY=0
+    fi
+
+    ch="$(ap_upstream_channel "$AP_UPSTREAM" 2>/dev/null || true)"
+    if [ -n "$ch" ]; then
+        ok "$AP_UPSTREAM channel: $ch"
+        AP_CHECK_CHANNEL="$ch"
+    else
+        warn "$AP_UPSTREAM channel: unknown"
+        AP_CHECK_CHANNEL=""
+        AP_CHECK_WIRELESS_READY=0
+    fi
+
+    if [ "$AP_CHECK_MISSING_DEPS" = "1" ]; then
+        warn "AP dependencies are incomplete"
+        ap_manual_install_hint
+    fi
+    if [ "$AP_CHECK_WIRELESS_READY" != "1" ]; then
+        warn "AP wireless upstream is not ready"
+    fi
+
+    [ "$AP_CHECK_MISSING_DEPS" = "0" ] && [ "$AP_CHECK_WIRELESS_READY" = "1" ]
+}
+
+cmd_ap_check() {
+    ap_run_check
+}
+
+ap_is_interactive() {
+    [ -t 0 ] && [ -t 1 ]
+}
+
+ap_confirm_install() {
+    printf 'Install AP dependencies now? [y/N] '
+    read -r ans || ans=""
+    case "$ans" in
+        y|Y|yes|YES|Yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+ap_install_deps_run() {
+    if have apt-get; then
+        apt_cmd="apt-get"
+    elif have apt; then
+        apt_cmd="apt"
+    else
+        err "apt-get or apt is required to install AP dependencies automatically"
+        ap_manual_install_hint
+        return 1
+    fi
+
+    info "AP dependency packages: $AP_DEP_PACKAGES"
+    info "hostapd: create AP"
+    info "dnsmasq: DHCP for AP clients"
+    info "iw: wireless interface/channel control"
+    info "iproute2: ip command"
+
+    if ! ap_is_interactive; then
+        warn "non-interactive terminal; refusing to install without confirmation"
+        ap_manual_install_hint
+        return 1
+    fi
+
+    if ! ap_confirm_install; then
+        info "installation cancelled"
+        hint "run mgate ap-install-deps when ready"
+        return 1
+    fi
+
+    step "installing AP dependencies with $apt_cmd"
+    if ! "$apt_cmd" update; then
+        err "failed to run $apt_cmd update"
+        ap_manual_install_hint
+        return 1
+    fi
+    if ! "$apt_cmd" install -y $AP_DEP_PACKAGES; then
+        err "failed to install AP dependencies"
+        ap_manual_install_hint
+        return 1
+    fi
+
+    info "mgate uses its own isolated hostapd/dnsmasq instances under /opt/mgate/run/ap"
+    if have systemctl; then
+        info "stopping system hostapd service to avoid port/interface conflicts"
+        systemctl stop hostapd >/dev/null 2>&1 || true
+        info "disabling system hostapd service; mgate starts its own instance when needed"
+        systemctl disable hostapd >/dev/null 2>&1 || true
+        info "stopping system dnsmasq service to avoid DHCP conflicts on ap0"
+        systemctl stop dnsmasq >/dev/null 2>&1 || true
+        info "disabling system dnsmasq service; mgate starts its own instance when needed"
+        systemctl disable dnsmasq >/dev/null 2>&1 || true
+    else
+        info "systemctl not found; skipping system hostapd/dnsmasq service disable"
+    fi
+
+    ap_run_check
+}
+
+cmd_ap_install_deps() {
+    need_root
+    ap_install_deps_run
+}
+
+ap_preflight_for_start() {
+    if ap_run_check; then
+        return 0
+    fi
+
+    if [ "$AP_CHECK_MISSING_DEPS" = "1" ]; then
+        if ! ap_is_interactive; then
+            die "missing AP dependencies; run mgate ap-install-deps first"
+        fi
+        hint "run mgate ap-install-deps to install AP dependencies"
+        uid="$(id -u 2>/dev/null || echo 1)"
+        if [ "$uid" != "0" ]; then
+            die "missing AP dependencies; run mgate ap-install-deps first as root"
+        fi
+        if ap_install_deps_run; then
+            ap_run_check || die "AP environment is still not ready after dependency installation"
+            return 0
+        fi
+        die "missing AP dependencies; run mgate ap-install-deps first"
+    fi
+
+    die "AP environment is not ready; check $AP_UPSTREAM connection and channel"
+}
+cmd_ap_config() {
+    ap_ensure_config
+    ap_load_config
+    info "ap config path: $AP_CONFIG_FILE"
+    cat "$AP_CONFIG_FILE"
+}
+
+cmd_ap_status() {
+    ap_load_config
+    info "ap config path: $AP_CONFIG_FILE"
+    [ -f "$AP_CONFIG_FILE" ] && info "ap config exists: yes" || info "ap config exists: no"
+    if interface_exists "$AP_IF"; then
+        info "$AP_IF exists: yes"
+        info "$AP_IF link: $(ap_iface_link_state "$AP_IF")"
+        ap_type="$(ap_iface_type "$AP_IF" || true)"
+        [ -n "$ap_type" ] || ap_type="unknown"
+        info "$AP_IF type: $ap_type"
+        ip4="$(ap_ipv4_addr "$AP_IF" || true)"
+        [ -n "$ip4" ] || ip4="none"
+        info "$AP_IF ip: $ip4"
+    else
+        info "$AP_IF exists: no"
+        info "$AP_IF ip: none"
+    fi
+    if interface_exists "$AP_UPSTREAM"; then
+        info "$AP_UPSTREAM exists: yes"
+    else
+        info "$AP_UPSTREAM exists: no"
+    fi
+    ch="$(ap_upstream_channel "$AP_UPSTREAM" 2>/dev/null || true)"
+    [ -n "$ch" ] || ch="unknown"
+    info "$AP_UPSTREAM channel: $ch"
+    ap_pid_running "$AP_HOSTAPD_PID_FILE" && info "hostapd running: yes" || info "hostapd running: no"
+    ap_pid_running "$AP_DNSMASQ_PID_FILE" && info "dnsmasq running: yes" || info "dnsmasq running: no"
+    info "ssid: $AP_SSID"
+    info "dhcp range: $AP_DHCP_START - $AP_DHCP_END ($AP_DHCP_LEASE)"
+}
+
+cmd_ap_start() {
+    ap_ensure_config
+    ap_load_config
+    ap_validate_start_config
+    ap_preflight_for_start
+    need_root
+    ensure_ap_dirs
+    channel="$AP_CHECK_CHANNEL"
+
+    if ap_is_running_healthy; then
+        ok "AP already running on $AP_IF ($AP_IPADDR), ssid=$AP_SSID"
+        return 0
+    fi
+
+    if [ -f "$AP_OWNER_FILE" ] || ap_pid_running "$AP_HOSTAPD_PID_FILE" || ap_pid_running "$AP_DNSMASQ_PID_FILE"; then
+        warn "existing mgate AP state is not healthy; restarting AP"
+        interface_exists "$AP_IF" && printf '%s\n' "$AP_IF" > "$AP_OWNER_FILE" 2>/dev/null || true
+        ap_cleanup_owned_state
+    fi
+
+    if interface_exists "$AP_IF"; then
+        die "$AP_IF already exists but is not marked as mgate-managed; refusing to take over"
+    else
+        iw dev "$AP_UPSTREAM" interface add "$AP_IF" type __ap 2>/dev/null || \
+            iw dev "$AP_UPSTREAM" interface add "$AP_IF" type ap || die "failed to create $AP_IF from $AP_UPSTREAM"
+        printf '%s\n' "$AP_IF" > "$AP_OWNER_FILE" 2>/dev/null || true
+    fi
+
+    ap_mark_unmanaged "$AP_IF"
+    if ! ap_pid_running "$AP_HOSTAPD_PID_FILE"; then
+        ap_prepare_iface_mac "$AP_IF" "$AP_UPSTREAM"
+    fi
+
+    prefix="$(ap_netmask_prefix "$AP_NETMASK")"
+    if ! ap_ensure_iface_ip "$AP_IF" "$AP_IPADDR" "$prefix"; then
+        ap_cleanup_owned_state
+        die "failed to assign $AP_IPADDR/$prefix to $AP_IF"
+    fi
+
+    ap_write_hostapd_conf "$channel"
+    ap_write_dnsmasq_conf
+
+    hostapd_started=0
+    if ap_pid_running "$AP_HOSTAPD_PID_FILE"; then
+        info "hostapd already running: $(sed -n '1p' "$AP_HOSTAPD_PID_FILE")"
+    else
+        nohup hostapd "$AP_HOSTAPD_CONF" >> "$AP_HOSTAPD_LOG_FILE" 2>&1 &
+        echo $! > "$AP_HOSTAPD_PID_FILE"
+        sleep 1
+        if ! ap_pid_running "$AP_HOSTAPD_PID_FILE"; then
+            rm -f "$AP_HOSTAPD_PID_FILE" 2>/dev/null || true
+            ap_cleanup_owned_state
+            die "hostapd failed to start; see $AP_HOSTAPD_LOG_FILE"
+        fi
+        hostapd_started=1
+        ok "hostapd started: $(cat "$AP_HOSTAPD_PID_FILE")"
+    fi
+
+    if ! ap_wait_ap_ready "$AP_IF" "$AP_HOSTAPD_PID_FILE"; then
+        ap_type="$(ap_iface_type "$AP_IF" || true)"
+        [ -n "$ap_type" ] || ap_type="unknown"
+        ap_cleanup_owned_state
+        die "$AP_IF is not stable in AP mode (type=$ap_type); see $AP_HOSTAPD_LOG_FILE"
+    fi
+    ok "$AP_IF link is up"
+    ok "$AP_IF type is AP"
+    if ! ap_ensure_iface_ip "$AP_IF" "$AP_IPADDR" "$prefix"; then
+        ap_cleanup_owned_state
+        die "failed to assign $AP_IPADDR/$prefix to $AP_IF after hostapd start"
+    fi
+
+    if ap_pid_running "$AP_DNSMASQ_PID_FILE"; then
+        info "dnsmasq already running: $(sed -n '1p' "$AP_DNSMASQ_PID_FILE")"
+    else
+        if ! dnsmasq -C "$AP_DNSMASQ_CONF" -x "$AP_DNSMASQ_PID_FILE" >> "$AP_DNSMASQ_LOG_FILE" 2>&1; then
+            ap_cleanup_owned_state
+            die "dnsmasq failed to start; see $AP_DNSMASQ_LOG_FILE"
+        fi
+        sleep 1
+        if ! ap_pid_running "$AP_DNSMASQ_PID_FILE"; then
+            rm -f "$AP_DNSMASQ_PID_FILE" 2>/dev/null || true
+            ap_cleanup_owned_state
+            die "dnsmasq failed to stay running; see $AP_DNSMASQ_LOG_FILE"
+        fi
+        ok "dnsmasq started: $(cat "$AP_DNSMASQ_PID_FILE")"
+    fi
+
+    ok "AP started on $AP_IF ($AP_IPADDR/$prefix), ssid=$AP_SSID, channel=$channel"
+    warn "AP mode only provides WiFi and DHCP in this release; no NAT, forwarding, TProxy, or gateway rules were enabled"
+}
+
+cmd_ap_stop() {
+    need_root
+    ap_load_config
+    [ "$AP_IF" = "ap0" ] || die "v0.4.0-rc1 only manages ap0; config interface=$AP_IF is not allowed"
+    owned=0
+    [ -f "$AP_OWNER_FILE" ] && owned=1
+    ap_pid_running "$AP_DNSMASQ_PID_FILE" && owned=1
+    ap_pid_running "$AP_HOSTAPD_PID_FILE" && owned=1
+    ap_stop_pid "$AP_DNSMASQ_PID_FILE" "dnsmasq"
+    ap_stop_pid "$AP_HOSTAPD_PID_FILE" "hostapd"
+    if interface_exists "$AP_IF"; then
+        if [ "$owned" = "1" ]; then
+            have ip && ip link set "$AP_IF" down >/dev/null 2>&1 || true
+            if have iw; then
+                iw dev "$AP_IF" del >/dev/null 2>&1 || true
+            fi
+            if interface_exists "$AP_IF" && have ip; then
+                ip link delete "$AP_IF" >/dev/null 2>&1 || true
+            fi
+            if interface_exists "$AP_IF"; then
+                warn "$AP_IF still exists; remove it manually if needed"
+            else
+                ok "$AP_IF removed"
+            fi
+        else
+            warn "$AP_IF exists but is not marked as mgate-managed; not deleting it"
+        fi
+    else
+        info "$AP_IF does not exist"
+    fi
+    rm -f "$AP_OWNER_FILE" 2>/dev/null || true
+}
 backup_copy_dir() {
     src="$1"
     dst="$2"
@@ -3427,6 +4125,14 @@ $APP_NAME - $APP_DESC
   mgate logs [50|100|200]   查看日志
   mgate doctor              系统诊断
 
+AP 管理：
+  mgate ap-check            检查 AP 依赖和 wlan0 信道
+  mgate ap-install-deps     安装 AP 所需依赖
+  mgate ap-status           查看 ap0 热点状态
+  mgate ap-config           查看/生成 AP 配置
+  mgate ap-start            启动 ap0 热点和 DHCP
+  mgate ap-stop             停止 mgate 管理的 ap0 热点
+
 备份与恢复：
   mgate backup [label]      创建备份
   mgate backups             查看备份列表
@@ -3589,6 +4295,12 @@ main() {
         test) cmd_test "$@" ;;
         logs) cmd_logs "$@" ;;
         doctor) cmd_doctor "$@" ;;
+        ap-check) cmd_ap_check "$@" ;;
+        ap-install-deps) cmd_ap_install_deps "$@" ;;
+        ap-status) cmd_ap_status "$@" ;;
+        ap-config) cmd_ap_config "$@" ;;
+        ap-start) cmd_ap_start "$@" ;;
+        ap-stop) cmd_ap_stop "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
