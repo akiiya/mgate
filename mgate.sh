@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc5"
+MGATE_VERSION="0.4.0-rc6"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -68,6 +68,9 @@ GATEWAY_IP_FORWARD_PREV="$GATEWAY_RUN_DIR/ip_forward.prev"
 GATEWAY_BACKEND_FILE="$GATEWAY_RUN_DIR/backend"
 GATEWAY_NAT_CHAIN="MGATE_NAT_POSTROUTING"
 GATEWAY_FORWARD_CHAIN="MGATE_FORWARD"
+TPROXY_MANGLE_CHAIN="${MGATE_TPROXY_MANGLE_CHAIN:-MGATE_TPROXY}"
+TPROXY_MARK="${MGATE_TPROXY_MARK:-0x1}"
+TPROXY_ROUTE_TABLE="${MGATE_TPROXY_ROUTE_TABLE:-100}"
 
 DEFAULT_MIXED_PORT="${MIXED_PORT:-31800}"
 # Backward-compatible internal aliases. The default proxy entry is now a single mixed listener.
@@ -3420,6 +3423,257 @@ cmd_gateway_doctor() {
     fi
     say "[OK] gateway baseline is healthy"
 }
+# -----------------------------
+# TProxy read-only inspection: no rules are created here
+# -----------------------------
+tproxy_info() { say "[INFO] $*"; }
+tproxy_ok() { say "[OK] $*"; }
+tproxy_warn() { say "[WARN] $*"; }
+
+tproxy_is_root() {
+    uid="$(id -u 2>/dev/null || echo 1)"
+    [ "$uid" = "0" ]
+}
+
+tproxy_mihomo_port() {
+    [ -f "$CONFIG_FILE" ] || return 1
+    port="$(sed -n 's/^[[:space:]]*tproxy-port[[:space:]]*:[[:space:]]*//p' "$CONFIG_FILE" 2>/dev/null | \
+        sed 's/[[:space:]]*#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//' | head -n 1)"
+    [ -n "$port" ] || return 1
+    printf '%s\n' "$port"
+}
+
+tproxy_module_hint_one() {
+    mod="$1"
+    if [ -r /proc/modules ] && grep -q "^$mod[[:space:]]" /proc/modules 2>/dev/null; then
+        tproxy_ok "$mod: loaded"
+        return 0
+    fi
+    if have modprobe && modprobe -n -v "$mod" >/dev/null 2>&1; then
+        tproxy_info "$mod: available by modprobe dry-run"
+        return 0
+    fi
+    tproxy_warn "$mod: not loaded or unknown"
+}
+
+tproxy_mangle_table_available() {
+    gateway_have_iptables || return 1
+    iptables -t mangle -S >/dev/null 2>&1
+}
+
+tproxy_mangle_rules_present() {
+    tproxy_mangle_table_available || return 1
+    iptables -t mangle -S 2>/dev/null | grep -e "$TPROXY_MANGLE_CHAIN" -e 'TPROXY' >/dev/null 2>&1
+}
+
+tproxy_ip_rule_present() {
+    have ip || return 1
+    ip rule show 2>/dev/null | grep 'fwmark' | grep "$TPROXY_MARK" | grep "lookup $TPROXY_ROUTE_TABLE" >/dev/null 2>&1
+}
+
+tproxy_route_table_present() {
+    have ip || return 1
+    routes="$(ip route show table "$TPROXY_ROUTE_TABLE" 2>/dev/null || true)"
+    [ -n "$routes" ]
+}
+
+tproxy_gateway_fallback_state() {
+    if gateway_rules_active; then
+        printf 'yes\n'
+    elif gateway_have_iptables; then
+        if tproxy_is_root; then
+            printf 'no\n'
+        else
+            printf 'unknown\n'
+        fi
+    else
+        printf 'unknown\n'
+    fi
+}
+
+tproxy_state_mangle() {
+    if ! gateway_have_iptables; then
+        printf 'unknown\n'
+    elif ! tproxy_mangle_table_available; then
+        printf 'unknown\n'
+    elif tproxy_mangle_rules_present; then
+        printf 'yes\n'
+    else
+        printf 'no\n'
+    fi
+}
+
+tproxy_state_ip_rule() {
+    if ! have ip; then
+        printf 'unknown\n'
+    elif ! ip rule show >/dev/null 2>&1; then
+        printf 'unknown\n'
+    elif tproxy_ip_rule_present; then
+        printf 'yes\n'
+    else
+        printf 'no\n'
+    fi
+}
+
+tproxy_state_route_table() {
+    if ! have ip; then
+        printf 'unknown\n'
+    elif ! ip route show table all >/dev/null 2>&1; then
+        printf 'unknown\n'
+    elif tproxy_route_table_present; then
+        printf 'yes\n'
+    else
+        printf 'no\n'
+    fi
+}
+
+tproxy_enabled_state() {
+    mangle_state="$1"
+    rule_state="$2"
+    route_state="$3"
+    port_state="$4"
+
+    if [ "$mangle_state" = "no" ] && [ "$rule_state" = "no" ] && [ "$route_state" = "no" ]; then
+        printf 'no\n'
+        return 0
+    fi
+    if [ "$mangle_state" = "yes" ] && [ "$rule_state" = "yes" ] && [ "$route_state" = "yes" ] && [ "$port_state" != "none" ]; then
+        printf 'yes\n'
+        return 0
+    fi
+    if [ "$mangle_state" = "yes" ] || [ "$rule_state" = "yes" ] || [ "$route_state" = "yes" ]; then
+        printf 'partial\n'
+        return 0
+    fi
+    printf 'unknown\n'
+}
+
+cmd_tproxy_check() {
+    ap_load_config
+    tproxy_info "checking TProxy capabilities..."
+    if tproxy_is_root; then
+        tproxy_ok "root: yes"
+    else
+        tproxy_warn "root: no; some iptables/ip checks may be incomplete"
+    fi
+
+    if gateway_have_iptables; then
+        tproxy_ok "iptables: $(command -v iptables 2>/dev/null)"
+        if tproxy_mangle_table_available; then
+            tproxy_ok "mangle table: available"
+        else
+            tproxy_warn "mangle table: unavailable or permission denied"
+        fi
+        if iptables -j TPROXY -h >/dev/null 2>&1; then
+            tproxy_ok "TPROXY target: userspace extension available"
+        else
+            tproxy_warn "TPROXY target: unknown"
+        fi
+        if iptables -m socket -h >/dev/null 2>&1; then
+            tproxy_ok "socket match: userspace extension available"
+        else
+            tproxy_warn "socket match: unknown"
+        fi
+    else
+        tproxy_warn "iptables: missing"
+        tproxy_warn "mangle table: unknown"
+        tproxy_warn "TPROXY target: unknown"
+        tproxy_warn "socket match: unknown"
+    fi
+
+    if have ip; then
+        if ip rule show >/dev/null 2>&1; then
+            tproxy_ok "ip rule: available"
+        else
+            tproxy_warn "ip rule: unavailable or permission denied"
+        fi
+        if ip route show table all >/dev/null 2>&1; then
+            tproxy_ok "ip route: available"
+        else
+            tproxy_warn "ip route: unavailable or permission denied"
+        fi
+    else
+        tproxy_warn "ip rule: ip command missing"
+        tproxy_warn "ip route: ip command missing"
+    fi
+
+    tproxy_info "checking kernel module hints..."
+    tproxy_module_hint_one xt_TPROXY
+    tproxy_module_hint_one nf_tproxy_ipv4
+    tproxy_module_hint_one xt_socket
+    tproxy_module_hint_one nf_defrag_ipv4
+
+    if [ -x "$CORE_BIN" ]; then
+        tproxy_ok "mihomo: $CORE_BIN"
+    elif [ -f "$CORE_BIN" ]; then
+        tproxy_warn "mihomo: exists but not executable: $CORE_BIN"
+    else
+        tproxy_warn "mihomo: missing: $CORE_BIN"
+    fi
+
+    tproxy_port="$(tproxy_mihomo_port || true)"
+    if [ -n "$tproxy_port" ]; then
+        tproxy_ok "mihomo tproxy-port: $tproxy_port"
+    else
+        tproxy_info "mihomo tproxy-port: none"
+    fi
+
+    fallback="$(tproxy_gateway_fallback_state)"
+    case "$fallback" in
+        yes) tproxy_ok "gateway fallback: active" ;;
+        no) tproxy_warn "gateway fallback: inactive" ;;
+        *) tproxy_warn "gateway fallback: unknown" ;;
+    esac
+
+    mangle_state="$(tproxy_state_mangle)"
+    rule_state="$(tproxy_state_ip_rule)"
+    route_state="$(tproxy_state_route_table)"
+    port_state="${tproxy_port:-none}"
+    enabled="$(tproxy_enabled_state "$mangle_state" "$rule_state" "$route_state" "$port_state")"
+    case "$enabled" in
+        yes) tproxy_ok "TProxy appears enabled" ;;
+        partial) tproxy_warn "TProxy appears partially configured; possible leftover state" ;;
+        no) tproxy_warn "TProxy is not configured yet" ;;
+        *) tproxy_warn "TProxy state: unknown" ;;
+    esac
+}
+
+cmd_tproxy_status() {
+    ap_load_config
+    tproxy_port="$(tproxy_mihomo_port || true)"
+    [ -n "$tproxy_port" ] || tproxy_port="none"
+    mangle_state="$(tproxy_state_mangle)"
+    rule_state="$(tproxy_state_ip_rule)"
+    route_state="$(tproxy_state_route_table)"
+    fallback="$(tproxy_gateway_fallback_state)"
+    enabled="$(tproxy_enabled_state "$mangle_state" "$rule_state" "$route_state" "$tproxy_port")"
+
+    tproxy_info "tproxy enabled: $enabled"
+    tproxy_info "mangle rules present: $mangle_state"
+    tproxy_info "ip rule present: $rule_state"
+    tproxy_info "route table present: $route_state"
+    tproxy_info "mihomo tproxy-port: $tproxy_port"
+    tproxy_info "gateway fallback active: $fallback"
+
+    case "$enabled" in
+        yes)
+            tproxy_info "suggested next step: verify traffic path and keep NAT fallback available"
+            ;;
+        partial)
+            tproxy_warn "suggested next step: inspect possible leftover TProxy state; do not enable more rules yet"
+            ;;
+        no)
+            if [ "$fallback" = "yes" ]; then
+                tproxy_info "suggested next step: keep NAT fallback active, then configure mihomo tproxy-port before enabling TProxy"
+            else
+                tproxy_warn "suggested next step: restore gateway fallback before TProxy work"
+            fi
+            ;;
+        *)
+            tproxy_warn "suggested next step: rerun as root and inspect iptables/ip support"
+            ;;
+    esac
+}
 backup_copy_dir() {
     src="$1"
     dst="$2"
@@ -4704,6 +4958,8 @@ NAT 网关：
   mgate gateway-status      查看 NAT 网关状态
   mgate gateway-debug       输出 NAT/AP/DHCP/DNS 诊断信息
   mgate gateway-doctor      检查普通 NAT 网关健康基线
+  mgate tproxy-check        只读检查 TProxy 能力
+  mgate tproxy-status       只读查看 TProxy 状态
 
 备份与恢复：
   mgate backup [label]      创建备份
@@ -4879,6 +5135,8 @@ main() {
         gateway-status|nat-status) cmd_gateway_status "$@" ;;
         gateway-debug|nat-debug) cmd_gateway_debug "$@" ;;
         gateway-doctor|nat-doctor) cmd_gateway_doctor "$@" ;;
+        tproxy-check) cmd_tproxy_check "$@" ;;
+        tproxy-status) cmd_tproxy_status "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
