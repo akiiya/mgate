@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc7"
+MGATE_VERSION="0.4.0-rc10"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -72,6 +72,13 @@ TPROXY_MANGLE_CHAIN="${MGATE_TPROXY_MANGLE_CHAIN:-MGATE_TPROXY}"
 TPROXY_MARK="${MGATE_TPROXY_MARK:-0x1}"
 TPROXY_ROUTE_TABLE="${MGATE_TPROXY_ROUTE_TABLE:-100}"
 TPROXY_PORT="${MGATE_TPROXY_PORT:-31802}"
+TPROXY_OUT_GROUP="${MGATE_TPROXY_OUT_GROUP:-TPROXY-OUT}"
+TPROXY_SOCKET_BYPASS="${MGATE_TPROXY_SOCKET_BYPASS:-0}"
+TPROXY_ENABLED_FILE="$DATA_DIR/tproxy.enabled"
+TPROXY_LAST_ERROR_FILE="$DATA_DIR/tproxy.last_error"
+TPROXY_CONFIG_BACKUP_FILE="$DATA_DIR/tproxy.config_backup"
+TPROXY_CONFIG_OWNED_FILE="$DATA_DIR/tproxy.config_owned"
+TPROXY_LOG_FILE="$LOG_DIR/tproxy.log"
 
 DEFAULT_MIXED_PORT="${MIXED_PORT:-31800}"
 # Backward-compatible internal aliases. The default proxy entry is now a single mixed listener.
@@ -3040,10 +3047,15 @@ cmd_gateway_stop() {
     gateway_restore_ip_forward
 }
 
+gateway_transparent_proxy_state() {
+    tproxy_port="$(tproxy_mihomo_port || true)"
+    [ -n "$tproxy_port" ] || tproxy_port="none"
+    tproxy_enabled_state "$(tproxy_state_mangle)" "$(tproxy_state_ip_rule)" "$(tproxy_state_route_table)" "$tproxy_port"
+}
 cmd_gateway_status() {
     ap_load_config
     info "gateway mode: nat"
-    info "transparent proxy: not enabled"
+    info "transparent proxy: $(gateway_transparent_proxy_state)"
     info "ap interface: $AP_IF"
     info "upstream interface: $AP_UPSTREAM"
     info "subnet: $(gateway_subnet)"
@@ -3175,7 +3187,7 @@ cmd_gateway_debug() {
     debug_info "mgate version: $MGATE_VERSION"
     debug_info "workdir: $WORKDIR"
     debug_info "gateway mode: nat"
-    debug_info "transparent proxy: not enabled"
+    debug_info "transparent proxy: $(gateway_transparent_proxy_state)"
     debug_info "ap interface: $AP_IF"
     debug_info "upstream interface: $AP_UPSTREAM"
     debug_info "subnet: $(gateway_subnet)"
@@ -3289,7 +3301,7 @@ cmd_gateway_doctor() {
     gateway_doctor_section "summary"
     say "[INFO] mgate version: $MGATE_VERSION"
     say "[INFO] gateway mode: nat"
-    say "[INFO] transparent proxy: not enabled"
+    say "[INFO] transparent proxy: $(gateway_transparent_proxy_state)"
     say "[INFO] ap interface: $AP_IF"
     say "[INFO] upstream interface: $AP_UPSTREAM"
     say "[INFO] subnet: $(gateway_subnet)"
@@ -3757,21 +3769,22 @@ tproxy_current_state() {
 }
 
 tproxy_print_reserved_bypass_plan() {
+    say "planned gateway service bypasses:"
+    say "  $AP_IPADDR:53 tcp/udp"
+    say "  DHCP udp 67/68"
     say "planned reserved-address bypasses:"
-    say "  0.0.0.0/8"
-    say "  10.0.0.0/8"
-    say "  100.64.0.0/10"
-    say "  127.0.0.0/8"
-    say "  169.254.0.0/16"
-    say "  172.16.0.0/12"
-    say "  192.168.0.0/16"
-    say "  224.0.0.0/4"
-    say "  240.0.0.0/4"
+    for cidr in $(tproxy_reserved_cidrs); do
+        say "  $cidr"
+    done
 }
 
 tproxy_print_mangle_rule_summary() {
     tproxy_print_reserved_bypass_plan
-    say "planned local-socket bypass: -m socket -j RETURN, to avoid hijacking traffic already handled by local sockets"
+    if [ "$TPROXY_SOCKET_BYPASS" = "1" ]; then
+        say "planned local-socket bypass: enabled by MGATE_TPROXY_SOCKET_BYPASS=1"
+    else
+        say "planned local-socket bypass: disabled by default to avoid leaking AP traffic back to NAT"
+    fi
     say "planned AP client scope: PREROUTING -i $AP_IF only"
     say "planned TCP redirect: TPROXY --on-port $1 --tproxy-mark $TPROXY_MARK"
     say "planned UDP redirect: TPROXY --on-port $1 --tproxy-mark $TPROXY_MARK"
@@ -3790,7 +3803,8 @@ tproxy_print_rollback_plan() {
 
 tproxy_print_risks() {
     say "risks:"
-    say "  TProxy target and socket match are only capability hints until real rules are applied"
+    say "  TProxy target availability is only a capability hint until real rules are applied"
+    say "  socket bypass is disabled by default because it can leak AP traffic to NAT"
     say "  kernel modules may be built in and not visible in /proc/modules"
     say "  UDP transparent proxy behavior depends on mihomo tproxy support and DNS handling"
     say "  OUTPUT traffic from local mgate/mihomo is not part of this AP PREROUTING plan"
@@ -3812,8 +3826,11 @@ cmd_tproxy_plan() {
     tproxy_plan_section "planned changes"
     if [ "$current_port" = "none" ]; then
         tproxy_info "mihomo config plan: add tproxy-port: $planned_port to $CONFIG_FILE"
+        tproxy_info "mihomo config plan: enable allow-lan and bind transparent listener on all addresses"
+        tproxy_info "mihomo config plan: add $TPROXY_OUT_GROUP outbound group and IN-TYPE,TPROXY rule"
     else
         tproxy_info "mihomo config plan: keep existing tproxy-port: $current_port"
+        tproxy_info "mihomo config plan: ensure allow-lan, bind-address, $TPROXY_OUT_GROUP outbound group, and IN-TYPE,TPROXY rule"
     fi
     tproxy_info "planned mark: $TPROXY_MARK"
     tproxy_info "planned route table: $TPROXY_ROUTE_TABLE"
@@ -3850,16 +3867,29 @@ cmd_tproxy_dry_run() {
         say "# backup mihomo config before future change"
         say "cp '$CONFIG_FILE' '$CONFIG_FILE.pre-tproxy'"
         say "# add or set in $CONFIG_FILE: tproxy-port: $planned_port"
+        say "# add or set in $CONFIG_FILE: allow-lan: true"
+        say "# add or set in $CONFIG_FILE: bind-address: '*'"
+        say "# add proxy-group: $TPROXY_OUT_GROUP; provider configs use url-test to avoid a bad first node"
+        say "# add rule before IN-USER/MATCH rules: IN-TYPE,TPROXY,$TPROXY_OUT_GROUP"
     else
         say "# keep existing mihomo tproxy-port: $current_port"
+        say "# ensure in $CONFIG_FILE: allow-lan: true"
+        say "# ensure in $CONFIG_FILE: bind-address: '*'"
+        say "# ensure proxy-group: $TPROXY_OUT_GROUP; provider configs use url-test to avoid a bad first node"
+        say "# ensure rule before IN-USER/MATCH rules: IN-TYPE,TPROXY,$TPROXY_OUT_GROUP"
     fi
     say "ip rule add fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
     say "ip route add local 0.0.0.0/0 dev lo table $TPROXY_ROUTE_TABLE"
     say "iptables -t mangle -N $TPROXY_MANGLE_CHAIN"
-    for cidr in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+    say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -d $AP_IPADDR/32 -p udp --dport 53 -j RETURN"
+    say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -d $AP_IPADDR/32 -p tcp --dport 53 -j RETURN"
+    say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p udp --dport 67:68 -j RETURN"
+    say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p udp --sport 67:68 -j RETURN"
+    for cidr in $(tproxy_reserved_cidrs); do
         say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -d $cidr -j RETURN"
     done
-    say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p tcp -m socket -j RETURN"
+    say "# socket bypass is disabled by default; only with MGATE_TPROXY_SOCKET_BYPASS=1:"
+    say "# iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p tcp -m socket -j RETURN"
     say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p tcp -j TPROXY --on-port $planned_port --tproxy-mark $TPROXY_MARK"
     say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p udp -j TPROXY --on-port $planned_port --tproxy-mark $TPROXY_MARK"
     say "iptables -t mangle -I PREROUTING 1 -i $AP_IF -j $TPROXY_MANGLE_CHAIN"
@@ -3870,6 +3900,7 @@ cmd_tproxy_dry_run() {
     say "iptables -t mangle -F $TPROXY_MANGLE_CHAIN 2>/dev/null || true"
     say "iptables -t mangle -X $TPROXY_MANGLE_CHAIN 2>/dev/null || true"
     say "ip rule del fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE 2>/dev/null || true"
+    say "ip route del local 0.0.0.0/0 dev lo table $TPROXY_ROUTE_TABLE 2>/dev/null || true"
     say "ip route flush table $TPROXY_ROUTE_TABLE 2>/dev/null || true"
     if [ "$current_port" = "none" ]; then
         say "# restore mihomo config: cp '$CONFIG_FILE.pre-tproxy' '$CONFIG_FILE'"
@@ -3882,6 +3913,883 @@ cmd_tproxy_dry_run() {
 
     say ""
     tproxy_info "dry-run only; no commands were executed"
+}
+tproxy_log() {
+    ensure_dirs
+    ts="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo now)"
+    printf '%s %s\n' "$ts" "$*" >> "$TPROXY_LOG_FILE" 2>/dev/null || true
+}
+
+tproxy_save_error() {
+    ensure_dirs
+    say "[ERROR] $*"
+    printf '%s\n' "$*" > "$TPROXY_LAST_ERROR_FILE" 2>/dev/null || true
+    tproxy_log "ERROR: $*"
+}
+
+tproxy_clear_error() {
+    rm -f "$TPROXY_LAST_ERROR_FILE" 2>/dev/null || true
+}
+
+tproxy_target_available() {
+    gateway_have_iptables || return 1
+    iptables -j TPROXY -h >/dev/null 2>&1
+}
+
+tproxy_socket_match_available() {
+    gateway_have_iptables || return 1
+    iptables -m socket -h >/dev/null 2>&1
+}
+tproxy_socket_bypass_rule_present() {
+    gateway_have_iptables || return 1
+    iptables -t mangle -S "$TPROXY_MANGLE_CHAIN" 2>/dev/null | grep -- '-p tcp' | grep -- '-m socket' | grep -- '-j RETURN' >/dev/null 2>&1
+}
+
+tproxy_route_local_present() {
+    have ip || return 1
+    ip route show table "$TPROXY_ROUTE_TABLE" 2>/dev/null | \
+        awk '$1 == "local" && $0 ~ /dev[[:space:]]+lo/ && ($2 == "0.0.0.0/0" || $2 == "default") {found=1} END {exit found ? 0 : 1}'
+}
+
+tproxy_mangle_chain_exists() {
+    gateway_have_iptables || return 1
+    iptables -t mangle -S "$TPROXY_MANGLE_CHAIN" >/dev/null 2>&1
+}
+
+tproxy_prerouting_hook_exists() {
+    gateway_have_iptables || return 1
+    iptables -t mangle -C PREROUTING -i "$AP_IF" -j "$TPROXY_MANGLE_CHAIN" >/dev/null 2>&1
+}
+
+tproxy_chain_has_tproxy_rule() {
+    proto="$1"
+    gateway_have_iptables || return 1
+    iptables -t mangle -S "$TPROXY_MANGLE_CHAIN" 2>/dev/null | \
+        grep -- "-p $proto" | grep -- '-j TPROXY' | grep -- "--on-port $TPROXY_PORT" >/dev/null 2>&1
+}
+
+ap_network_cidr() {
+    prefix="$(ap_netmask_prefix "$AP_NETMASK")"
+    old_ifs="$IFS"
+    IFS=.
+    set -- $AP_IPADDR
+    ip1="$1"; ip2="$2"; ip3="$3"; ip4="$4"
+    set -- $AP_NETMASK
+    nm1="$1"; nm2="$2"; nm3="$3"; nm4="$4"
+    IFS="$old_ifs"
+    [ -n "$ip1" ] && [ -n "$nm1" ] || { printf '%s/%s\n' "$AP_IPADDR" "$prefix"; return 0; }
+    printf '%s.%s.%s.%s/%s\n' "$((ip1 & nm1))" "$((ip2 & nm2))" "$((ip3 & nm3))" "$((ip4 & nm4))" "$prefix"
+}
+
+tproxy_reserved_cidrs() {
+    printf '%s\n' "$AP_IPADDR/32"
+    printf '%s\n' "$(ap_network_cidr)"
+    printf '%s\n' \
+        127.0.0.0/8 \
+        0.0.0.0/8 \
+        10.0.0.0/8 \
+        100.64.0.0/10 \
+        169.254.0.0/16 \
+        172.16.0.0/12 \
+        192.168.0.0/16 \
+        224.0.0.0/4 \
+        240.0.0.0/4 \
+        255.255.255.255/32
+}
+
+tproxy_skip_rules_complete() {
+    gateway_have_iptables || return 1
+    tproxy_mangle_chain_exists || return 1
+    for cidr in $(tproxy_reserved_cidrs); do
+        iptables -t mangle -S "$TPROXY_MANGLE_CHAIN" 2>/dev/null | grep -- "-d $cidr" | grep -- '-j RETURN' >/dev/null 2>&1 || return 1
+    done
+}
+
+tproxy_mihomo_running() {
+    mode="$(detect_service_mode)"
+    case "$mode" in
+        openwrt)
+            if [ -x "$OPENWRT_SERVICE_LINK" ] && "$OPENWRT_SERVICE_LINK" status >/dev/null 2>&1; then
+                return 0
+            fi
+            ;;
+        systemd)
+            if have systemctl && [ -e "$SYSTEMD_SERVICE_LINK" ] && systemctl is-active --quiet mgate.service >/dev/null 2>&1; then
+                return 0
+            fi
+            ;;
+    esac
+    fallback_status_quiet
+}
+
+tproxy_stop_plain_mihomo() {
+    if fallback_status_quiet; then
+        pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+        if [ -n "$pid" ]; then
+            kill "$pid" >/dev/null 2>&1 || true
+            i=0
+            while kill -0 "$pid" >/dev/null 2>&1; do
+                i=$((i + 1))
+                [ "$i" -ge 10 ] && break
+                sleep 1
+            done
+            kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
+        fi
+    fi
+    rm -f "$PID_FILE" 2>/dev/null || true
+}
+
+tproxy_start_plain_mihomo() {
+    [ -x "$CORE_BIN" ] || return 1
+    [ -f "$CONFIG_FILE" ] || return 1
+    ensure_dirs
+    nohup "$CORE_BIN" -d "$CONFIG_DIR" >> "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE" 2>/dev/null || return 1
+}
+
+tproxy_restart_mihomo() {
+    ensure_dirs
+    mode="$(detect_service_mode)"
+    case "$mode" in
+        openwrt)
+            if [ -x "$OPENWRT_SERVICE_LINK" ]; then
+                "$OPENWRT_SERVICE_LINK" restart >> "$TPROXY_LOG_FILE" 2>&1 || return 1
+            else
+                tproxy_stop_plain_mihomo
+                tproxy_start_plain_mihomo || return 1
+            fi
+            ;;
+        systemd)
+            if have systemctl && [ -e "$SYSTEMD_SERVICE_LINK" ]; then
+                systemctl restart mgate.service >> "$TPROXY_LOG_FILE" 2>&1 || return 1
+            else
+                tproxy_stop_plain_mihomo
+                tproxy_start_plain_mihomo || return 1
+            fi
+            ;;
+        *)
+            tproxy_stop_plain_mihomo
+            tproxy_start_plain_mihomo || return 1
+            ;;
+    esac
+    sleep 2
+    tproxy_mihomo_running
+}
+
+tproxy_port_listening() {
+    if have ss; then
+        ss -ltnu 2>/dev/null | awk -v p=":$TPROXY_PORT" 'index($0, p) > 0 {found=1} END {exit found ? 0 : 1}'
+        return $?
+    fi
+    if have netstat; then
+        netstat -ltnu 2>/dev/null | awk -v p=":$TPROXY_PORT" 'index($0, p) > 0 {found=1} END {exit found ? 0 : 1}'
+        return $?
+    fi
+    return 2
+}
+
+tproxy_config_backup_path() {
+    ts="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
+    printf '%s/config-before-tproxy-%s.yaml\n' "$BACKUP_DIR" "$ts"
+}
+
+tproxy_backup_config() {
+    backup_path="$(tproxy_config_backup_path)"
+    mkdir -p "$BACKUP_DIR" || return 1
+    cp -p "$CONFIG_FILE" "$backup_path" || return 1
+    printf '%s\n' "$backup_path" > "$TPROXY_CONFIG_BACKUP_FILE" 2>/dev/null || true
+    printf '%s\n' "$backup_path"
+}
+
+tproxy_config_value() {
+    key="$1"
+    [ -f "$CONFIG_FILE" ] || return 1
+    sed -n "s/^[[:space:]]*$key[[:space:]]*:[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | \
+        sed 's/[[:space:]]*#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//' | head -n 1
+}
+
+tproxy_config_bool_true() {
+    value="$(tproxy_config_value "$1" || true)"
+    [ "$value" = "true" ] || [ "$value" = "True" ] || [ "$value" = "TRUE" ]
+}
+
+tproxy_config_bind_ok() {
+    value="$(tproxy_config_value bind-address || true)"
+    [ -z "$value" ] && return 1
+    [ "$value" = "*" ] || [ "$value" = "0.0.0.0" ]
+}
+
+tproxy_config_has_out_group() {
+    grep -q "^[[:space:]]*-[[:space:]]*name:[[:space:]]*[\"']*$TPROXY_OUT_GROUP[\"']*[[:space:]]*$" "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_out_group_ok() {
+    tproxy_config_has_out_group || return 1
+    if ! tproxy_config_has_provider; then
+        return 0
+    fi
+    awk -v name="$TPROXY_OUT_GROUP" '
+        /^proxy-groups:[[:space:]]*$/ {in_groups=1; next}
+        /^rules:[[:space:]]*$/ {in_group=0; in_groups=0}
+        in_groups && /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+            line=$0
+            sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", line)
+            gsub(/^["'\'' ]+|["'\'' ]+$/, "", line)
+            in_group=(line == name)
+            next
+        }
+        in_group && /^[[:space:]]*type:[[:space:]]*url-test[[:space:]]*$/ {found=1}
+        END {exit found ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_has_in_type_rule() {
+    grep -q "^[[:space:]]*-[[:space:]]*IN-TYPE,TPROXY,$TPROXY_OUT_GROUP[[:space:]]*$" "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_has_provider() {
+    grep -q '^[[:space:]]*mgate-sub:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_group_names() {
+    awk '
+        /^proxy-groups:[[:space:]]*$/ {in_groups=1; next}
+        /^rules:[[:space:]]*$/ {in_groups=0}
+        in_groups && /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+            line=$0
+            sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", line)
+            gsub(/^["'\'' ]+|["'\'' ]+$/, "", line)
+            if (line != "" && line != "TPROXY-OUT") print line
+        }
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_set_key() {
+    key="$1"
+    value="$2"
+    tmp="$TMP_DIR/tproxy-config.$$.$key"
+    awk -v key="$key" -v value="$value" '
+        BEGIN {done=0}
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*:" {
+            print key ": " value
+            done=1
+            next
+        }
+        {print}
+        END {
+            if (!done) print key ": " value
+        }
+    ' "$CONFIG_FILE" > "$tmp" || return 1
+    mv "$tmp" "$CONFIG_FILE" || return 1
+}
+
+tproxy_config_remove_out_group() {
+    tmp="$TMP_DIR/tproxy-config.$$.remove-group"
+    awk -v name="$TPROXY_OUT_GROUP" '
+        /^proxy-groups:[[:space:]]*$/ {in_groups=1}
+        in_groups && /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+            line=$0
+            sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", line)
+            gsub(/^["'\'' ]+|["'\'' ]+$/, "", line)
+            skip=(line == name)
+        }
+        in_groups && /^rules:[[:space:]]*$/ {skip=0; in_groups=0}
+        skip {next}
+        {print}
+    ' "$CONFIG_FILE" > "$tmp" || return 1
+    mv "$tmp" "$CONFIG_FILE" || return 1
+}
+
+tproxy_config_insert_group() {
+    tmp="$TMP_DIR/tproxy-config.$$.group"
+    groups="$(tproxy_config_group_names | sed 's/^/      - /')"
+    [ -n "$groups" ] || groups="      - DIRECT"
+    if tproxy_config_has_provider; then
+        awk -v name="$TPROXY_OUT_GROUP" '
+            BEGIN {inserted=0}
+            /^rules:[[:space:]]*$/ && !inserted {
+                print "  - name: " name
+                print "    type: url-test"
+                print "    use:"
+                print "      - mgate-sub"
+                print "    url: http://www.gstatic.com/generate_204"
+                print "    interval: 300"
+                print ""
+                inserted=1
+            }
+            {print}
+        ' "$CONFIG_FILE" > "$tmp" || return 1
+    else
+        awk -v name="$TPROXY_OUT_GROUP" -v groups="$groups" '
+            BEGIN {inserted=0}
+            /^rules:[[:space:]]*$/ && !inserted {
+                print "  - name: " name
+                print "    type: select"
+                print "    proxies:"
+                print groups
+                print ""
+                inserted=1
+            }
+            {print}
+        ' "$CONFIG_FILE" > "$tmp" || return 1
+    fi
+    mv "$tmp" "$CONFIG_FILE" || return 1
+}
+
+tproxy_config_insert_rule() {
+    tmp="$TMP_DIR/tproxy-config.$$.rule"
+    awk -v group="$TPROXY_OUT_GROUP" '
+        BEGIN {inserted=0}
+        /^rules:[[:space:]]*$/ && !inserted {
+            print
+            print "  - IN-TYPE,TPROXY," group
+            inserted=1
+            next
+        }
+        {print}
+    ' "$CONFIG_FILE" > "$tmp" || return 1
+    mv "$tmp" "$CONFIG_FILE" || return 1
+}
+
+tproxy_ensure_config_port() {
+    current_port="$(tproxy_mihomo_port || true)"
+    if [ -n "$current_port" ] && [ "$current_port" != "$TPROXY_PORT" ]; then
+        tproxy_save_error "config has tproxy-port $current_port, expected $TPROXY_PORT; not overwriting user config"
+        return 1
+    fi
+
+    needs_update=0
+    [ -n "$current_port" ] || needs_update=1
+    tproxy_config_bool_true allow-lan || needs_update=1
+    tproxy_config_bind_ok || needs_update=1
+    tproxy_config_out_group_ok || needs_update=1
+    tproxy_config_has_in_type_rule || needs_update=1
+
+    if [ "$needs_update" -eq 0 ]; then
+        tproxy_ok "mihomo transparent config already present"
+        return 0
+    fi
+
+    backup_path="$(tproxy_backup_config)" || return 1
+    TPROXY_START_BACKUP="$backup_path"
+
+    if [ -z "$current_port" ]; then
+        {
+            printf '\n'
+            printf '# Added by mgate tproxy-start\n'
+            printf 'tproxy-port: %s\n' "$TPROXY_PORT"
+        } >> "$CONFIG_FILE" || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+    fi
+
+    tproxy_config_bool_true allow-lan || tproxy_config_set_key allow-lan true || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+    tproxy_config_bind_ok || tproxy_config_set_key bind-address "'*'" || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+    tproxy_config_out_group_ok || { tproxy_config_remove_out_group && tproxy_config_insert_group; } || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+    tproxy_config_has_in_type_rule || tproxy_config_insert_rule || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+
+    printf '%s\n' "$backup_path" > "$TPROXY_CONFIG_OWNED_FILE" 2>/dev/null || true
+    TPROXY_START_CONFIG_MODIFIED=1
+    tproxy_ok "mihomo config updated for TProxy: port=$TPROXY_PORT group=$TPROXY_OUT_GROUP"
+}
+
+tproxy_restore_config_from_backup() {
+    backup_path="$1"
+    [ -n "$backup_path" ] || return 1
+    [ -f "$backup_path" ] || return 1
+    cp -p "$backup_path" "$CONFIG_FILE" || return 1
+}
+
+tproxy_restore_owned_config() {
+    backup_path="$(sed -n '1p' "$TPROXY_CONFIG_OWNED_FILE" 2>/dev/null || true)"
+    if [ -z "$backup_path" ]; then
+        backup_path="$(sed -n '1p' "$TPROXY_CONFIG_BACKUP_FILE" 2>/dev/null || true)"
+    fi
+    if [ -z "$backup_path" ]; then
+        tproxy_warn "no mgate-owned tproxy config backup marker found; config not changed"
+        return 0
+    fi
+    if tproxy_restore_config_from_backup "$backup_path"; then
+        rm -f "$TPROXY_CONFIG_OWNED_FILE" "$TPROXY_CONFIG_BACKUP_FILE" 2>/dev/null || true
+        tproxy_ok "mihomo config restored from $backup_path"
+        if tproxy_restart_mihomo; then
+            tproxy_ok "mihomo restarted after config restore"
+            return 0
+        fi
+        tproxy_warn "mihomo restart failed after config restore"
+        return 1
+    fi
+    tproxy_warn "failed to restore mihomo config from $backup_path"
+    return 1
+}
+
+tproxy_test_config() {
+    ensure_dirs
+    out="$TMP_DIR/tproxy-config-test.out"
+    [ -x "$CORE_BIN" ] || return 1
+    [ -f "$CONFIG_FILE" ] || return 1
+    "$CORE_BIN" -t -f "$CONFIG_FILE" > "$out" 2>&1
+}
+
+tproxy_delete_prerouting_jumps() {
+    gateway_have_iptables || return 0
+    while iptables -t mangle -D PREROUTING -i "$AP_IF" -j "$TPROXY_MANGLE_CHAIN" >/dev/null 2>&1; do
+        :
+    done
+    while iptables -t mangle -D PREROUTING -j "$TPROXY_MANGLE_CHAIN" >/dev/null 2>&1; do
+        :
+    done
+    iptables -t mangle -S PREROUTING 2>/dev/null | grep -- "-j $TPROXY_MANGLE_CHAIN" >/dev/null 2>&1 && return 1
+    return 0
+}
+
+tproxy_flush_delete_chain() {
+    gateway_have_iptables || return 0
+    iptables -t mangle -F "$TPROXY_MANGLE_CHAIN" >/dev/null 2>&1 || true
+    iptables -t mangle -X "$TPROXY_MANGLE_CHAIN" >/dev/null 2>&1 || true
+    tproxy_mangle_chain_exists && return 1
+    return 0
+}
+
+tproxy_remove_ip_rules() {
+    have ip || return 0
+    while ip rule del fwmark "$TPROXY_MARK" lookup "$TPROXY_ROUTE_TABLE" >/dev/null 2>&1; do
+        :
+    done
+    tproxy_ip_rule_present && return 1
+    return 0
+}
+
+tproxy_remove_route_table() {
+    have ip || return 0
+    ip route del local 0.0.0.0/0 dev lo table "$TPROXY_ROUTE_TABLE" >/dev/null 2>&1 || true
+    ip route flush table "$TPROXY_ROUTE_TABLE" >/dev/null 2>&1 || true
+    tproxy_route_local_present && return 1
+    return 0
+}
+
+tproxy_remove_rules() {
+    failed=0
+    tproxy_delete_prerouting_jumps || failed=1
+    tproxy_flush_delete_chain || failed=1
+    tproxy_remove_ip_rules || failed=1
+    tproxy_remove_route_table || failed=1
+    [ "$failed" -eq 0 ]
+}
+
+tproxy_add_ip_rule() {
+    tproxy_ip_rule_present && return 0
+    ip rule add fwmark "$TPROXY_MARK" lookup "$TPROXY_ROUTE_TABLE"
+}
+
+tproxy_add_route() {
+    tproxy_route_local_present && return 0
+    ip route add local 0.0.0.0/0 dev lo table "$TPROXY_ROUTE_TABLE"
+}
+
+tproxy_build_mangle_chain() {
+    tproxy_delete_prerouting_jumps
+    tproxy_flush_delete_chain
+    iptables -t mangle -N "$TPROXY_MANGLE_CHAIN" || return 1
+
+    iptables -t mangle -A "$TPROXY_MANGLE_CHAIN" -d "$AP_IPADDR/32" -p udp --dport 53 -j RETURN || return 1
+    iptables -t mangle -A "$TPROXY_MANGLE_CHAIN" -d "$AP_IPADDR/32" -p tcp --dport 53 -j RETURN || return 1
+    iptables -t mangle -A "$TPROXY_MANGLE_CHAIN" -p udp --dport 67:68 -j RETURN || return 1
+    iptables -t mangle -A "$TPROXY_MANGLE_CHAIN" -p udp --sport 67:68 -j RETURN || return 1
+
+    for cidr in $(tproxy_reserved_cidrs); do
+        iptables -t mangle -A "$TPROXY_MANGLE_CHAIN" -d "$cidr" -j RETURN || return 1
+    done
+
+    if [ "$TPROXY_SOCKET_BYPASS" = "1" ]; then
+        if tproxy_socket_match_available; then
+            iptables -t mangle -A "$TPROXY_MANGLE_CHAIN" -p tcp -m socket -j RETURN || return 1
+            tproxy_warn "socket match bypass rule installed by MGATE_TPROXY_SOCKET_BYPASS=1; AP traffic may bypass TProxy"
+        else
+            tproxy_warn "socket match unavailable; continuing without socket bypass rule"
+        fi
+    else
+        tproxy_ok "socket match bypass disabled; AP TCP traffic will not be returned to NAT by socket match"
+    fi
+
+    iptables -t mangle -A "$TPROXY_MANGLE_CHAIN" -p tcp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "$TPROXY_MARK" || return 1
+    iptables -t mangle -A "$TPROXY_MANGLE_CHAIN" -p udp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "$TPROXY_MARK" || return 1
+
+    iptables -t mangle -C PREROUTING -i "$AP_IF" -j "$TPROXY_MANGLE_CHAIN" >/dev/null 2>&1 || \
+        iptables -t mangle -I PREROUTING 1 -i "$AP_IF" -j "$TPROXY_MANGLE_CHAIN" || return 1
+}
+
+tproxy_write_enabled() {
+    ensure_dirs
+    {
+        printf 'enabled_at=%s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo now)"
+        printf 'port=%s\n' "$TPROXY_PORT"
+        printf 'mark=%s\n' "$TPROXY_MARK"
+        printf 'route_table=%s\n' "$TPROXY_ROUTE_TABLE"
+        printf 'mangle_chain=%s\n' "$TPROXY_MANGLE_CHAIN"
+        if [ -n "${TPROXY_START_BACKUP:-}" ]; then
+            printf 'config_backup=%s\n' "$TPROXY_START_BACKUP"
+        fi
+    } > "$TPROXY_ENABLED_FILE" || return 1
+}
+
+tproxy_core_rules_active() {
+    [ "$(tproxy_state_mangle)" = "yes" ] || return 1
+    tproxy_ip_rule_present || return 1
+    tproxy_route_local_present || return 1
+    tproxy_prerouting_hook_exists || return 1
+    tproxy_chain_has_tproxy_rule tcp || return 1
+    tproxy_chain_has_tproxy_rule udp || return 1
+}
+
+tproxy_rollback() {
+    reason="$1"
+    tproxy_warn "tproxy-start failed; rolling back: $reason"
+    tproxy_save_error "$reason"
+    rollback_failed=0
+
+    if tproxy_remove_rules; then
+        tproxy_ok "TProxy rules removed during rollback"
+    else
+        tproxy_warn "failed to remove some TProxy rules during rollback"
+        rollback_failed=1
+    fi
+
+    if [ "${TPROXY_START_CONFIG_MODIFIED:-0}" = "1" ]; then
+        if tproxy_restore_config_from_backup "$TPROXY_START_BACKUP"; then
+            rm -f "$TPROXY_CONFIG_OWNED_FILE" "$TPROXY_CONFIG_BACKUP_FILE" 2>/dev/null || true
+            tproxy_ok "mihomo config restored during rollback"
+            if tproxy_restart_mihomo; then
+                tproxy_ok "mihomo restarted after rollback"
+            else
+                tproxy_warn "mihomo restart failed after rollback"
+                rollback_failed=1
+            fi
+        else
+            tproxy_warn "failed to restore mihomo config during rollback"
+            rollback_failed=1
+        fi
+    fi
+
+    rm -f "$TPROXY_ENABLED_FILE" 2>/dev/null || true
+    if [ "$rollback_failed" -eq 0 ]; then
+        tproxy_ok "rollback complete; NAT gateway fallback was preserved"
+    else
+        tproxy_warn "rollback finished with warnings; inspect mgate tproxy-debug"
+    fi
+    return 1
+}
+
+tproxy_start_preflight() {
+    cmd_tproxy_check
+
+    gateway_have_iptables || { tproxy_save_error "iptables is required"; return 1; }
+    tproxy_mangle_table_available || { tproxy_save_error "iptables mangle table is unavailable"; return 1; }
+    tproxy_target_available || { tproxy_save_error "TPROXY target is unavailable"; return 1; }
+    have ip || { tproxy_save_error "ip command is required"; return 1; }
+    ip rule show >/dev/null 2>&1 || { tproxy_save_error "ip rule is unavailable"; return 1; }
+    ip route show table all >/dev/null 2>&1 || { tproxy_save_error "ip route is unavailable"; return 1; }
+    [ -x "$CORE_BIN" ] || { tproxy_save_error "mihomo binary is missing or not executable: $CORE_BIN"; return 1; }
+    [ -f "$CONFIG_FILE" ] || { tproxy_save_error "mihomo config missing: $CONFIG_FILE"; return 1; }
+
+    ap_is_running_healthy || { tproxy_save_error "AP is not healthy; run mgate ap-status"; return 1; }
+    interface_exists "$AP_UPSTREAM" || { tproxy_save_error "$AP_UPSTREAM does not exist"; return 1; }
+    ip route show default 2>/dev/null | grep -q "dev $AP_UPSTREAM" || { tproxy_save_error "default route does not use $AP_UPSTREAM"; return 1; }
+    gateway_rules_active || { tproxy_save_error "NAT gateway fallback is not active; run mgate gateway-start"; return 1; }
+}
+
+cmd_tproxy_start() {
+    need_root
+    ensure_dirs
+    ap_load_config
+    TPROXY_START_CONFIG_MODIFIED=0
+    TPROXY_START_BACKUP=""
+    tproxy_clear_error
+
+    tproxy_info "starting TProxy enable sequence"
+    tproxy_info "planned port: $TPROXY_PORT"
+    tproxy_info "planned mark: $TPROXY_MARK"
+    tproxy_info "planned route table: $TPROXY_ROUTE_TABLE"
+    tproxy_info "planned mangle chain: $TPROXY_MANGLE_CHAIN"
+    tproxy_info "NAT gateway fallback will be preserved"
+
+    tproxy_start_preflight || return 1
+
+    tproxy_info "backing up and checking mihomo config"
+    if ! tproxy_ensure_config_port; then
+        [ -f "$TPROXY_LAST_ERROR_FILE" ] || tproxy_save_error "failed to backup or update mihomo config"
+        [ "${TPROXY_START_CONFIG_MODIFIED:-0}" = "1" ] && tproxy_rollback "failed to backup or update mihomo config"
+        return 1
+    fi
+    if tproxy_test_config; then
+        tproxy_ok "mihomo config test passed"
+    else
+        tproxy_rollback "mihomo config test failed; see $TMP_DIR/tproxy-config-test.out"
+        return 1
+    fi
+
+    tproxy_info "restarting mihomo to apply tproxy-port"
+    if tproxy_restart_mihomo; then
+        tproxy_ok "mihomo restarted"
+    else
+        tproxy_rollback "mihomo restart failed"
+        return 1
+    fi
+
+    if tproxy_port_listening; then
+        tproxy_ok "mihomo tproxy-port listening: $TPROXY_PORT"
+    else
+        listen_rc=$?
+        if [ "$listen_rc" -eq 2 ]; then
+            tproxy_warn "ss/netstat missing; cannot verify tproxy-port listener"
+        else
+            tproxy_rollback "mihomo tproxy-port $TPROXY_PORT is not listening"
+            return 1
+        fi
+    fi
+
+    tproxy_info "installing TProxy routing and mangle rules"
+    if ! tproxy_add_ip_rule; then
+        tproxy_rollback "failed to add ip rule fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
+        return 1
+    fi
+    tproxy_ok "ip rule active: fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
+
+    if ! tproxy_add_route; then
+        tproxy_rollback "failed to add local route table $TPROXY_ROUTE_TABLE"
+        return 1
+    fi
+    tproxy_ok "route table active: local 0.0.0.0/0 dev lo table $TPROXY_ROUTE_TABLE"
+
+    if ! tproxy_build_mangle_chain; then
+        tproxy_rollback "failed to build mangle chain $TPROXY_MANGLE_CHAIN"
+        return 1
+    fi
+    tproxy_ok "mangle rules installed for $AP_IF -> $TPROXY_PORT"
+
+    if ! tproxy_core_rules_active; then
+        tproxy_rollback "post-check failed: TProxy core rules are incomplete"
+        return 1
+    fi
+
+    tproxy_write_enabled || { tproxy_rollback "failed to write $TPROXY_ENABLED_FILE"; return 1; }
+    tproxy_log "TProxy enabled on $AP_IF port $TPROXY_PORT mark $TPROXY_MARK table $TPROXY_ROUTE_TABLE"
+    tproxy_ok "TProxy enabled; rollback command: mgate tproxy-stop"
+    cmd_tproxy_status
+}
+
+cmd_tproxy_stop() {
+    need_root
+    ensure_dirs
+    ap_load_config
+    tproxy_info "stopping mgate TProxy rules"
+
+    if tproxy_remove_rules; then
+        tproxy_ok "TProxy rules removed"
+    else
+        tproxy_warn "some TProxy rules may remain; inspect mgate tproxy-debug"
+    fi
+    rm -f "$TPROXY_ENABLED_FILE" 2>/dev/null || true
+
+    if [ -f "$TPROXY_CONFIG_OWNED_FILE" ]; then
+        tproxy_info "restoring mgate-owned mihomo config backup"
+        if tproxy_restore_owned_config; then
+            tproxy_ok "mgate-owned tproxy-port config restored"
+        else
+            tproxy_warn "could not restore mgate-owned config; inspect markers in $DATA_DIR"
+        fi
+    else
+        tproxy_info "mihomo config not changed; no mgate-owned tproxy-port marker found"
+    fi
+
+    tproxy_log "TProxy stopped; NAT gateway fallback preserved"
+    cmd_tproxy_status
+    cmd_gateway_status
+}
+
+tproxy_doctor_section() {
+    say ""
+    say "[$1]"
+}
+
+tproxy_doctor_ok() {
+    TPROXY_DOCTOR_OK=$((TPROXY_DOCTOR_OK + 1))
+    say "[OK] $*"
+}
+
+tproxy_doctor_warn() {
+    TPROXY_DOCTOR_WARN=$((TPROXY_DOCTOR_WARN + 1))
+    say "[WARN] $*"
+}
+
+tproxy_doctor_fail() {
+    TPROXY_DOCTOR_FAIL=$((TPROXY_DOCTOR_FAIL + 1))
+    say "[ERROR] $*"
+}
+
+tproxy_dns_safety_check() {
+    if [ -f "$AP_DNSMASQ_CONF" ]; then
+        listen_addr="$(sed -n 's/^listen-address=//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        if [ "$listen_addr" = "$AP_IPADDR" ]; then
+            tproxy_doctor_ok "dnsmasq listens on $AP_IPADDR"
+        else
+            tproxy_doctor_fail "dnsmasq listen-address is ${listen_addr:-missing}, expected $AP_IPADDR"
+        fi
+        dns_opt="$(sed -n 's/^dhcp-option=6,//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        if [ "$dns_opt" = "$AP_IPADDR" ]; then
+            tproxy_doctor_ok "DHCP DNS option points to $AP_IPADDR"
+        else
+            tproxy_doctor_fail "DHCP DNS option is ${dns_opt:-missing}, expected $AP_IPADDR"
+        fi
+    else
+        tproxy_doctor_fail "dnsmasq config missing: $AP_DNSMASQ_CONF"
+    fi
+}
+
+cmd_tproxy_doctor() {
+    ap_load_config
+    TPROXY_DOCTOR_OK=0
+    TPROXY_DOCTOR_WARN=0
+    TPROXY_DOCTOR_FAIL=0
+
+    tproxy_doctor_section "summary"
+    say "[INFO] mgate version: $MGATE_VERSION"
+    say "[INFO] tproxy enabled: $(tproxy_enabled_state "$(tproxy_state_mangle)" "$(tproxy_state_ip_rule)" "$(tproxy_state_route_table)" "$(tproxy_mihomo_port 2>/dev/null || echo none)")"
+    say "[INFO] ap interface: $AP_IF"
+    say "[INFO] upstream interface: $AP_UPSTREAM"
+    say "[INFO] tproxy port: $TPROXY_PORT"
+    say "[INFO] mark: $TPROXY_MARK"
+    say "[INFO] route table: $TPROXY_ROUTE_TABLE"
+
+    tproxy_doctor_section "AP baseline"
+    interface_exists "$AP_IF" && tproxy_doctor_ok "$AP_IF exists" || tproxy_doctor_fail "$AP_IF does not exist"
+    ap_link="$(ap_iface_link_state "$AP_IF")"
+    [ "$ap_link" = "up" ] && tproxy_doctor_ok "$AP_IF link is up" || tproxy_doctor_fail "$AP_IF link is $ap_link"
+    ap_ip="$(ap_ipv4_addr "$AP_IF" || true)"
+    [ -n "$ap_ip" ] && tproxy_doctor_ok "$AP_IF ip: $ap_ip" || tproxy_doctor_fail "$AP_IF has no IPv4 address"
+    ap_pid_running "$AP_HOSTAPD_PID_FILE" && tproxy_doctor_ok "hostapd running: $(sed -n '1p' "$AP_HOSTAPD_PID_FILE" 2>/dev/null)" || tproxy_doctor_fail "hostapd is not running"
+    ap_pid_running "$AP_DNSMASQ_PID_FILE" && tproxy_doctor_ok "dnsmasq running: $(sed -n '1p' "$AP_DNSMASQ_PID_FILE" 2>/dev/null)" || tproxy_doctor_fail "dnsmasq is not running"
+
+    tproxy_doctor_section "gateway fallback"
+    gateway_rules_active && tproxy_doctor_ok "NAT active: yes" || tproxy_doctor_fail "NAT active: no"
+    [ "$(gateway_ip_forward_value)" = "1" ] && tproxy_doctor_ok "IPv4 forwarding enabled" || tproxy_doctor_warn "IPv4 forwarding is $(gateway_ip_forward_value)"
+    if gateway_have_iptables; then
+        iptables -t nat -C POSTROUTING -j "$GATEWAY_NAT_CHAIN" >/dev/null 2>&1 && tproxy_doctor_ok "POSTROUTING fallback jump exists" || tproxy_doctor_fail "POSTROUTING fallback jump missing"
+        iptables -C FORWARD -j "$GATEWAY_FORWARD_CHAIN" >/dev/null 2>&1 && tproxy_doctor_ok "FORWARD fallback jump exists" || tproxy_doctor_fail "FORWARD fallback jump missing"
+        iptables -t nat -S "$GATEWAY_NAT_CHAIN" 2>/dev/null | grep -q MASQUERADE && tproxy_doctor_ok "MASQUERADE rule exists" || tproxy_doctor_fail "MASQUERADE rule missing"
+    else
+        tproxy_doctor_fail "iptables missing; cannot inspect NAT fallback"
+    fi
+
+    tproxy_doctor_section "mihomo"
+    [ -x "$CORE_BIN" ] && tproxy_doctor_ok "mihomo binary exists: $CORE_BIN" || tproxy_doctor_fail "mihomo binary missing: $CORE_BIN"
+    tproxy_mihomo_running && tproxy_doctor_ok "mihomo running" || tproxy_doctor_fail "mihomo is not running"
+    [ -f "$CONFIG_FILE" ] && tproxy_doctor_ok "mihomo config exists: $CONFIG_FILE" || tproxy_doctor_fail "mihomo config missing: $CONFIG_FILE"
+    current_port="$(tproxy_mihomo_port || true)"
+    [ -n "$current_port" ] && tproxy_doctor_ok "mihomo tproxy-port: $current_port" || tproxy_doctor_fail "mihomo tproxy-port: none"
+    tproxy_config_bool_true allow-lan && tproxy_doctor_ok "allow-lan enabled" || tproxy_doctor_fail "allow-lan is not enabled for transparent AP clients"
+    bind_addr="$(tproxy_config_value bind-address || true)"
+    tproxy_config_bind_ok && tproxy_doctor_ok "bind-address accepts LAN traffic: ${bind_addr:-missing}" || tproxy_doctor_fail "bind-address does not accept LAN traffic: ${bind_addr:-missing}"
+    tproxy_config_has_out_group && tproxy_doctor_ok "transparent selector exists: $TPROXY_OUT_GROUP" || tproxy_doctor_fail "transparent selector missing: $TPROXY_OUT_GROUP"
+    tproxy_config_has_in_type_rule && tproxy_doctor_ok "IN-TYPE TPROXY rule routes to $TPROXY_OUT_GROUP" || tproxy_doctor_fail "IN-TYPE TPROXY rule missing; traffic may hit MATCH,REJECT"
+    if tproxy_port_listening; then
+        tproxy_doctor_ok "tproxy-port listening: $TPROXY_PORT"
+    else
+        listen_rc=$?
+        if [ "$listen_rc" -eq 2 ]; then
+            tproxy_doctor_warn "cannot verify tproxy-port listener; ss/netstat missing"
+        else
+            tproxy_doctor_fail "tproxy-port not listening: $TPROXY_PORT"
+        fi
+    fi
+
+    tproxy_doctor_section "routing"
+    tproxy_ip_rule_present && tproxy_doctor_ok "ip rule fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE exists" || tproxy_doctor_fail "ip rule fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE missing"
+    tproxy_route_local_present && tproxy_doctor_ok "route table $TPROXY_ROUTE_TABLE local route exists" || tproxy_doctor_fail "route table $TPROXY_ROUTE_TABLE local route missing"
+
+    tproxy_doctor_section "mangle"
+    tproxy_mangle_chain_exists && tproxy_doctor_ok "chain $TPROXY_MANGLE_CHAIN exists" || tproxy_doctor_fail "chain $TPROXY_MANGLE_CHAIN missing"
+    tproxy_prerouting_hook_exists && tproxy_doctor_ok "PREROUTING hook exists" || tproxy_doctor_fail "PREROUTING hook missing"
+    tproxy_chain_has_tproxy_rule tcp && tproxy_doctor_ok "TCP TPROXY rule exists" || tproxy_doctor_fail "TCP TPROXY rule missing"
+    tproxy_chain_has_tproxy_rule udp && tproxy_doctor_ok "UDP TPROXY rule exists" || tproxy_doctor_fail "UDP TPROXY rule missing"
+    tproxy_skip_rules_complete && tproxy_doctor_ok "reserved/local skip rules exist" || tproxy_doctor_fail "reserved/local skip rules incomplete"
+    if tproxy_socket_bypass_rule_present; then
+        if [ "$TPROXY_SOCKET_BYPASS" = "1" ]; then
+            tproxy_doctor_warn "socket bypass rule active by MGATE_TPROXY_SOCKET_BYPASS=1"
+        else
+            tproxy_doctor_fail "socket bypass rule active; AP TCP traffic may leak to NAT instead of TProxy"
+        fi
+    else
+        tproxy_doctor_ok "socket bypass rule absent"
+    fi
+
+    tproxy_doctor_section "packet counters"
+    if gateway_have_iptables && iptables -t mangle -L "$TPROXY_MANGLE_CHAIN" -n -v >/dev/null 2>&1; then
+        iptables -t mangle -L "$TPROXY_MANGLE_CHAIN" -n -v 2>/dev/null | sed -n '1,30p'
+    else
+        tproxy_doctor_warn "cannot read $TPROXY_MANGLE_CHAIN counters"
+    fi
+    gateway_doctor_chain_counters
+
+    tproxy_doctor_section "DNS safety"
+    tproxy_dns_safety_check
+
+    say ""
+    say "[INFO] tproxy doctor summary: OK=$TPROXY_DOCTOR_OK WARN=$TPROXY_DOCTOR_WARN ERROR=$TPROXY_DOCTOR_FAIL"
+    if [ "$TPROXY_DOCTOR_FAIL" -gt 0 ]; then
+        say "[ERROR] TProxy baseline is not healthy"
+        return 1
+    fi
+    if [ "$TPROXY_DOCTOR_WARN" -gt 0 ]; then
+        say "[WARN] TProxy baseline works with warnings"
+        return 0
+    fi
+    say "[OK] TProxy baseline is healthy"
+}
+
+cmd_tproxy_debug() {
+    ap_load_config
+    say ""
+    say "[tproxy-status]"
+    cmd_tproxy_status
+    say ""
+    say "[tproxy-check]"
+    cmd_tproxy_check
+    say ""
+    say "[mihomo transparent config]"
+    if [ -f "$CONFIG_FILE" ]; then
+        grep -n -e '^[[:space:]]*allow-lan[[:space:]]*:' \
+            -e '^[[:space:]]*bind-address[[:space:]]*:' \
+            -e '^[[:space:]]*tproxy-port[[:space:]]*:' \
+            -e "^[[:space:]]*-[[:space:]]*name:[[:space:]]*[\"']*$TPROXY_OUT_GROUP[\"']*[[:space:]]*$" \
+            -e "^[[:space:]]*-[[:space:]]*IN-TYPE,TPROXY,$TPROXY_OUT_GROUP[[:space:]]*$" \
+            -e '^[[:space:]]*-[[:space:]]*MATCH,REJECT[[:space:]]*$' \
+            "$CONFIG_FILE" 2>/dev/null || true
+    else
+        say "config missing: $CONFIG_FILE"
+    fi
+    say ""
+    say "[ip rule]"
+    if have ip; then ip rule show 2>/dev/null || true; else say "ip command missing"; fi
+    say ""
+    say "[route table $TPROXY_ROUTE_TABLE]"
+    if have ip; then ip route show table "$TPROXY_ROUTE_TABLE" 2>/dev/null || true; else say "ip command missing"; fi
+    say ""
+    say "[mangle rules]"
+    if gateway_have_iptables; then iptables -t mangle -S 2>/dev/null || true; else say "iptables missing"; fi
+    say ""
+    say "[mangle counters]"
+    if gateway_have_iptables; then iptables -t mangle -L "$TPROXY_MANGLE_CHAIN" -n -v 2>/dev/null || true; else say "iptables missing"; fi
+    say ""
+    say "[gateway-status]"
+    cmd_gateway_status
+    say ""
+    say "[tproxy log]"
+    if [ -f "$TPROXY_LOG_FILE" ]; then tail -80 "$TPROXY_LOG_FILE" 2>/dev/null || sed -n '1,80p' "$TPROXY_LOG_FILE" 2>/dev/null; else say "no tproxy log"; fi
+    say ""
+    say "[mihomo log]"
+    if [ -f "$LOG_FILE" ]; then tail -80 "$LOG_FILE" 2>/dev/null || sed -n '1,80p' "$LOG_FILE" 2>/dev/null; else say "no mihomo log"; fi
+    say ""
+    say "[last error]"
+    if [ -f "$TPROXY_LAST_ERROR_FILE" ]; then sed -n '1,80p' "$TPROXY_LAST_ERROR_FILE" 2>/dev/null; else say "no last error"; fi
 }
 backup_copy_dir() {
     src="$1"
@@ -5171,6 +6079,10 @@ NAT 网关：
   mgate tproxy-status       只读查看 TProxy 状态
   mgate tproxy-plan         输出 TProxy 启用计划
   mgate tproxy-dry-run      输出未来启用命令但不执行
+  mgate tproxy-start        启用透明代理 TProxy 规则
+  mgate tproxy-stop         停止并清理 mgate TProxy 规则
+  mgate tproxy-doctor       检查 TProxy 闭环健康状态
+  mgate tproxy-debug        输出 TProxy 排障信息
 
 备份与恢复：
   mgate backup [label]      创建备份
@@ -5350,6 +6262,10 @@ main() {
         tproxy-status) cmd_tproxy_status "$@" ;;
         tproxy-plan) cmd_tproxy_plan "$@" ;;
         tproxy-dry-run) cmd_tproxy_dry_run "$@" ;;
+        tproxy-start) cmd_tproxy_start "$@" ;;
+        tproxy-stop) cmd_tproxy_stop "$@" ;;
+        tproxy-doctor) cmd_tproxy_doctor "$@" ;;
+        tproxy-debug) cmd_tproxy_debug "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
