@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc2"
+MGATE_VERSION="0.4.0-rc4"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -2488,6 +2488,8 @@ ap_write_dnsmasq_conf() {
 interface=$AP_IF
 bind-interfaces
 listen-address=$AP_IPADDR
+port=53
+resolv-file=/etc/resolv.conf
 dhcp-range=$AP_DHCP_START,$AP_DHCP_END,$AP_NETMASK,$AP_DHCP_LEASE
 dhcp-option=3,$AP_IPADDR
 dhcp-option=6,$AP_IPADDR
@@ -2571,7 +2573,7 @@ ap_run_check() {
     ap_check_command ip "required to configure ap0 IP address" || AP_CHECK_MISSING_DEPS=1
     ap_check_command iw "required to create ap0 and detect wlan channel" || AP_CHECK_MISSING_DEPS=1
     ap_check_command hostapd "required to create WiFi AP" || AP_CHECK_MISSING_DEPS=1
-    ap_check_command dnsmasq "required to provide DHCP for AP clients" || AP_CHECK_MISSING_DEPS=1
+    ap_check_command dnsmasq "required to provide DHCP and DNS for AP clients" || AP_CHECK_MISSING_DEPS=1
 
     info "checking wireless upstream..."
     if interface_exists "$AP_UPSTREAM"; then
@@ -2632,7 +2634,7 @@ ap_install_deps_run() {
 
     info "AP dependency packages: $AP_DEP_PACKAGES"
     info "hostapd: create AP"
-    info "dnsmasq: DHCP for AP clients"
+    info "dnsmasq: DHCP and DNS forwarding for AP clients"
     info "iw: wireless interface/channel control"
     info "iproute2: ip command"
 
@@ -2831,7 +2833,7 @@ cmd_ap_start() {
     fi
 
     ok "AP started on $AP_IF ($AP_IPADDR/$prefix), ssid=$AP_SSID, channel=$channel"
-    warn "AP mode only provides WiFi and DHCP in this release; no NAT, forwarding, TProxy, or gateway rules were enabled"
+    warn "AP mode provides WiFi, DHCP, and DNS forwarding only; no NAT, forwarding, TProxy, or gateway rules were enabled"
 }
 
 cmd_ap_stop() {
@@ -3059,6 +3061,177 @@ cmd_gateway_status() {
         warn "ap healthy: no"
     fi
 }
+
+debug_section() {
+    say ""
+    say "[$1]"
+}
+
+debug_info() { say "[INFO] $*"; }
+debug_ok() { say "[OK] $*"; }
+debug_warn() { say "[WARN] $*"; }
+
+debug_iptables_chain() {
+    table="$1"
+    chain="$2"
+    if ! gateway_have_iptables; then
+        debug_warn "iptables missing; cannot show $chain"
+        return 0
+    fi
+    if iptables -t "$table" -S "$chain" >/dev/null 2>&1; then
+        iptables -t "$table" -S "$chain" 2>&1
+    else
+        debug_warn "$chain not found in $table table"
+    fi
+}
+
+gateway_debug_iptables() {
+    if ! gateway_have_iptables; then
+        debug_warn "iptables missing"
+        return 0
+    fi
+
+    if iptables -t nat -C POSTROUTING -j "$GATEWAY_NAT_CHAIN" >/dev/null 2>&1; then
+        debug_ok "POSTROUTING jump to $GATEWAY_NAT_CHAIN: yes"
+    else
+        debug_warn "POSTROUTING jump to $GATEWAY_NAT_CHAIN: no"
+    fi
+    if iptables -C FORWARD -j "$GATEWAY_FORWARD_CHAIN" >/dev/null 2>&1; then
+        debug_ok "FORWARD jump to $GATEWAY_FORWARD_CHAIN: yes"
+    else
+        debug_warn "FORWARD jump to $GATEWAY_FORWARD_CHAIN: no"
+    fi
+
+    say ""
+    say "nat chain $GATEWAY_NAT_CHAIN:"
+    debug_iptables_chain nat "$GATEWAY_NAT_CHAIN"
+    say ""
+    say "filter chain $GATEWAY_FORWARD_CHAIN:"
+    debug_iptables_chain filter "$GATEWAY_FORWARD_CHAIN"
+    say ""
+    say "entry jumps:"
+    iptables -t nat -S POSTROUTING 2>/dev/null | grep "$GATEWAY_NAT_CHAIN" || debug_warn "no POSTROUTING entry jump found"
+    iptables -S FORWARD 2>/dev/null | grep "$GATEWAY_FORWARD_CHAIN" || debug_warn "no FORWARD entry jump found"
+}
+
+gateway_debug_dnsmasq_log() {
+    if [ ! -s "$AP_DNSMASQ_LOG_FILE" ]; then
+        debug_warn "dnsmasq log not found or empty: $AP_DNSMASQ_LOG_FILE"
+        return 0
+    fi
+    if have tail; then
+        dhcp_lines="$(tail -80 "$AP_DNSMASQ_LOG_FILE" 2>/dev/null | grep 'dnsmasq-dhcp' | tail -30 2>/dev/null || true)"
+        if [ -n "$dhcp_lines" ]; then
+            printf '%s\n' "$dhcp_lines"
+        else
+            debug_warn "no dnsmasq-dhcp entries in recent log"
+        fi
+    else
+        sed -n '$p' "$AP_DNSMASQ_LOG_FILE" 2>/dev/null || true
+    fi
+}
+
+gateway_debug_dns_hint() {
+    debug_info "AP clients should receive DNS server: $AP_IPADDR"
+    if [ -f "$AP_DNSMASQ_CONF" ]; then
+        dns_opt="$(sed -n 's/^dhcp-option=6,//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        [ -n "$dns_opt" ] && debug_info "dnsmasq DHCP DNS option: $dns_opt" || debug_warn "dnsmasq DHCP DNS option not found"
+        listen_addr="$(sed -n 's/^listen-address=//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        [ -n "$listen_addr" ] && debug_info "dnsmasq listen address: $listen_addr" || debug_warn "dnsmasq listen address not found"
+        dns_port="$(sed -n 's/^port=//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        if [ -z "$dns_port" ]; then
+            debug_info "dnsmasq DNS forwarding: enabled on default port 53"
+        elif [ "$dns_port" = "0" ]; then
+            debug_warn "dnsmasq DNS forwarding: disabled (port=0)"
+        else
+            debug_info "dnsmasq DNS forwarding: enabled on port $dns_port"
+        fi
+        resolv_file="$(sed -n 's/^resolv-file=//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        [ -n "$resolv_file" ] || resolv_file="/etc/resolv.conf"
+        debug_info "dnsmasq upstream DNS source: $resolv_file"
+        static_servers="$(sed -n 's/^server=//p' "$AP_DNSMASQ_CONF" 2>/dev/null || true)"
+        if [ -n "$static_servers" ]; then
+            say "dnsmasq static upstream DNS:"
+            printf '%s\n' "$static_servers"
+        fi
+    else
+        debug_warn "dnsmasq config not found: $AP_DNSMASQ_CONF"
+    fi
+    if [ -r /etc/resolv.conf ]; then
+        say "resolv.conf nameservers:"
+        grep '^nameserver[[:space:]]' /etc/resolv.conf 2>/dev/null || debug_warn "no nameserver entries in /etc/resolv.conf"
+    else
+        debug_warn "/etc/resolv.conf not readable"
+    fi
+}
+
+cmd_gateway_debug() {
+    ap_load_config
+    debug_section "summary"
+    debug_info "mgate version: $MGATE_VERSION"
+    debug_info "workdir: $WORKDIR"
+    debug_info "gateway mode: nat"
+    debug_info "transparent proxy: not enabled"
+    debug_info "ap interface: $AP_IF"
+    debug_info "upstream interface: $AP_UPSTREAM"
+    debug_info "subnet: $(gateway_subnet)"
+
+    debug_section "ip forward"
+    debug_info "ipv4 forwarding: $(gateway_ip_forward_value)"
+    if [ -f "$GATEWAY_IP_FORWARD_PREV" ]; then
+        debug_info "saved previous ip_forward: $(sed -n '1p' "$GATEWAY_IP_FORWARD_PREV" 2>/dev/null || echo unknown)"
+    else
+        debug_info "saved previous ip_forward: none"
+    fi
+
+    debug_section "AP health"
+    if interface_exists "$AP_IF"; then
+        debug_info "$AP_IF exists: yes"
+        debug_info "$AP_IF link: $(ap_iface_link_state "$AP_IF")"
+        ap_type="$(ap_iface_type "$AP_IF" || true)"
+        [ -n "$ap_type" ] || ap_type="unknown"
+        debug_info "$AP_IF type: $ap_type"
+        ap_ip="$(ap_ipv4_addr "$AP_IF" || true)"
+        [ -n "$ap_ip" ] || ap_ip="none"
+        debug_info "$AP_IF ip: $ap_ip"
+    else
+        debug_warn "$AP_IF exists: no"
+    fi
+    ap_pid_running "$AP_HOSTAPD_PID_FILE" && debug_info "hostapd running: yes ($(sed -n '1p' "$AP_HOSTAPD_PID_FILE" 2>/dev/null))" || debug_warn "hostapd running: no"
+    ap_pid_running "$AP_DNSMASQ_PID_FILE" && debug_info "dnsmasq running: yes ($(sed -n '1p' "$AP_DNSMASQ_PID_FILE" 2>/dev/null))" || debug_warn "dnsmasq running: no"
+    if ap_is_running_healthy; then debug_ok "AP healthy: yes"; else debug_warn "AP healthy: no"; fi
+
+    debug_section "upstream"
+    if interface_exists "$AP_UPSTREAM"; then
+        debug_info "$AP_UPSTREAM exists: yes"
+        up_ip="$(ap_ipv4_addr "$AP_UPSTREAM" || true)"
+        [ -n "$up_ip" ] || up_ip="none"
+        debug_info "$AP_UPSTREAM ip: $up_ip"
+        if have ip; then
+            say "default route:"
+            ip route show default 2>/dev/null || debug_warn "failed to read default route"
+            say "routes via $AP_UPSTREAM:"
+            ip route show dev "$AP_UPSTREAM" 2>/dev/null || debug_warn "failed to read routes for $AP_UPSTREAM"
+        fi
+    else
+        debug_warn "$AP_UPSTREAM exists: no"
+    fi
+
+    debug_section "iptables"
+    if gateway_rules_active; then
+        debug_ok "NAT rules active: yes"
+    else
+        debug_warn "NAT rules active: no"
+    fi
+    gateway_debug_iptables
+
+    debug_section "dnsmasq DHCP log"
+    gateway_debug_dnsmasq_log
+
+    debug_section "DNS hints"
+    gateway_debug_dns_hint
+}
+
 backup_copy_dir() {
     src="$1"
     dst="$2"
@@ -4333,7 +4506,7 @@ AP 管理：
   mgate ap-install-deps     安装 AP 所需依赖
   mgate ap-status           查看 ap0 热点状态
   mgate ap-config           查看/生成 AP 配置
-  mgate ap-start            启动 ap0 热点和 DHCP
+  mgate ap-start            启动 ap0 热点、DHCP 和 DNS
   mgate ap-stop             停止 mgate 管理的 ap0 热点
 
 NAT 网关：
@@ -4341,6 +4514,7 @@ NAT 网关：
   mgate gateway-start       启动 ap0 -> wlan0 IPv4 NAT 出网
   mgate gateway-stop        停止 mgate NAT 规则并恢复 ip_forward
   mgate gateway-status      查看 NAT 网关状态
+  mgate gateway-debug       输出 NAT/AP/DHCP/DNS 诊断信息
 
 备份与恢复：
   mgate backup [label]      创建备份
@@ -4514,6 +4688,7 @@ main() {
         gateway-start|nat-start) cmd_gateway_start "$@" ;;
         gateway-stop|nat-stop) cmd_gateway_stop "$@" ;;
         gateway-status|nat-status) cmd_gateway_status "$@" ;;
+        gateway-debug|nat-debug) cmd_gateway_debug "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
