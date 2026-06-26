@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc6"
+MGATE_VERSION="0.4.0-rc7"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -71,6 +71,7 @@ GATEWAY_FORWARD_CHAIN="MGATE_FORWARD"
 TPROXY_MANGLE_CHAIN="${MGATE_TPROXY_MANGLE_CHAIN:-MGATE_TPROXY}"
 TPROXY_MARK="${MGATE_TPROXY_MARK:-0x1}"
 TPROXY_ROUTE_TABLE="${MGATE_TPROXY_ROUTE_TABLE:-100}"
+TPROXY_PORT="${MGATE_TPROXY_PORT:-31802}"
 
 DEFAULT_MIXED_PORT="${MIXED_PORT:-31800}"
 # Backward-compatible internal aliases. The default proxy entry is now a single mixed listener.
@@ -3674,6 +3675,214 @@ cmd_tproxy_status() {
             ;;
     esac
 }
+tproxy_plan_section() {
+    say ""
+    say "[$1]"
+}
+
+tproxy_planned_port() {
+    current="$(tproxy_mihomo_port || true)"
+    if [ -n "$current" ]; then
+        printf '%s\n' "$current"
+    else
+        printf '%s\n' "$TPROXY_PORT"
+    fi
+}
+
+tproxy_capability_summary() {
+    if tproxy_is_root; then
+        tproxy_ok "root: yes"
+    else
+        tproxy_warn "root: no; some checks may be incomplete"
+    fi
+    if gateway_have_iptables; then
+        tproxy_ok "iptables: $(command -v iptables 2>/dev/null)"
+    else
+        tproxy_warn "iptables: missing"
+    fi
+    if tproxy_mangle_table_available; then
+        tproxy_ok "mangle table: available"
+    else
+        tproxy_warn "mangle table: unavailable or unknown"
+    fi
+    if gateway_have_iptables && iptables -j TPROXY -h >/dev/null 2>&1; then
+        tproxy_ok "TPROXY target: userspace extension available"
+    else
+        tproxy_warn "TPROXY target: unknown"
+    fi
+    if gateway_have_iptables && iptables -m socket -h >/dev/null 2>&1; then
+        tproxy_ok "socket match: userspace extension available"
+    else
+        tproxy_warn "socket match: unknown"
+    fi
+    if have ip && ip rule show >/dev/null 2>&1; then
+        tproxy_ok "ip rule: available"
+    else
+        tproxy_warn "ip rule: unavailable or unknown"
+    fi
+    if have ip && ip route show table all >/dev/null 2>&1; then
+        tproxy_ok "ip route: available"
+    else
+        tproxy_warn "ip route: unavailable or unknown"
+    fi
+    if [ -x "$CORE_BIN" ]; then
+        tproxy_ok "mihomo: $CORE_BIN"
+    elif [ -f "$CORE_BIN" ]; then
+        tproxy_warn "mihomo: exists but not executable: $CORE_BIN"
+    else
+        tproxy_warn "mihomo: missing: $CORE_BIN"
+    fi
+    tproxy_info "kernel module hints:"
+    tproxy_module_hint_one xt_TPROXY
+    tproxy_module_hint_one nf_tproxy_ipv4
+    tproxy_module_hint_one xt_socket
+    tproxy_module_hint_one nf_defrag_ipv4
+}
+
+tproxy_current_state() {
+    current_port="$(tproxy_mihomo_port || true)"
+    [ -n "$current_port" ] || current_port="none"
+    mangle_state="$(tproxy_state_mangle)"
+    rule_state="$(tproxy_state_ip_rule)"
+    route_state="$(tproxy_state_route_table)"
+    fallback="$(tproxy_gateway_fallback_state)"
+    enabled="$(tproxy_enabled_state "$mangle_state" "$rule_state" "$route_state" "$current_port")"
+
+    tproxy_info "tproxy enabled: $enabled"
+    tproxy_info "mangle rules present: $mangle_state"
+    tproxy_info "ip rule present: $rule_state"
+    tproxy_info "route table present: $route_state"
+    tproxy_info "mihomo tproxy-port: $current_port"
+    tproxy_info "gateway fallback active: $fallback"
+}
+
+tproxy_print_reserved_bypass_plan() {
+    say "planned reserved-address bypasses:"
+    say "  0.0.0.0/8"
+    say "  10.0.0.0/8"
+    say "  100.64.0.0/10"
+    say "  127.0.0.0/8"
+    say "  169.254.0.0/16"
+    say "  172.16.0.0/12"
+    say "  192.168.0.0/16"
+    say "  224.0.0.0/4"
+    say "  240.0.0.0/4"
+}
+
+tproxy_print_mangle_rule_summary() {
+    tproxy_print_reserved_bypass_plan
+    say "planned local-socket bypass: -m socket -j RETURN, to avoid hijacking traffic already handled by local sockets"
+    say "planned AP client scope: PREROUTING -i $AP_IF only"
+    say "planned TCP redirect: TPROXY --on-port $1 --tproxy-mark $TPROXY_MARK"
+    say "planned UDP redirect: TPROXY --on-port $1 --tproxy-mark $TPROXY_MARK"
+    say "mgate/mihomo self-traffic note: local process OUTPUT traffic is not captured by PREROUTING -i $AP_IF"
+}
+
+tproxy_print_rollback_plan() {
+    say "rollback plan:"
+    say "  remove PREROUTING jump to $TPROXY_MANGLE_CHAIN"
+    say "  flush and delete mangle chain $TPROXY_MANGLE_CHAIN"
+    say "  delete ip rule fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
+    say "  flush route table $TPROXY_ROUTE_TABLE"
+    say "  restore mihomo config from backup if future tproxy-start changes it"
+    say "  keep ordinary NAT gateway fallback available"
+}
+
+tproxy_print_risks() {
+    say "risks:"
+    say "  TProxy target and socket match are only capability hints until real rules are applied"
+    say "  kernel modules may be built in and not visible in /proc/modules"
+    say "  UDP transparent proxy behavior depends on mihomo tproxy support and DNS handling"
+    say "  OUTPUT traffic from local mgate/mihomo is not part of this AP PREROUTING plan"
+    say "  ordinary NAT fallback must stay available for rollback"
+}
+
+cmd_tproxy_plan() {
+    ap_load_config
+    planned_port="$(tproxy_planned_port)"
+    current_port="$(tproxy_mihomo_port || true)"
+    [ -n "$current_port" ] || current_port="none"
+
+    tproxy_plan_section "current state"
+    tproxy_current_state
+
+    tproxy_plan_section "capability summary"
+    tproxy_capability_summary
+
+    tproxy_plan_section "planned changes"
+    if [ "$current_port" = "none" ]; then
+        tproxy_info "mihomo config plan: add tproxy-port: $planned_port to $CONFIG_FILE"
+    else
+        tproxy_info "mihomo config plan: keep existing tproxy-port: $current_port"
+    fi
+    tproxy_info "planned mark: $TPROXY_MARK"
+    tproxy_info "planned route table: $TPROXY_ROUTE_TABLE"
+    tproxy_info "planned mangle chain: $TPROXY_MANGLE_CHAIN"
+    tproxy_info "planned ip rule: fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
+    tproxy_info "planned route: local 0.0.0.0/0 dev lo table $TPROXY_ROUTE_TABLE"
+    tproxy_print_mangle_rule_summary "$planned_port"
+
+    tproxy_plan_section "fallback"
+    fallback="$(tproxy_gateway_fallback_state)"
+    tproxy_info "ordinary NAT gateway fallback: $fallback"
+
+    tproxy_plan_section "rollback plan"
+    tproxy_print_rollback_plan
+
+    tproxy_plan_section "risks"
+    tproxy_print_risks
+
+    say ""
+    tproxy_info "this command did not modify the system"
+}
+
+cmd_tproxy_dry_run() {
+    ap_load_config
+    planned_port="$(tproxy_planned_port)"
+    current_port="$(tproxy_mihomo_port || true)"
+    [ -n "$current_port" ] || current_port="none"
+
+    tproxy_plan_section "current state"
+    tproxy_current_state
+
+    tproxy_plan_section "dry-run commands not executed"
+    if [ "$current_port" = "none" ]; then
+        say "# backup mihomo config before future change"
+        say "cp '$CONFIG_FILE' '$CONFIG_FILE.pre-tproxy'"
+        say "# add or set in $CONFIG_FILE: tproxy-port: $planned_port"
+    else
+        say "# keep existing mihomo tproxy-port: $current_port"
+    fi
+    say "ip rule add fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
+    say "ip route add local 0.0.0.0/0 dev lo table $TPROXY_ROUTE_TABLE"
+    say "iptables -t mangle -N $TPROXY_MANGLE_CHAIN"
+    for cidr in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+        say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -d $cidr -j RETURN"
+    done
+    say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p tcp -m socket -j RETURN"
+    say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p tcp -j TPROXY --on-port $planned_port --tproxy-mark $TPROXY_MARK"
+    say "iptables -t mangle -A $TPROXY_MANGLE_CHAIN -p udp -j TPROXY --on-port $planned_port --tproxy-mark $TPROXY_MARK"
+    say "iptables -t mangle -I PREROUTING 1 -i $AP_IF -j $TPROXY_MANGLE_CHAIN"
+    say "# future tproxy-start may restart mihomo only if config changes"
+
+    tproxy_plan_section "rollback commands not executed"
+    say "while iptables -t mangle -D PREROUTING -i $AP_IF -j $TPROXY_MANGLE_CHAIN 2>/dev/null; do :; done"
+    say "iptables -t mangle -F $TPROXY_MANGLE_CHAIN 2>/dev/null || true"
+    say "iptables -t mangle -X $TPROXY_MANGLE_CHAIN 2>/dev/null || true"
+    say "ip rule del fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE 2>/dev/null || true"
+    say "ip route flush table $TPROXY_ROUTE_TABLE 2>/dev/null || true"
+    if [ "$current_port" = "none" ]; then
+        say "# restore mihomo config: cp '$CONFIG_FILE.pre-tproxy' '$CONFIG_FILE'"
+    else
+        say "# mihomo config restore not needed if existing tproxy-port is reused"
+    fi
+
+    tproxy_plan_section "risks"
+    tproxy_print_risks
+
+    say ""
+    tproxy_info "dry-run only; no commands were executed"
+}
 backup_copy_dir() {
     src="$1"
     dst="$2"
@@ -4960,6 +5169,8 @@ NAT 网关：
   mgate gateway-doctor      检查普通 NAT 网关健康基线
   mgate tproxy-check        只读检查 TProxy 能力
   mgate tproxy-status       只读查看 TProxy 状态
+  mgate tproxy-plan         输出 TProxy 启用计划
+  mgate tproxy-dry-run      输出未来启用命令但不执行
 
 备份与恢复：
   mgate backup [label]      创建备份
@@ -5137,6 +5348,8 @@ main() {
         gateway-doctor|nat-doctor) cmd_gateway_doctor "$@" ;;
         tproxy-check) cmd_tproxy_check "$@" ;;
         tproxy-status) cmd_tproxy_status "$@" ;;
+        tproxy-plan) cmd_tproxy_plan "$@" ;;
+        tproxy-dry-run) cmd_tproxy_dry_run "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
