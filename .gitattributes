@@ -1,5 +1,13 @@
-# Force LF line endings for shell scripts on all platforms.
-# This prevents CRLF contamination on Windows that would break
-# heredoc terminators when the script runs on Linux/embedded devices.
+# Normalize text files but force LF for scripts and release-facing text.
+# Debian /bin/sh and BusyBox sh can fail on CRLF-contaminated shell scripts.
 * text=auto
+
+.gitattributes text eol=lf
+mgate.sh text eol=lf
 *.sh text eol=lf
+*.cgi text eol=lf
+*.init text eol=lf
+*.service text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

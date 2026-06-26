@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc13"
+MGATE_VERSION="0.4.0-rc14"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -141,6 +141,30 @@ die() {
 
 have() {
     command -v "$1" >/dev/null 2>&1
+}
+
+check_no_crlf_file() {
+    file="$1"
+    [ -f "$file" ] || return 0
+    if have od && od -An -tx1 "$file" >/dev/null 2>&1; then
+        od -An -tx1 "$file" 2>/dev/null | awk -v f="$file" '
+            BEGIN { line=1; prev="" }
+            {
+                for (i=1; i<=NF; i++) {
+                    b=tolower($i)
+                    if (prev == "0d" && b == "0a") {
+                        print f ":" line ": CRLF line ending detected"
+                        found=1
+                    }
+                    if (b == "0a") line++
+                    prev=b
+                }
+            }
+            END { exit found ? 1 : 0 }
+        '
+        return $?
+    fi
+    awk 'BEGIN { cr=sprintf("%c", 13) } length($0) > 0 && substr($0, length($0), 1) == cr { print FILENAME ":" FNR ": CRLF line ending detected"; found=1 } END { exit found ? 1 : 0 }' "$file"
 }
 
 find_editor() {
@@ -1011,6 +1035,7 @@ extract_mgate_version() {
 validate_mgate_script() {
     file="$1"
     [ -s "$file" ] || die "下载内容为空"
+    check_no_crlf_file "$file" || die "下载内容包含 CRLF 行尾，请转换为 LF 后重试"
     /bin/sh -n "$file" >/dev/null 2>&1 || die "下载内容不是有效 shell 脚本"
     grep -q 'APP_NAME="mgate"' "$file" || die "下载内容不是有效 mgate 脚本：缺少 APP_NAME"
     grep -q '^MGATE_VERSION=' "$file" || die "下载内容不是有效 mgate 脚本：缺少 MGATE_VERSION"
@@ -1544,7 +1569,99 @@ web_class_for_state() {
     esac
 }
 
+web_json_section_value() {
+    data="$1"
+    section="$2"
+    key="$3"
+    printf '%s\n' "$data" | awk -v section="$section" -v key="$key" '
+        !in_section && index($0, "\"" section "\"") > 0 && index($0, "{") > 0 {in_section=1; next}
+        in_section && /^[[:space:]]*}/ {exit}
+        in_section && index($0, "\"" key "\"") > 0 {
+            line=$0
+            sub(/^[^:]*:[[:space:]]*/, "", line)
+            sub(/[[:space:]]*,[[:space:]]*$/, "", line)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+            print line
+            exit
+        }
+    '
+}
+
+web_json_scalar() {
+    raw="$1"
+    case "$raw" in
+        \"*\")
+            printf '%s' "$raw" | sed 's/^"//; s/"$//; s/\\"/"/g; s/\\\\/\\/g'
+            ;;
+        true|false|null) printf '%s' "$raw" ;;
+        *) printf '%s' "$raw" ;;
+    esac
+}
+
+web_json_bool_state() {
+    raw="$1"
+    yes_value="$2"
+    no_value="$3"
+    case "$raw" in
+        true) printf '%s\n' "$yes_value" ;;
+        false) printf '%s\n' "$no_value" ;;
+        *) printf 'unknown\n' ;;
+    esac
+}
+
+web_collect_gateway_state_from_json() {
+    data="$1"
+    printf '%s\n' "$data" | grep '"ok"[[:space:]]*:[[:space:]]*true' >/dev/null 2>&1 || return 1
+
+    ap_running_raw="$(web_json_section_value "$data" ap running)"
+    ap_healthy_raw="$(web_json_section_value "$data" ap healthy)"
+    ap_ip_raw="$(web_json_section_value "$data" ap ip)"
+    gateway_mode_raw="$(web_json_section_value "$data" gateway mode)"
+    fallback_raw="$(web_json_section_value "$data" gateway fallback_active)"
+    tproxy_state_raw="$(web_json_section_value "$data" tproxy state)"
+    final_health_raw="$(web_json_section_value "$data" summary final_health)"
+
+    [ -n "$ap_running_raw" ] || return 1
+    [ -n "$gateway_mode_raw" ] || return 1
+    [ -n "$fallback_raw" ] || return 1
+    [ -n "$tproxy_state_raw" ] || return 1
+    [ -n "$final_health_raw" ] || return 1
+
+    WEB_AP_STATE="$(web_json_bool_state "$ap_running_raw" running stopped)"
+    WEB_AP_HEALTHY="$(web_json_bool_state "$ap_healthy_raw" yes no)"
+    WEB_AP_IP="$(web_json_scalar "$ap_ip_raw")"
+    [ -n "$WEB_AP_IP" ] && [ "$WEB_AP_IP" != "null" ] || WEB_AP_IP="none"
+
+    WEB_GATEWAY_MODE="$(web_json_scalar "$gateway_mode_raw")"
+    case "$WEB_GATEWAY_MODE" in nat|tproxy|unknown) : ;; *) WEB_GATEWAY_MODE="unknown" ;; esac
+
+    WEB_NAT_FALLBACK="$(web_json_bool_state "$fallback_raw" active inactive)"
+    WEB_TPROXY_ENABLED="$(web_json_scalar "$tproxy_state_raw")"
+    case "$WEB_TPROXY_ENABLED" in enabled|disabled|partial|unknown) : ;; *) WEB_TPROXY_ENABLED="unknown" ;; esac
+
+    WEB_FINAL_HEALTH="$(web_json_scalar "$final_health_raw")"
+    case "$WEB_FINAL_HEALTH" in healthy|degraded|broken|disabled|unknown) : ;; *) WEB_FINAL_HEALTH="unknown" ;; esac
+
+    WEB_IPV4_FORWARDING="unknown"
+    WEB_TPROXY_PORT="none"
+    WEB_TPROXY_OUT_TYPE="unknown"
+    WEB_MIHOMO_RUNNING="unknown"
+    WEB_GATEWAY_STATUS_OUT=""
+    WEB_TPROXY_STATUS_OUT=""
+    WEB_SUMMARY_SOURCE="status-json"
+    return 0
+}
+
 web_collect_gateway_state() {
+    WEB_STATUS_OUT="$1"
+    WEB_STATUS_JSON_OUT="$($MGATE status-json 2>/dev/null || true)"
+    if [ -n "$WEB_STATUS_JSON_OUT" ] && web_collect_gateway_state_from_json "$WEB_STATUS_JSON_OUT"; then
+        return 0
+    fi
+    WEB_SUMMARY_SOURCE="text-fallback"
+    web_collect_gateway_state_from_text "$WEB_STATUS_OUT"
+}
+web_collect_gateway_state_from_text() {
     WEB_STATUS_OUT="$1"
     WEB_AP_STATUS_OUT="$($MGATE ap-status 2>&1)"
     WEB_GATEWAY_STATUS_OUT="$($MGATE gateway-status 2>&1)"
@@ -1631,7 +1748,7 @@ gateway_status_page() {
     page_start "网关状态"
     nav
     status_out="$($MGATE status 2>&1)"
-    web_collect_gateway_state "$status_out"
+    web_collect_gateway_state_from_text "$status_out"
     cat <<'EOF'
 <div class="card"><h2>网关状态</h2>
 <table class="table"><tbody>
@@ -2078,6 +2195,7 @@ EOF_WEB_CGI
         "$WEB_CGI_FILE"
 
     chmod 755 "$WEB_CGI_FILE" || die "failed to chmod $WEB_CGI_FILE"
+    check_no_crlf_file "$WEB_CGI_FILE" || die "generated CGI contains CRLF line endings; convert it to LF"
     sh -n "$WEB_CGI_FILE" || die "generated CGI syntax check failed"
 }
 generate_web_favicon() {
@@ -5879,6 +5997,30 @@ cmd_edit() {
     run_editor "$editor" "$CONFIG_FILE"
 }
 
+cmd_preflight() {
+    script_file="${1:-$0}"
+    [ -f "$script_file" ] || die "script not found: $script_file"
+
+    step "检查脚本行尾"
+    check_no_crlf_file "$script_file" || die "发现 CRLF 行尾；请将脚本转换为 LF 后再发布"
+    ok "脚本行尾为 LF：$script_file"
+
+    step "检查脚本语法"
+    sh -n "$script_file" || die "shell syntax check failed: $script_file"
+    ok "脚本语法通过：$script_file"
+
+    if [ -f "$WEB_CGI_FILE" ]; then
+        step "检查生成的 Web CGI"
+        check_no_crlf_file "$WEB_CGI_FILE" || die "generated CGI contains CRLF line endings; convert it to LF"
+        sh -n "$WEB_CGI_FILE" || die "generated CGI syntax check failed: $WEB_CGI_FILE"
+        ok "Web CGI 行尾和语法通过：$WEB_CGI_FILE"
+    else
+        info "Web CGI 不存在，跳过：$WEB_CGI_FILE"
+    fi
+
+    ok "preflight checks passed"
+}
+
 cmd_test() {
     [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在：$CORE_BIN，请先执行：mgate install-core"
     [ -f "$CONFIG_FILE" ] || die "配置文件不存在：$CONFIG_FILE，请先执行：mgate install"
@@ -6959,6 +7101,7 @@ $APP_NAME - $APP_DESC
   mgate test                测试配置
   mgate logs [50|100|200]   查看日志
   mgate doctor              系统诊断
+  mgate preflight [file]    检查脚本 LF 行尾和 POSIX sh 语法
 
 AP 管理：
   mgate ap-check            检查 AP 依赖和 wlan0 信道
@@ -7152,6 +7295,7 @@ main() {
         test) cmd_test "$@" ;;
         logs) cmd_logs "$@" ;;
         doctor) cmd_doctor "$@" ;;
+        preflight) cmd_preflight "$@" ;;
         ap-check) cmd_ap_check "$@" ;;
         ap-install-deps) cmd_ap_install_deps "$@" ;;
         ap-status) cmd_ap_status "$@" ;;
