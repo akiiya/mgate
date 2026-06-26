@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc12"
+MGATE_VERSION="0.4.0-rc13"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -5369,6 +5369,328 @@ cmd_tproxy_debug() {
     say "[last error]"
     if [ -f "$TPROXY_LAST_ERROR_FILE" ]; then sed -n '1,120p' "$TPROXY_LAST_ERROR_FILE" 2>/dev/null; else say "no last error"; fi
 }
+# -----------------------------
+# Machine-readable read-only JSON status
+# -----------------------------
+json_escape() {
+    awk '
+        BEGIN {ORS=""}
+        {
+            if (NR > 1) printf "\\n"
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\t/, "\\t")
+            gsub(/\r/, "\\r")
+            printf "%s", $0
+        }
+    '
+}
+
+json_string() {
+    printf '"'
+    printf '%s' "$1" | json_escape
+    printf '"'
+}
+
+json_string_or_null() {
+    if [ -n "${1:-}" ]; then
+        json_string "$1"
+    else
+        printf 'null'
+    fi
+}
+
+json_bool() {
+    case "${1:-}" in
+        1|yes|true|on) printf 'true' ;;
+        *) printf 'false' ;;
+    esac
+}
+
+json_tri_bool() {
+    case "${1:-}" in
+        1|yes|true|on) printf 'true' ;;
+        0|no|false|off) printf 'false' ;;
+        *) printf 'null' ;;
+    esac
+}
+
+json_number_or_null() {
+    case "${1:-}" in
+        ''|*[!0-9]*) printf 'null' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+json_root_limited() {
+    if tproxy_is_root; then printf 'false'; else printf 'true'; fi
+}
+
+json_root_warnings() {
+    if tproxy_is_root; then
+        printf '[]'
+    else
+        printf '['
+        json_string 'some checks require root'
+        printf ']'
+    fi
+}
+
+json_yes_no_lit() {
+    if "$@"; then printf 'true'; else printf 'false'; fi
+}
+
+json_collect_ap_state() {
+    ap_load_config
+    JSON_AP_LIMITED="$(json_root_limited)"
+    JSON_AP_CONFIG_EXISTS=false
+    [ -f "$AP_CONFIG_FILE" ] && JSON_AP_CONFIG_EXISTS=true
+    JSON_AP_EXISTS=false
+    interface_exists "$AP_IF" && JSON_AP_EXISTS=true
+    JSON_AP_LINK="$(ap_iface_link_state "$AP_IF" 2>/dev/null || printf 'unknown')"
+    JSON_AP_UP=false
+    [ "$JSON_AP_LINK" = "up" ] && JSON_AP_UP=true
+    JSON_AP_IP="$(ap_ipv4_addr "$AP_IF" 2>/dev/null || true)"
+    JSON_AP_TYPE="$(ap_iface_type "$AP_IF" 2>/dev/null || true)"
+    [ -n "$JSON_AP_TYPE" ] || JSON_AP_TYPE="unknown"
+    JSON_AP_HOSTAPD_RUNNING=false
+    ap_pid_running "$AP_HOSTAPD_PID_FILE" && JSON_AP_HOSTAPD_RUNNING=true
+    JSON_AP_DNSMASQ_RUNNING=false
+    ap_pid_running "$AP_DNSMASQ_PID_FILE" && JSON_AP_DNSMASQ_RUNNING=true
+    JSON_AP_HEALTHY=false
+    ap_is_running_healthy >/dev/null 2>&1 && JSON_AP_HEALTHY=true
+    if [ "$JSON_AP_HEALTHY" = "true" ]; then
+        JSON_AP_RUNNING=true
+    else
+        JSON_AP_RUNNING=false
+    fi
+}
+
+json_collect_gateway_state() {
+    ap_load_config
+    JSON_GATEWAY_LIMITED="$(json_root_limited)"
+    JSON_GATEWAY_IPV4_VALUE="$(gateway_ip_forward_value 2>/dev/null || printf 'unknown')"
+    case "$JSON_GATEWAY_IPV4_VALUE" in
+        1) JSON_GATEWAY_IPV4_FORWARDING=true ;;
+        0) JSON_GATEWAY_IPV4_FORWARDING=false ;;
+        *) JSON_GATEWAY_IPV4_FORWARDING=null ;;
+    esac
+    JSON_GATEWAY_NAT_ACTIVE=null
+    if gateway_rules_active; then
+        JSON_GATEWAY_NAT_ACTIVE=true
+    elif gateway_have_iptables && tproxy_is_root; then
+        JSON_GATEWAY_NAT_ACTIVE=false
+    fi
+    JSON_GATEWAY_FALLBACK_ACTIVE="$JSON_GATEWAY_NAT_ACTIVE"
+    if gateway_have_iptables; then JSON_GATEWAY_BACKEND="iptables"; else JSON_GATEWAY_BACKEND="unknown"; fi
+    JSON_GATEWAY_AP_HEALTHY=false
+    ap_is_running_healthy >/dev/null 2>&1 && JSON_GATEWAY_AP_HEALTHY=true
+    JSON_GATEWAY_TPROXY_STATE="$(gateway_transparent_proxy_state 2>/dev/null || printf 'unknown')"
+    case "$JSON_GATEWAY_TPROXY_STATE" in
+        yes|partial) JSON_GATEWAY_MODE="tproxy" ;;
+        *)
+            if [ "$JSON_GATEWAY_NAT_ACTIVE" = "true" ]; then
+                JSON_GATEWAY_MODE="nat"
+            else
+                JSON_GATEWAY_MODE="unknown"
+            fi
+            ;;
+    esac
+    JSON_GATEWAY_HEALTHY=false
+    if [ "$JSON_GATEWAY_AP_HEALTHY" = "true" ] && [ "$JSON_GATEWAY_IPV4_FORWARDING" = "true" ] && [ "$JSON_GATEWAY_NAT_ACTIVE" = "true" ]; then
+        JSON_GATEWAY_HEALTHY=true
+    fi
+}
+
+json_collect_tproxy_state() {
+    ap_load_config
+    JSON_TPROXY_LIMITED="$(json_root_limited)"
+    JSON_TPROXY_PORT_CONFIGURED_VALUE="$(tproxy_mihomo_port 2>/dev/null || true)"
+    [ -n "$JSON_TPROXY_PORT_CONFIGURED_VALUE" ] || JSON_TPROXY_PORT_CONFIGURED_VALUE="none"
+    JSON_TPROXY_MANGLE_STATE="$(tproxy_state_mangle 2>/dev/null || printf 'unknown')"
+    JSON_TPROXY_RULE_STATE="$(tproxy_state_ip_rule 2>/dev/null || printf 'unknown')"
+    JSON_TPROXY_ROUTE_STATE="$(tproxy_state_route_table 2>/dev/null || printf 'unknown')"
+    JSON_TPROXY_ENABLED_RAW="$(tproxy_enabled_state "$JSON_TPROXY_MANGLE_STATE" "$JSON_TPROXY_RULE_STATE" "$JSON_TPROXY_ROUTE_STATE" "$JSON_TPROXY_PORT_CONFIGURED_VALUE")"
+    case "$JSON_TPROXY_ENABLED_RAW" in
+        yes) JSON_TPROXY_STATE="enabled"; JSON_TPROXY_ENABLED=true ;;
+        no) JSON_TPROXY_STATE="disabled"; JSON_TPROXY_ENABLED=false ;;
+        partial) JSON_TPROXY_STATE="partial"; JSON_TPROXY_ENABLED=false ;;
+        *) JSON_TPROXY_STATE="unknown"; JSON_TPROXY_ENABLED=false ;;
+    esac
+    JSON_TPROXY_MIHOMO_RUNNING=false
+    tproxy_mihomo_running >/dev/null 2>&1 && JSON_TPROXY_MIHOMO_RUNNING=true
+    JSON_TPROXY_PORT_CONFIGURED=false
+    [ "$JSON_TPROXY_PORT_CONFIGURED_VALUE" = "$TPROXY_PORT" ] && JSON_TPROXY_PORT_CONFIGURED=true
+    JSON_TPROXY_PORT_LISTENING=null
+    tproxy_port_listening >/dev/null 2>&1
+    case "$?" in
+        0) JSON_TPROXY_PORT_LISTENING=true ;;
+        1) JSON_TPROXY_PORT_LISTENING=false ;;
+        *) JSON_TPROXY_PORT_LISTENING=null ;;
+    esac
+    JSON_TPROXY_OUT_EXISTS=false
+    tproxy_config_has_out_group >/dev/null 2>&1 && JSON_TPROXY_OUT_EXISTS=true
+    JSON_TPROXY_OUT_TYPE="$(tproxy_config_out_group_type 2>/dev/null || printf 'unknown')"
+    [ -n "$JSON_TPROXY_OUT_TYPE" ] || JSON_TPROXY_OUT_TYPE="unknown"
+    JSON_TPROXY_MANGLE_CHAIN_EXISTS=false
+    tproxy_mangle_chain_exists && JSON_TPROXY_MANGLE_CHAIN_EXISTS=true
+    JSON_TPROXY_PREROUTING_HOOK_EXISTS=false
+    tproxy_prerouting_hook_exists && JSON_TPROXY_PREROUTING_HOOK_EXISTS=true
+    JSON_TPROXY_IP_RULE_EXISTS=false
+    tproxy_ip_rule_present && JSON_TPROXY_IP_RULE_EXISTS=true
+    JSON_TPROXY_ROUTE_EXISTS=false
+    tproxy_route_local_present && JSON_TPROXY_ROUTE_EXISTS=true
+    JSON_TPROXY_TCP_RULE_EXISTS=false
+    tproxy_chain_has_tproxy_rule tcp && JSON_TPROXY_TCP_RULE_EXISTS=true
+    JSON_TPROXY_UDP_RULE_EXISTS=false
+    tproxy_chain_has_tproxy_rule udp && JSON_TPROXY_UDP_RULE_EXISTS=true
+    JSON_TPROXY_SOCKET_BYPASS_PRESENT=false
+    tproxy_socket_bypass_rule_present && JSON_TPROXY_SOCKET_BYPASS_PRESENT=true
+    JSON_TPROXY_NAT_FALLBACK_STATE="$(tproxy_gateway_fallback_state 2>/dev/null || printf 'unknown')"
+    JSON_TPROXY_NAT_FALLBACK_ACTIVE="$(json_tri_bool "$JSON_TPROXY_NAT_FALLBACK_STATE")"
+    case "$JSON_TPROXY_STATE" in
+        enabled)
+            if [ "$JSON_TPROXY_MIHOMO_RUNNING" = "true" ] && \
+               [ "$JSON_TPROXY_PORT_CONFIGURED" = "true" ] && \
+               [ "$JSON_TPROXY_PORT_LISTENING" = "true" ] && \
+               [ "$JSON_TPROXY_MANGLE_CHAIN_EXISTS" = "true" ] && \
+               [ "$JSON_TPROXY_PREROUTING_HOOK_EXISTS" = "true" ] && \
+               [ "$JSON_TPROXY_IP_RULE_EXISTS" = "true" ] && \
+               [ "$JSON_TPROXY_ROUTE_EXISTS" = "true" ] && \
+               [ "$JSON_TPROXY_TCP_RULE_EXISTS" = "true" ] && \
+               [ "$JSON_TPROXY_UDP_RULE_EXISTS" = "true" ] && \
+               [ "$JSON_TPROXY_SOCKET_BYPASS_PRESENT" = "false" ] && \
+               [ "$JSON_TPROXY_NAT_FALLBACK_ACTIVE" = "true" ]; then
+                JSON_TPROXY_FINAL_HEALTH="healthy"
+            else
+                JSON_TPROXY_FINAL_HEALTH="degraded"
+            fi
+            ;;
+        disabled) JSON_TPROXY_FINAL_HEALTH="disabled" ;;
+        partial) JSON_TPROXY_FINAL_HEALTH="broken" ;;
+        *) JSON_TPROXY_FINAL_HEALTH="unknown" ;;
+    esac
+    JSON_TPROXY_HEALTHY=false
+    [ "$JSON_TPROXY_FINAL_HEALTH" = "healthy" ] && JSON_TPROXY_HEALTHY=true
+}
+
+cmd_ap_json() {
+    json_collect_ap_state
+    printf '{\n'
+    printf '  "ok": true,\n'
+    printf '  "component": "ap",\n'
+    printf '  "limited": %s,\n' "$JSON_AP_LIMITED"
+    printf '  "warnings": '; json_root_warnings; printf ',\n'
+    printf '  "interface": '; json_string "$AP_IF"; printf ',\n'
+    printf '  "upstream": '; json_string "$AP_UPSTREAM"; printf ',\n'
+    printf '  "config_exists": %s,\n' "$JSON_AP_CONFIG_EXISTS"
+    printf '  "exists": %s,\n' "$JSON_AP_EXISTS"
+    printf '  "up": %s,\n' "$JSON_AP_UP"
+    printf '  "ip": '; json_string_or_null "$JSON_AP_IP"; printf ',\n'
+    printf '  "ssid": '; json_string "$AP_SSID"; printf ',\n'
+    printf '  "type": '; json_string "$JSON_AP_TYPE"; printf ',\n'
+    printf '  "hostapd_running": %s,\n' "$JSON_AP_HOSTAPD_RUNNING"
+    printf '  "dnsmasq_running": %s,\n' "$JSON_AP_DNSMASQ_RUNNING"
+    printf '  "healthy": %s\n' "$JSON_AP_HEALTHY"
+    printf '}\n'
+}
+
+cmd_gateway_json() {
+    json_collect_gateway_state
+    printf '{\n'
+    printf '  "ok": true,\n'
+    printf '  "component": "gateway",\n'
+    printf '  "limited": %s,\n' "$JSON_GATEWAY_LIMITED"
+    printf '  "warnings": '; json_root_warnings; printf ',\n'
+    printf '  "mode": '; json_string "$JSON_GATEWAY_MODE"; printf ',\n'
+    printf '  "ap_interface": '; json_string "$AP_IF"; printf ',\n'
+    printf '  "upstream_interface": '; json_string "$AP_UPSTREAM"; printf ',\n'
+    printf '  "subnet": '; json_string "$(gateway_subnet)"; printf ',\n'
+    printf '  "ipv4_forwarding": %s,\n' "$JSON_GATEWAY_IPV4_FORWARDING"
+    printf '  "nat_active": %s,\n' "$JSON_GATEWAY_NAT_ACTIVE"
+    printf '  "fallback_active": %s,\n' "$JSON_GATEWAY_FALLBACK_ACTIVE"
+    printf '  "backend": '; json_string "$JSON_GATEWAY_BACKEND"; printf ',\n'
+    printf '  "ap_healthy": %s,\n' "$JSON_GATEWAY_AP_HEALTHY"
+    printf '  "transparent_proxy_state": '; json_string "$JSON_GATEWAY_TPROXY_STATE"; printf ',\n'
+    printf '  "healthy": %s\n' "$JSON_GATEWAY_HEALTHY"
+    printf '}\n'
+}
+
+cmd_tproxy_json() {
+    json_collect_tproxy_state
+    printf '{\n'
+    printf '  "ok": true,\n'
+    printf '  "component": "tproxy",\n'
+    printf '  "limited": %s,\n' "$JSON_TPROXY_LIMITED"
+    printf '  "warnings": '; json_root_warnings; printf ',\n'
+    printf '  "enabled": %s,\n' "$JSON_TPROXY_ENABLED"
+    printf '  "state": '; json_string "$JSON_TPROXY_STATE"; printf ',\n'
+    printf '  "final_health": '; json_string "$JSON_TPROXY_FINAL_HEALTH"; printf ',\n'
+    printf '  "port": '; json_number_or_null "$TPROXY_PORT"; printf ',\n'
+    printf '  "configured_port": '; json_number_or_null "$JSON_TPROXY_PORT_CONFIGURED_VALUE"; printf ',\n'
+    printf '  "mark": '; json_string "$TPROXY_MARK"; printf ',\n'
+    printf '  "route_table": '; json_number_or_null "$TPROXY_ROUTE_TABLE"; printf ',\n'
+    printf '  "chain": '; json_string "$TPROXY_MANGLE_CHAIN"; printf ',\n'
+    printf '  "mihomo_running": %s,\n' "$JSON_TPROXY_MIHOMO_RUNNING"
+    printf '  "tproxy_port_configured": %s,\n' "$JSON_TPROXY_PORT_CONFIGURED"
+    printf '  "tproxy_port_listening": %s,\n' "$JSON_TPROXY_PORT_LISTENING"
+    printf '  "tproxy_out_exists": %s,\n' "$JSON_TPROXY_OUT_EXISTS"
+    printf '  "tproxy_out_type": '; json_string "$JSON_TPROXY_OUT_TYPE"; printf ',\n'
+    printf '  "mangle_chain_exists": %s,\n' "$JSON_TPROXY_MANGLE_CHAIN_EXISTS"
+    printf '  "prerouting_hook_exists": %s,\n' "$JSON_TPROXY_PREROUTING_HOOK_EXISTS"
+    printf '  "ip_rule_exists": %s,\n' "$JSON_TPROXY_IP_RULE_EXISTS"
+    printf '  "route_exists": %s,\n' "$JSON_TPROXY_ROUTE_EXISTS"
+    printf '  "tcp_tproxy_rule_exists": %s,\n' "$JSON_TPROXY_TCP_RULE_EXISTS"
+    printf '  "udp_tproxy_rule_exists": %s,\n' "$JSON_TPROXY_UDP_RULE_EXISTS"
+    printf '  "socket_bypass_present": %s,\n' "$JSON_TPROXY_SOCKET_BYPASS_PRESENT"
+    printf '  "nat_fallback_active": %s,\n' "$JSON_TPROXY_NAT_FALLBACK_ACTIVE"
+    printf '  "healthy": %s\n' "$JSON_TPROXY_HEALTHY"
+    printf '}\n'
+}
+
+cmd_status_json() {
+    json_collect_ap_state
+    json_collect_gateway_state
+    json_collect_tproxy_state
+    if [ "$JSON_TPROXY_FINAL_HEALTH" = "healthy" ]; then
+        JSON_STATUS_FINAL_HEALTH="healthy"
+    elif [ "$JSON_TPROXY_FINAL_HEALTH" = "degraded" ] || [ "$JSON_TPROXY_FINAL_HEALTH" = "broken" ]; then
+        JSON_STATUS_FINAL_HEALTH="$JSON_TPROXY_FINAL_HEALTH"
+    elif [ "$JSON_GATEWAY_HEALTHY" = "true" ] && [ "$JSON_AP_HEALTHY" = "true" ]; then
+        JSON_STATUS_FINAL_HEALTH="healthy"
+    elif [ "$JSON_TPROXY_FINAL_HEALTH" = "disabled" ]; then
+        JSON_STATUS_FINAL_HEALTH="disabled"
+        [ "$JSON_GATEWAY_HEALTHY" = "true" ] && JSON_STATUS_FINAL_HEALTH="healthy"
+    else
+        JSON_STATUS_FINAL_HEALTH="unknown"
+    fi
+    JSON_STATUS_LIMITED="$(json_root_limited)"
+    printf '{\n'
+    printf '  "ok": true,\n'
+    printf '  "version": '; json_string "$MGATE_VERSION"; printf ',\n'
+    printf '  "limited": %s,\n' "$JSON_STATUS_LIMITED"
+    printf '  "warnings": '; json_root_warnings; printf ',\n'
+    printf '  "ap": {\n'
+    printf '    "healthy": %s,\n' "$JSON_AP_HEALTHY"
+    printf '    "running": %s,\n' "$JSON_AP_RUNNING"
+    printf '    "interface": '; json_string "$AP_IF"; printf ',\n'
+    printf '    "ip": '; json_string_or_null "$JSON_AP_IP"; printf '\n'
+    printf '  },\n'
+    printf '  "gateway": {\n'
+    printf '    "mode": '; json_string "$JSON_GATEWAY_MODE"; printf ',\n'
+    printf '    "fallback_active": %s,\n' "$JSON_GATEWAY_FALLBACK_ACTIVE"
+    printf '    "healthy": %s\n' "$JSON_GATEWAY_HEALTHY"
+    printf '  },\n'
+    printf '  "tproxy": {\n'
+    printf '    "enabled": %s,\n' "$JSON_TPROXY_ENABLED"
+    printf '    "state": '; json_string "$JSON_TPROXY_STATE"; printf ',\n'
+    printf '    "final_health": '; json_string "$JSON_TPROXY_FINAL_HEALTH"; printf '\n'
+    printf '  },\n'
+    printf '  "summary": {\n'
+    printf '    "final_health": '; json_string "$JSON_STATUS_FINAL_HEALTH"; printf '\n'
+    printf '  }\n'
+    printf '}\n'
+}
 backup_copy_dir() {
     src="$1"
     dst="$2"
@@ -6642,6 +6964,7 @@ AP 管理：
   mgate ap-check            检查 AP 依赖和 wlan0 信道
   mgate ap-install-deps     安装 AP 所需依赖
   mgate ap-status           查看 ap0 热点状态
+  mgate ap-json             输出 AP 只读 JSON 状态
   mgate ap-config           查看/生成 AP 配置
   mgate ap-start            启动 ap0 热点、DHCP 和 DNS
   mgate ap-stop             停止 mgate 管理的 ap0 热点
@@ -6651,10 +6974,12 @@ NAT 网关：
   mgate gateway-start       启动 ap0 -> wlan0 IPv4 NAT 出网
   mgate gateway-stop        停止 mgate NAT 规则并恢复 ip_forward
   mgate gateway-status      查看 NAT 网关状态
+  mgate gateway-json        输出 NAT 网关只读 JSON 状态
   mgate gateway-debug       输出 NAT/AP/DHCP/DNS 诊断信息
   mgate gateway-doctor      检查普通 NAT 网关健康基线
   mgate tproxy-check        只读检查 TProxy 能力
   mgate tproxy-status       只读查看 TProxy 状态
+  mgate tproxy-json         输出 TProxy 只读 JSON 状态
   mgate tproxy-health       快速检查 TProxy 透明代理健康状态
   mgate tproxy-plan         输出 TProxy 启用计划
   mgate tproxy-dry-run      输出未来启用命令但不执行
@@ -6681,6 +7006,7 @@ NAT 网关：
   mgate account-password    查看/修改代理账号默认密码
   mgate passwd              account-password 的别名
   mgate proxy-info          查看代理连接信息
+  mgate status-json         输出 AP/网关/TProxy 摘要 JSON
 
 Web 管理：
   mgate web-enable          开启 Web 管理
@@ -6818,6 +7144,7 @@ main() {
         stop) service_stop "$@" ;;
         restart) service_restart "$@" ;;
         status) service_status "$@" ;;
+        status-json) cmd_status_json "$@" ;;
         enable) service_enable "$@" ;;
         disable) service_disable "$@" ;;
         config) cmd_config "$@" ;;
@@ -6828,6 +7155,7 @@ main() {
         ap-check) cmd_ap_check "$@" ;;
         ap-install-deps) cmd_ap_install_deps "$@" ;;
         ap-status) cmd_ap_status "$@" ;;
+        ap-json) cmd_ap_json "$@" ;;
         ap-config) cmd_ap_config "$@" ;;
         ap-start) cmd_ap_start "$@" ;;
         ap-stop) cmd_ap_stop "$@" ;;
@@ -6835,10 +7163,12 @@ main() {
         gateway-start|nat-start) cmd_gateway_start "$@" ;;
         gateway-stop|nat-stop) cmd_gateway_stop "$@" ;;
         gateway-status|nat-status) cmd_gateway_status "$@" ;;
+        gateway-json|nat-json) cmd_gateway_json "$@" ;;
         gateway-debug|nat-debug) cmd_gateway_debug "$@" ;;
         gateway-doctor|nat-doctor) cmd_gateway_doctor "$@" ;;
         tproxy-check) cmd_tproxy_check "$@" ;;
         tproxy-status) cmd_tproxy_status "$@" ;;
+        tproxy-json) cmd_tproxy_json "$@" ;;
         tproxy-health) cmd_tproxy_health "$@" ;;
         tproxy-plan) cmd_tproxy_plan "$@" ;;
         tproxy-dry-run) cmd_tproxy_dry_run "$@" ;;
