@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc11"
+MGATE_VERSION="0.4.0-rc12"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1313,6 +1313,8 @@ nav() {
 <a class="btn" href="/cgi-bin/mgate.cgi?action=version">版本</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=doctor">诊断</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=proxy-info">连接信息</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-status">网关状态</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=account-password">账号密码</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=sub-status">订阅状态</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=sub-set">设置订阅</a>
@@ -1333,7 +1335,6 @@ nav() {
 </div></div>
 EOF
 }
-
 page_end() {
     host_display="${HTTP_HOST:-0.0.0.0:$WEB_PORT}"
     cat <<EOF
@@ -1503,12 +1504,173 @@ summary_card() {
         "$(printf '%s' "$value" | html_escape)"
 }
 
+
+web_value() {
+    data="$1"
+    key="$2"
+    printf '%s\n' "$data" | sed -n "s/^\[[^]]*\] $key:[[:space:]]*//p" | head -n 1
+}
+
+web_tproxy_out_type() {
+    [ -f "$CONFIG_FILE" ] || { printf 'unknown\n'; return 0; }
+    awk '
+        /^proxy-groups:[[:space:]]*$/ {in_groups=1; next}
+        /^rules:[[:space:]]*$/ {in_group=0; in_groups=0}
+        in_groups && /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/ {
+            line=$0
+            sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", line)
+            gsub(/^["'\'' ]+|["'\'' ]+$/, "", line)
+            in_group=(line == "TPROXY-OUT")
+            next
+        }
+        in_group && /^[[:space:]]*type:[[:space:]]*/ {
+            line=$0
+            sub(/^[[:space:]]*type:[[:space:]]*/, "", line)
+            gsub(/^["'\'' ]+|["'\'' ]+$/, "", line)
+            print line
+            found=1
+            exit
+        }
+        END {if (!found) print "unknown"}
+    ' "$CONFIG_FILE" 2>/dev/null | head -n 1
+}
+
+web_class_for_state() {
+    case "$1" in
+        yes|active|running|healthy|enabled|nat|tproxy) printf 'good\n' ;;
+        no|inactive|stopped|disabled|degraded|partial|unknown) printf 'warn\n' ;;
+        broken|failed) printf 'danger\n' ;;
+        *) printf '\n' ;;
+    esac
+}
+
+web_collect_gateway_state() {
+    WEB_STATUS_OUT="$1"
+    WEB_AP_STATUS_OUT="$($MGATE ap-status 2>&1)"
+    WEB_GATEWAY_STATUS_OUT="$($MGATE gateway-status 2>&1)"
+    WEB_TPROXY_STATUS_OUT="$($MGATE tproxy-status 2>&1)"
+
+    WEB_AP_EXISTS="$(web_value "$WEB_AP_STATUS_OUT" 'ap0 exists')"
+    WEB_AP_LINK="$(web_value "$WEB_AP_STATUS_OUT" 'ap0 link')"
+    WEB_AP_IP="$(web_value "$WEB_AP_STATUS_OUT" 'ap0 ip')"
+    [ -n "$WEB_AP_IP" ] || WEB_AP_IP="none"
+    WEB_HOSTAPD_RUNNING="$(web_value "$WEB_AP_STATUS_OUT" 'hostapd running')"
+    WEB_DNSMASQ_RUNNING="$(web_value "$WEB_AP_STATUS_OUT" 'dnsmasq running')"
+    if [ "$WEB_AP_LINK" = "up" ] && [ "$WEB_HOSTAPD_RUNNING" = "yes" ] && [ "$WEB_DNSMASQ_RUNNING" = "yes" ]; then
+        WEB_AP_STATE="running"
+        WEB_AP_HEALTHY="yes"
+    elif [ "$WEB_AP_EXISTS" = "no" ] || [ "$WEB_HOSTAPD_RUNNING" = "no" ] || [ "$WEB_DNSMASQ_RUNNING" = "no" ]; then
+        WEB_AP_STATE="stopped"
+        WEB_AP_HEALTHY="no"
+    else
+        WEB_AP_STATE="unknown"
+        WEB_AP_HEALTHY="no"
+    fi
+
+    WEB_IPV4_FORWARDING="$(web_value "$WEB_GATEWAY_STATUS_OUT" 'ipv4 forwarding')"
+    [ "$WEB_IPV4_FORWARDING" = "1" ] && WEB_IPV4_FORWARDING="yes"
+    [ "$WEB_IPV4_FORWARDING" = "0" ] && WEB_IPV4_FORWARDING="no"
+    [ -n "$WEB_IPV4_FORWARDING" ] || WEB_IPV4_FORWARDING="unknown"
+    WEB_NAT_ACTIVE_RAW="$(web_value "$WEB_GATEWAY_STATUS_OUT" 'nat rules active')"
+    case "$WEB_NAT_ACTIVE_RAW" in
+        yes) WEB_NAT_FALLBACK="active" ;;
+        no) WEB_NAT_FALLBACK="inactive" ;;
+        *)
+            WEB_FALLBACK_RAW="$(web_value "$WEB_TPROXY_STATUS_OUT" 'gateway fallback active')"
+            case "$WEB_FALLBACK_RAW" in
+                yes) WEB_NAT_FALLBACK="active" ;;
+                no) WEB_NAT_FALLBACK="inactive" ;;
+                *) WEB_NAT_FALLBACK="unknown" ;;
+            esac
+            ;;
+    esac
+
+    WEB_TPROXY_ENABLED="$(web_value "$WEB_TPROXY_STATUS_OUT" 'tproxy enabled')"
+    [ -n "$WEB_TPROXY_ENABLED" ] || WEB_TPROXY_ENABLED="unknown"
+    WEB_TPROXY_PORT="$(web_value "$WEB_TPROXY_STATUS_OUT" 'mihomo tproxy-port')"
+    [ -n "$WEB_TPROXY_PORT" ] || WEB_TPROXY_PORT="none"
+    WEB_TPROXY_OUT_TYPE="$(web_tproxy_out_type)"
+    [ -n "$WEB_TPROXY_OUT_TYPE" ] || WEB_TPROXY_OUT_TYPE="unknown"
+
+    WEB_MIHOMO_RUNNING="no"
+    printf '%s\n' "$WEB_STATUS_OUT" | grep -Ei 'active|running' >/dev/null 2>&1 && WEB_MIHOMO_RUNNING="yes"
+
+    case "$WEB_TPROXY_ENABLED" in
+        yes) WEB_GATEWAY_MODE="tproxy" ;;
+        no)
+            if [ "$WEB_NAT_FALLBACK" = "active" ]; then WEB_GATEWAY_MODE="nat"; else WEB_GATEWAY_MODE="unknown"; fi
+            ;;
+        partial) WEB_GATEWAY_MODE="tproxy" ;;
+        *) WEB_GATEWAY_MODE="unknown" ;;
+    esac
+
+    case "$WEB_TPROXY_ENABLED" in
+        yes)
+            if [ "$WEB_AP_HEALTHY" = "yes" ] && [ "$WEB_MIHOMO_RUNNING" = "yes" ] && [ "$WEB_NAT_FALLBACK" = "active" ] && [ "$WEB_TPROXY_PORT" != "none" ]; then
+                WEB_FINAL_HEALTH="healthy"
+            else
+                WEB_FINAL_HEALTH="degraded"
+            fi
+            ;;
+        no) WEB_FINAL_HEALTH="disabled" ;;
+        partial) WEB_FINAL_HEALTH="broken" ;;
+        *) WEB_FINAL_HEALTH="unknown" ;;
+    esac
+}
+
+web_table_row() {
+    label="$1"
+    value="$2"
+    printf '<tr><th>%s</th><td><span class="code">%s</span></td></tr>\n' \
+        "$(printf '%s' "$label" | html_escape)" \
+        "$(printf '%s' "$value" | html_escape)"
+}
+
+gateway_status_page() {
+    header
+    page_start "网关状态"
+    nav
+    status_out="$($MGATE status 2>&1)"
+    web_collect_gateway_state "$status_out"
+    cat <<'EOF'
+<div class="card"><h2>网关状态</h2>
+<table class="table"><tbody>
+EOF
+    web_table_row "AP 接口" "ap0"
+    web_table_row "上游接口" "wlan0"
+    web_table_row "AP IP" "$WEB_AP_IP"
+    web_table_row "AP 健康" "$WEB_AP_HEALTHY"
+    web_table_row "网关模式" "$WEB_GATEWAY_MODE"
+    web_table_row "IPv4 转发" "$WEB_IPV4_FORWARDING"
+    web_table_row "NAT fallback" "$WEB_NAT_FALLBACK"
+    web_table_row "TProxy 状态" "$WEB_TPROXY_ENABLED"
+    web_table_row "mihomo 运行" "$WEB_MIHOMO_RUNNING"
+    web_table_row "tproxy-port" "$WEB_TPROXY_PORT"
+    web_table_row "TPROXY-OUT 类型" "$WEB_TPROXY_OUT_TYPE"
+    web_table_row "健康结果" "$WEB_FINAL_HEALTH"
+    cat <<'EOF'
+</tbody></table>
+<p><a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-doctor">网关诊断</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-doctor">TProxy 诊断</a></p>
+</div>
+EOF
+
+    printf '<div class="card"><h2>gateway-status</h2><pre>'
+    printf '%s\n' "$WEB_GATEWAY_STATUS_OUT" | html_escape
+    printf '</pre></div>\n'
+    printf '<div class="card"><h2>tproxy-status</h2><pre>'
+    printf '%s\n' "$WEB_TPROXY_STATUS_OUT" | html_escape
+    printf '</pre></div>\n'
+    page_end
+}
 status_page() {
     header
     page_start "状态"
     nav
     status_out="$($MGATE status 2>&1)"
     version_out="$($MGATE version 2>&1)"
+    web_collect_gateway_state "$status_out"
 
     svc_line="$(printf '%s\n' "$status_out" | grep '服务状态' | head -n 1)"
     [ -n "$svc_line" ] || svc_line="$(printf '%s\n' "$status_out" | grep '运行中\|服务未运行' | head -n 1)"
@@ -1540,9 +1702,24 @@ EOF
     summary_card "配置文件" "$cfg_line" "$cfg_class"
     summary_card "Mixed 代理" "$DEFAULT_MIXED_PORT" ""
     summary_card "支持协议" "HTTP / SOCKS5" ""
+    summary_card "AP" "$WEB_AP_STATE" "$(web_class_for_state "$WEB_AP_STATE")"
+    summary_card "网关模式" "$WEB_GATEWAY_MODE" "$(web_class_for_state "$WEB_GATEWAY_MODE")"
+    summary_card "NAT fallback" "$WEB_NAT_FALLBACK" "$(web_class_for_state "$WEB_NAT_FALLBACK")"
+    summary_card "TProxy" "$WEB_TPROXY_ENABLED" "$(web_class_for_state "$WEB_TPROXY_ENABLED")"
+    summary_card "健康状态" "$WEB_FINAL_HEALTH" "$(web_class_for_state "$WEB_FINAL_HEALTH")"
     cat <<'EOF'
 </div></div>
 EOF
+    cat <<'EOF'
+<div class="card"><h2>网关状态</h2>
+<p><span class="pill">只读</span></p>
+<p><a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-status">网关状态</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-doctor">网关诊断</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-doctor">TProxy 诊断</a></p>
+</div>
+EOF
+
     printf '<div class="card"><h2>详细状态</h2><pre>'
     printf '%s\n' "$status_out" | html_escape
     printf '</pre></div>\n'
@@ -1799,7 +1976,7 @@ EOF
     fi
 elif [ "$action" = "logout" ]; then
     header "Set-Cookie: mgate_token=deleted; Path=/; Max-Age=0"
-    page_start "Logout"
+    page_start "退出登录"
     cat <<'EOF'
 <div class="card"><h2>已退出</h2><p><a class="btn" href="/cgi-bin/mgate.cgi">重新登录</a></p></div>
 EOF
@@ -1813,6 +1990,10 @@ else
         version) run_output_page "版本" version ;;
         doctor) run_output_page "系统诊断" doctor ;;
         proxy-info) proxy_info_page ;;
+        gateway-status) gateway_status_page ;;
+        tproxy-health) run_job_page "TProxy 健康" tproxy-health ;;
+        gateway-doctor) run_job_page "网关诊断" gateway-doctor ;;
+        tproxy-doctor) run_job_page "TProxy 诊断" tproxy-doctor ;;
         account-password) account_password_page ;;
         sub-status) sub_status_page ;;
         sub-set) sub_set_page ;;
