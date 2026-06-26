@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.4.0-rc4"
+MGATE_VERSION="0.4.0-rc5"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -3232,6 +3232,194 @@ cmd_gateway_debug() {
     gateway_debug_dns_hint
 }
 
+gateway_doctor_section() {
+    say ""
+    say "[$1]"
+}
+
+gateway_doctor_ok() {
+    say "[OK] $*"
+    GATEWAY_DOCTOR_OK=$((GATEWAY_DOCTOR_OK + 1))
+}
+
+gateway_doctor_warn() {
+    say "[WARN] $*"
+    GATEWAY_DOCTOR_WARN=$((GATEWAY_DOCTOR_WARN + 1))
+}
+
+gateway_doctor_fail() {
+    say "[ERROR] $*"
+    GATEWAY_DOCTOR_FAIL=$((GATEWAY_DOCTOR_FAIL + 1))
+}
+
+gateway_doctor_recent_dhcp_ack() {
+    [ -s "$AP_DNSMASQ_LOG_FILE" ] || return 1
+    if have tail; then
+        tail -120 "$AP_DNSMASQ_LOG_FILE" 2>/dev/null | grep -q "DHCPACK($AP_IF)"
+    else
+        grep -q "DHCPACK($AP_IF)" "$AP_DNSMASQ_LOG_FILE" 2>/dev/null
+    fi
+}
+
+gateway_doctor_chain_counters() {
+    gateway_have_iptables || return 0
+    say "iptables counters snapshot:"
+    if iptables -t nat -L "$GATEWAY_NAT_CHAIN" -v -n -x >/dev/null 2>&1; then
+        iptables -t nat -L "$GATEWAY_NAT_CHAIN" -v -n -x 2>/dev/null | sed -n '1,5p'
+    else
+        gateway_doctor_warn "cannot read NAT chain counters: $GATEWAY_NAT_CHAIN"
+    fi
+    if iptables -L "$GATEWAY_FORWARD_CHAIN" -v -n -x >/dev/null 2>&1; then
+        iptables -L "$GATEWAY_FORWARD_CHAIN" -v -n -x 2>/dev/null | sed -n '1,7p'
+    else
+        gateway_doctor_warn "cannot read FORWARD chain counters: $GATEWAY_FORWARD_CHAIN"
+    fi
+}
+
+cmd_gateway_doctor() {
+    ap_load_config
+    GATEWAY_DOCTOR_OK=0
+    GATEWAY_DOCTOR_WARN=0
+    GATEWAY_DOCTOR_FAIL=0
+
+    gateway_doctor_section "summary"
+    say "[INFO] mgate version: $MGATE_VERSION"
+    say "[INFO] gateway mode: nat"
+    say "[INFO] transparent proxy: not enabled"
+    say "[INFO] ap interface: $AP_IF"
+    say "[INFO] upstream interface: $AP_UPSTREAM"
+    say "[INFO] subnet: $(gateway_subnet)"
+    uid="$(id -u 2>/dev/null || echo 1)"
+    if [ "$uid" = "0" ]; then
+        gateway_doctor_ok "running as root; iptables diagnostics should be complete"
+    else
+        gateway_doctor_warn "not running as root; iptables diagnostics may be incomplete"
+    fi
+
+    gateway_doctor_section "AP baseline"
+    if [ -f "$AP_CONFIG_FILE" ]; then
+        gateway_doctor_ok "AP config exists: $AP_CONFIG_FILE"
+    else
+        gateway_doctor_warn "AP config missing; run mgate ap-config to create it"
+    fi
+    if interface_exists "$AP_IF"; then
+        gateway_doctor_ok "$AP_IF exists"
+        ap_link="$(ap_iface_link_state "$AP_IF")"
+        [ "$ap_link" = "up" ] && gateway_doctor_ok "$AP_IF link is up" || gateway_doctor_fail "$AP_IF link is $ap_link"
+        ap_type="$(ap_iface_type "$AP_IF" || true)"
+        [ -n "$ap_type" ] || ap_type="unknown"
+        [ "$ap_type" = "AP" ] && gateway_doctor_ok "$AP_IF type is AP" || gateway_doctor_fail "$AP_IF type is $ap_type"
+        ap_ip="$(ap_ipv4_addr "$AP_IF" || true)"
+        [ -n "$ap_ip" ] || ap_ip="none"
+        case "$ap_ip" in
+            "$AP_IPADDR"/*) gateway_doctor_ok "$AP_IF ip: $ap_ip" ;;
+            none) gateway_doctor_fail "$AP_IF has no IPv4 address" ;;
+            *) gateway_doctor_warn "$AP_IF ip differs from config: $ap_ip expected $AP_IPADDR" ;;
+        esac
+    else
+        gateway_doctor_fail "$AP_IF does not exist; run mgate ap-start first"
+    fi
+    ap_pid_running "$AP_HOSTAPD_PID_FILE" && gateway_doctor_ok "hostapd running: $(sed -n '1p' "$AP_HOSTAPD_PID_FILE" 2>/dev/null)" || gateway_doctor_fail "hostapd is not running"
+    ap_pid_running "$AP_DNSMASQ_PID_FILE" && gateway_doctor_ok "dnsmasq running: $(sed -n '1p' "$AP_DNSMASQ_PID_FILE" 2>/dev/null)" || gateway_doctor_fail "dnsmasq is not running"
+    ap_is_running_healthy && gateway_doctor_ok "AP health check passed" || gateway_doctor_fail "AP health check failed"
+
+    gateway_doctor_section "upstream"
+    if interface_exists "$AP_UPSTREAM"; then
+        gateway_doctor_ok "$AP_UPSTREAM exists"
+        up_ip="$(ap_ipv4_addr "$AP_UPSTREAM" || true)"
+        [ -n "$up_ip" ] && gateway_doctor_ok "$AP_UPSTREAM ip: $up_ip" || gateway_doctor_fail "$AP_UPSTREAM has no IPv4 address"
+        if have ip; then
+            if ip route show default 2>/dev/null | grep -q "dev $AP_UPSTREAM"; then
+                gateway_doctor_ok "default route uses $AP_UPSTREAM"
+            else
+                gateway_doctor_fail "default route does not use $AP_UPSTREAM"
+                ip route show default 2>/dev/null | sed 's/^/[INFO] default route: /'
+            fi
+        else
+            gateway_doctor_fail "ip command missing; cannot inspect routes"
+        fi
+    else
+        gateway_doctor_fail "$AP_UPSTREAM does not exist"
+    fi
+
+    gateway_doctor_section "NAT baseline"
+    ip_forward="$(gateway_ip_forward_value)"
+    [ "$ip_forward" = "1" ] && gateway_doctor_ok "IPv4 forwarding enabled" || gateway_doctor_fail "IPv4 forwarding is $ip_forward"
+    if gateway_have_iptables; then
+        gateway_doctor_ok "iptables available: $(command -v iptables 2>/dev/null)"
+        if gateway_rules_active; then
+            gateway_doctor_ok "mgate NAT rules are active"
+        else
+            gateway_doctor_fail "mgate NAT rules are not active; run mgate gateway-start"
+        fi
+        subnet="$(gateway_subnet)"
+        if iptables -t nat -C "$GATEWAY_NAT_CHAIN" -s "$subnet" -o "$AP_UPSTREAM" -j MASQUERADE >/dev/null 2>&1; then
+            gateway_doctor_ok "MASQUERADE rule matches $subnet -> $AP_UPSTREAM"
+        else
+            gateway_doctor_warn "MASQUERADE rule detail did not match expected $subnet -> $AP_UPSTREAM"
+        fi
+        if iptables -C "$GATEWAY_FORWARD_CHAIN" -i "$AP_IF" -o "$AP_UPSTREAM" -s "$subnet" -j ACCEPT >/dev/null 2>&1; then
+            gateway_doctor_ok "forward rule allows $AP_IF -> $AP_UPSTREAM"
+        else
+            gateway_doctor_warn "forward rule for $AP_IF -> $AP_UPSTREAM not found"
+        fi
+        if iptables -C "$GATEWAY_FORWARD_CHAIN" -i "$AP_UPSTREAM" -o "$AP_IF" -d "$subnet" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || \
+           iptables -C "$GATEWAY_FORWARD_CHAIN" -i "$AP_UPSTREAM" -o "$AP_IF" -d "$subnet" -m state --state RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1; then
+            gateway_doctor_ok "return traffic rule allows established flows"
+        else
+            gateway_doctor_warn "return traffic rule not found"
+        fi
+    else
+        gateway_doctor_fail "iptables missing"
+    fi
+
+    gateway_doctor_section "DHCP and DNS"
+    if [ -f "$AP_DNSMASQ_CONF" ]; then
+        gateway_doctor_ok "dnsmasq config exists: $AP_DNSMASQ_CONF"
+        dns_opt="$(sed -n 's/^dhcp-option=6,//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        [ "$dns_opt" = "$AP_IPADDR" ] && gateway_doctor_ok "DHCP DNS option points to $AP_IPADDR" || gateway_doctor_fail "DHCP DNS option is ${dns_opt:-missing}, expected $AP_IPADDR"
+        listen_addr="$(sed -n 's/^listen-address=//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        [ "$listen_addr" = "$AP_IPADDR" ] && gateway_doctor_ok "dnsmasq listens on $AP_IPADDR" || gateway_doctor_warn "dnsmasq listen address is ${listen_addr:-missing}"
+        dns_port="$(sed -n 's/^port=//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        case "$dns_port" in
+            ""|53) gateway_doctor_ok "dnsmasq DNS forwarding enabled on port ${dns_port:-53}" ;;
+            0) gateway_doctor_fail "dnsmasq DNS forwarding disabled (port=0)" ;;
+            *) gateway_doctor_warn "dnsmasq DNS forwarding uses nonstandard port $dns_port" ;;
+        esac
+        resolv_file="$(sed -n 's/^resolv-file=//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
+        [ -n "$resolv_file" ] || resolv_file="/etc/resolv.conf"
+        static_servers="$(sed -n 's/^server=//p' "$AP_DNSMASQ_CONF" 2>/dev/null || true)"
+        if [ -n "$static_servers" ]; then
+            gateway_doctor_ok "dnsmasq has static upstream DNS server entries"
+        elif [ -r "$resolv_file" ] && grep -q '^nameserver[[:space:]]' "$resolv_file" 2>/dev/null; then
+            gateway_doctor_ok "dnsmasq upstream DNS source has nameservers: $resolv_file"
+        else
+            gateway_doctor_fail "dnsmasq has no readable upstream DNS source"
+        fi
+    else
+        gateway_doctor_fail "dnsmasq config missing: $AP_DNSMASQ_CONF"
+    fi
+    gateway_doctor_recent_dhcp_ack && gateway_doctor_ok "recent DHCPACK found for $AP_IF" || gateway_doctor_warn "no recent DHCPACK found; connect a client and rerun if needed"
+
+    gateway_doctor_section "packet counters"
+    gateway_doctor_chain_counters
+
+    gateway_doctor_section "transparent proxy baseline"
+    gateway_doctor_ok "plain NAT baseline is isolated from transparent proxy"
+    gateway_doctor_ok "no TProxy or mangle rules are required for current gateway mode"
+
+    say ""
+    say "[INFO] gateway doctor summary: OK=$GATEWAY_DOCTOR_OK WARN=$GATEWAY_DOCTOR_WARN ERROR=$GATEWAY_DOCTOR_FAIL"
+    if [ "$GATEWAY_DOCTOR_FAIL" -gt 0 ]; then
+        say "[ERROR] gateway baseline is not healthy enough for transparent proxy work"
+        return 1
+    fi
+    if [ "$GATEWAY_DOCTOR_WARN" -gt 0 ]; then
+        say "[WARN] gateway baseline works with warnings; review WARN items before TProxy work"
+        return 0
+    fi
+    say "[OK] gateway baseline is healthy"
+}
 backup_copy_dir() {
     src="$1"
     dst="$2"
@@ -4515,6 +4703,7 @@ NAT 网关：
   mgate gateway-stop        停止 mgate NAT 规则并恢复 ip_forward
   mgate gateway-status      查看 NAT 网关状态
   mgate gateway-debug       输出 NAT/AP/DHCP/DNS 诊断信息
+  mgate gateway-doctor      检查普通 NAT 网关健康基线
 
 备份与恢复：
   mgate backup [label]      创建备份
@@ -4689,6 +4878,7 @@ main() {
         gateway-stop|nat-stop) cmd_gateway_stop "$@" ;;
         gateway-status|nat-status) cmd_gateway_status "$@" ;;
         gateway-debug|nat-debug) cmd_gateway_debug "$@" ;;
+        gateway-doctor|nat-doctor) cmd_gateway_doctor "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
