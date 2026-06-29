@@ -5824,6 +5824,7 @@ cmd_ap_json() {
     json_collect_ap_state
     printf '{\n'
     printf '  "ok": true,\n'
+    printf '  "schema_version": 1,\n'
     printf '  "component": "ap",\n'
     printf '  "limited": %s,\n' "$JSON_AP_LIMITED"
     printf '  "warnings": '; json_root_warnings; printf ',\n'
@@ -5845,6 +5846,7 @@ cmd_gateway_json() {
     json_collect_gateway_state
     printf '{\n'
     printf '  "ok": true,\n'
+    printf '  "schema_version": 1,\n'
     printf '  "component": "gateway",\n'
     printf '  "limited": %s,\n' "$JSON_GATEWAY_LIMITED"
     printf '  "warnings": '; json_root_warnings; printf ',\n'
@@ -5866,6 +5868,7 @@ cmd_tproxy_json() {
     json_collect_tproxy_state
     printf '{\n'
     printf '  "ok": true,\n'
+    printf '  "schema_version": 1,\n'
     printf '  "component": "tproxy",\n'
     printf '  "limited": %s,\n' "$JSON_TPROXY_LIMITED"
     printf '  "warnings": '; json_root_warnings; printf ',\n'
@@ -5913,6 +5916,7 @@ cmd_status_json() {
     JSON_STATUS_LIMITED="$(json_root_limited)"
     printf '{\n'
     printf '  "ok": true,\n'
+    printf '  "schema_version": 1,\n'
     printf '  "version": '; json_string "$MGATE_VERSION"; printf ',\n'
     printf '  "limited": %s,\n' "$JSON_STATUS_LIMITED"
     printf '  "warnings": '; json_root_warnings; printf ',\n'
@@ -6539,6 +6543,7 @@ cmd_wifi_json() {
     dns_json="${dns_json}]"
     printf '{\n'
     printf '  "ok": true,\n'
+    printf '  "schema_version": 1,\n'
     printf '  "component": "wifi",\n'
     printf '  "interface": "%s",\n' "$WIFI_IF"
     printf '  "manager": "%s",\n' "$mgr"
@@ -6551,6 +6556,238 @@ cmd_wifi_json() {
     printf '  "ap_running": %s,\n' "$ap_running"
     printf '  "gateway_active": %s,\n' "$gw_active"
     printf '  "tproxy_enabled": %s\n' "$tproxy_on"
+    printf '}\n'
+}
+
+# -----------------------------
+# Agent interfaces (read-only, no ping, no sleep, no service changes)
+# -----------------------------
+cmd_agent_snapshot() {
+    # Fast: all checks are non-blocking; always emits valid JSON
+    ap_load_config 2>/dev/null || true
+
+    # Timestamp
+    _ts="$(date +%s 2>/dev/null || true)"
+    printf '%s' "$_ts" | grep -qE '^[0-9]+$' 2>/dev/null || _ts=""
+
+    # Hostname
+    _host="$(hostname 2>/dev/null || true)"
+
+    # WiFi (no ping)
+    _wifi_mgr="$(wifi_detect_manager 2>/dev/null || printf 'unknown')"
+    _wifi_exists="false"; wifi_if_exists 2>/dev/null && _wifi_exists="true"
+    _wifi_state="$(nmcli -t -f DEVICE,STATE dev status 2>/dev/null | \
+        grep "^${WIFI_IF}:" | sed 's/^[^:]*://' | head -1 || true)"
+    _wifi_conn="false"; [ "$_wifi_state" = "connected" ] && _wifi_conn="true"
+    _wifi_ssid="$(iw dev "$WIFI_IF" link 2>/dev/null | \
+        grep -i 'SSID:' | sed 's/.*SSID:[[:space:]]*//' || true)"
+    _wifi_ip="$(wifi_current_ip 2>/dev/null || true)"
+    _wifi_ch="$(iw dev "$WIFI_IF" info 2>/dev/null | \
+        sed -n 's/.*[[:space:]]channel \([0-9]*\)[[:space:]].*/\1/p' | head -1 || true)"
+    _wifi_route="false"; wifi_has_default_route 2>/dev/null && _wifi_route="true"
+
+    # AP (file/PID checks only)
+    _ap_if="${AP_IF:-ap0}"
+    _ap_exists="false"
+    ip link show "$_ap_if" >/dev/null 2>&1 && _ap_exists="true"
+    _ap_ip="$(ip addr show "$_ap_if" 2>/dev/null | \
+        sed -n 's/.*inet \([0-9.\/]*\).*/\1/p' | head -1 || true)"
+    _ap_hostapd="false"
+    if [ -f "$AP_HOSTAPD_PID_FILE" ]; then
+        kill -0 "$(cat "$AP_HOSTAPD_PID_FILE" 2>/dev/null || true)" 2>/dev/null && \
+            _ap_hostapd="true"
+    fi
+    _ap_dnsmasq="false"
+    if [ -f "$AP_DNSMASQ_PID_FILE" ]; then
+        kill -0 "$(cat "$AP_DNSMASQ_PID_FILE" 2>/dev/null || true)" 2>/dev/null && \
+            _ap_dnsmasq="true"
+    fi
+    _ap_healthy="false"
+    [ "$_ap_exists" = "true" ] && [ "$_ap_hostapd" = "true" ] && \
+        [ "$_ap_dnsmasq" = "true" ] && _ap_healthy="true"
+
+    # Gateway (iptables -S is faster than -L)
+    _gw_nat="false"
+    ( iptables -t nat -n -S "$GATEWAY_NAT_CHAIN" 2>/dev/null | \
+        grep -q "MASQUERADE" ) && _gw_nat="true"
+    _gw_fwd="false"
+    [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ] && _gw_fwd="true"
+
+    # TProxy (file checks + chain existence)
+    _tproxy_on="false"; [ -f "$TPROXY_ENABLED_FILE" ] && _tproxy_on="true"
+    _tproxy_mangle="false"
+    ( iptables -t mangle -n -L "$TPROXY_MANGLE_CHAIN" 2>/dev/null >/dev/null ) && \
+        _tproxy_mangle="true"
+
+    # Web (file checks only, no token content)
+    _web_token="false"
+    [ -f "$WEB_TOKEN_FILE" ] && [ -s "$WEB_TOKEN_FILE" ] && _web_token="true"
+    _web_cgi="false"
+    [ -x "$WEB_CGI_FILE" ] && _web_cgi="true"
+    _web_running="false"
+    if [ -f "$WEB_PID_FILE" ]; then
+        kill -0 "$(cat "$WEB_PID_FILE" 2>/dev/null || true)" 2>/dev/null && \
+            _web_running="true"
+    fi
+
+    # Subscription (file checks only)
+    _sub_url="false"
+    [ -f "$SUB_URL_FILE" ] && [ -s "$SUB_URL_FILE" ] && _sub_url="true"
+    _sub_last=""
+    [ -f "$SUB_LAST_UPDATE_FILE" ] && \
+        _sub_last="$(head -1 "$SUB_LAST_UPDATE_FILE" 2>/dev/null | \
+            sed 's/"/\\"/g' || true)"
+    _sub_status="false"; [ -f "$SUB_STATUS_FILE" ] && _sub_status="true"
+    _sub_nodes="false";  [ -f "$SUB_NODES_FILE" ]  && _sub_nodes="true"
+    _sub_accounts="false"; [ -f "$SUB_ACCOUNTS_FILE" ] && _sub_accounts="true"
+
+    # Mihomo
+    _mihomo_bin="false"
+    [ -x "$CORE_BIN" ] && _mihomo_bin="true"
+    _mihomo_run="false"
+    ( tproxy_mihomo_running ) 2>/dev/null && _mihomo_run="true"
+
+    # Last errors
+    _err_tproxy="null"
+    if [ -f "$TPROXY_LAST_ERROR_FILE" ]; then
+        _err_tproxy="\"$(head -1 "$TPROXY_LAST_ERROR_FILE" 2>/dev/null | \
+            sed 's/\\/\\\\/g;s/"/\\"/g' || true)\""
+    fi
+
+    # Mode & overall health
+    _mode="unknown"
+    [ "$_tproxy_on" = "true" ] && _mode="tproxy"
+    [ "$_mode" = "unknown" ] && [ "$_gw_nat" = "true" ] && _mode="nat"
+    _health="unknown"
+    [ "$_ap_healthy" = "true" ] && [ "$_gw_nat" = "true" ] && _health="healthy"
+    [ "$_tproxy_on" = "true" ] && [ "$_tproxy_mangle" = "true" ] && \
+        [ "$_ap_healthy" = "true" ] && _health="healthy"
+
+    # Output JSON (stdout only)
+    printf '{\n'
+    printf '  "ok": true,\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "component": "agent_snapshot",\n'
+    printf '  "version": "%s",\n' "$MGATE_VERSION"
+    if [ -n "$_ts" ]; then
+        printf '  "timestamp": %s,\n' "$_ts"
+    else
+        printf '  "timestamp": null,\n'
+    fi
+    if [ -n "$_host" ]; then
+        printf '  "hostname": "%s",\n' "$_host"
+    else
+        printf '  "hostname": null,\n'
+    fi
+    printf '  "mode": "%s",\n' "$_mode"
+    printf '  "overall_health": "%s",\n' "$_health"
+    printf '  "wifi": {\n'
+    printf '    "interface": "%s",\n' "$WIFI_IF"
+    printf '    "manager": "%s",\n' "$_wifi_mgr"
+    printf '    "exists": %s,\n' "$_wifi_exists"
+    printf '    "connected": %s,\n' "$_wifi_conn"
+    printf '    "ssid": "%s",\n' "${_wifi_ssid:-}"
+    printf '    "ip": "%s",\n' "${_wifi_ip:-}"
+    printf '    "channel": %s,\n' "${_wifi_ch:-0}"
+    printf '    "default_route": %s\n' "$_wifi_route"
+    printf '  },\n'
+    printf '  "ap": {\n'
+    printf '    "interface": "%s",\n' "$_ap_if"
+    printf '    "exists": %s,\n' "$_ap_exists"
+    printf '    "ip": "%s",\n' "${_ap_ip:-}"
+    printf '    "hostapd_running": %s,\n' "$_ap_hostapd"
+    printf '    "dnsmasq_running": %s,\n' "$_ap_dnsmasq"
+    printf '    "healthy": %s\n' "$_ap_healthy"
+    printf '  },\n'
+    printf '  "gateway": {\n'
+    printf '    "nat_active": %s,\n' "$_gw_nat"
+    printf '    "ipv4_forwarding": %s\n' "$_gw_fwd"
+    printf '  },\n'
+    printf '  "tproxy": {\n'
+    printf '    "enabled": %s,\n' "$_tproxy_on"
+    printf '    "port": %s,\n' "$TPROXY_PORT"
+    printf '    "mangle_chain_exists": %s\n' "$_tproxy_mangle"
+    printf '  },\n'
+    printf '  "web": {\n'
+    printf '    "port": %s,\n' "$WEB_PORT"
+    printf '    "running": %s,\n' "$_web_running"
+    printf '    "cgi_exists": %s,\n' "$_web_cgi"
+    printf '    "token_exists": %s\n' "$_web_token"
+    printf '  },\n'
+    printf '  "subscription": {\n'
+    printf '    "url_configured": %s,\n' "$_sub_url"
+    if [ -n "$_sub_last" ]; then
+        printf '    "last_update": "%s",\n' "$_sub_last"
+    else
+        printf '    "last_update": null,\n'
+    fi
+    printf '    "status_file_exists": %s,\n' "$_sub_status"
+    printf '    "nodes_file_exists": %s,\n' "$_sub_nodes"
+    printf '    "accounts_file_exists": %s\n' "$_sub_accounts"
+    printf '  },\n'
+    printf '  "mihomo": {\n'
+    printf '    "binary_exists": %s,\n' "$_mihomo_bin"
+    printf '    "running": %s,\n' "$_mihomo_run"
+    printf '    "mixed_port": %s,\n' "$DEFAULT_MIXED_PORT"
+    printf '    "tproxy_port": %s\n' "$TPROXY_PORT"
+    printf '  },\n'
+    printf '  "last_errors": {\n'
+    printf '    "tproxy": %s,\n' "$_err_tproxy"
+    printf '    "gateway": null,\n'
+    printf '    "wifi": null\n'
+    printf '  },\n'
+    printf '  "warnings": []\n'
+    printf '}\n'
+}
+
+cmd_capabilities_json() {
+    printf '{\n'
+    printf '  "ok": true,\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "component": "capabilities",\n'
+    printf '  "version": "%s",\n' "$MGATE_VERSION"
+    printf '  "features": {\n'
+    printf '    "mihomo": true,\n'
+    printf '    "subscription": true,\n'
+    printf '    "web": true,\n'
+    printf '    "tui": true,\n'
+    printf '    "wifi": true,\n'
+    printf '    "ap": true,\n'
+    printf '    "gateway": true,\n'
+    printf '    "tproxy": true,\n'
+    printf '    "json": true,\n'
+    printf '    "preflight": true,\n'
+    printf '    "agent_snapshot": true\n'
+    printf '  },\n'
+    printf '  "commands": {\n'
+    printf '    "read_only": [\n'
+    printf '      "status-json","wifi-json","ap-json","gateway-json","tproxy-json",\n'
+    printf '      "agent-snapshot","capabilities-json",\n'
+    printf '      "wifi-status","wifi-scan","wifi-list","wifi-doctor",\n'
+    printf '      "ap-status","ap-check","ap-json",\n'
+    printf '      "gateway-status","gateway-check","gateway-doctor","gateway-json",\n'
+    printf '      "tproxy-status","tproxy-check","tproxy-health","tproxy-doctor","tproxy-json",\n'
+    printf '      "sub-status","sub-nodes","sub-unmatched",\n'
+    printf '      "proxy-info","version","doctor","preflight"\n'
+    printf '    ],\n'
+    printf '    "dangerous": [\n'
+    printf '      "wifi-connect","wifi-disconnect","wifi-reconnect","wifi-delete",\n'
+    printf '      "ap-start","ap-stop","gateway-start","gateway-stop",\n'
+    printf '      "tproxy-start","tproxy-stop","self-update","update",\n'
+    printf '      "install-core","migrate","sub-update","web-disable","uninstall"\n'
+    printf '    ],\n'
+    printf '    "interactive": [\n'
+    printf '      "tui","ap-install-deps","edit"\n'
+    printf '    ]\n'
+    printf '  },\n'
+    printf '  "agent_contract": {\n'
+    printf '    "safe_poll_command": "agent-snapshot",\n'
+    printf '    "recommended_poll_interval_seconds": 10,\n'
+    printf '    "snapshot_timeout_seconds": 2,\n'
+    printf '    "json_timeout_seconds": 2,\n'
+    printf '    "doctor_timeout_seconds": 20,\n'
+    printf '    "dangerous_actions_require_dedicated_action_api": true\n'
+    printf '  }\n'
     printf '}\n'
 }
 
@@ -7989,6 +8226,10 @@ NAT 网关：
   mgate wifi-doctor         诊断上级 WiFi 连接
   mgate wifi-json           输出 WiFi 状态 JSON
 
+Agent 接口（只读，JSON，schema_version=1）：
+  mgate agent-snapshot      agent 专用完整只读快照（推荐高频采集入口）
+  mgate capabilities-json   能力声明，告知 agent 支持哪些命令和特性
+
 升级与迁移：
   mgate migrate             升级后同步配置和生成文件（self-update 会自动调用）
 
@@ -8640,6 +8881,8 @@ main() {
         wifi-reconnect) cmd_wifi_reconnect "$@" ;;
         wifi-doctor) cmd_wifi_doctor "$@" ;;
         wifi-json) cmd_wifi_json "$@" ;;
+        agent-snapshot) cmd_agent_snapshot "$@" ;;
+        capabilities-json) cmd_capabilities_json "$@" ;;
         _wifi-watchdog) cmd_wifi_watchdog_run "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;

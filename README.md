@@ -221,10 +221,42 @@ mgate wifi-json            # JSON 状态输出
 mgate ap-json
 mgate gateway-json
 mgate tproxy-json
-mgate status-json      # 聚合所有模块状态
+mgate status-json          # 聚合所有模块状态
+mgate wifi-json
+mgate agent-snapshot       # agent 专用完整快照（推荐采集入口）
+mgate capabilities-json    # 能力声明
 ```
 
-只读接口，不修改 iptables / ip rule / config.yaml。字段名保持稳定，适合 Web 首页和脚本调用。
+只读接口，不修改 iptables / ip rule / config.yaml。所有 JSON 接口均包含 `schema_version: 1`，字段名保持稳定。
+
+### 🤖 mgate-agent 对接
+
+**推荐采集入口**（高频，目标 < 1s）：
+
+```sh
+mgate agent-snapshot
+```
+
+一次性输出完整只读快照：WiFi / AP / Gateway / TProxy / Web / 订阅 / Mihomo 状态，无 ping、无 sleep、无服务变更。
+
+**能力声明**（低频，agent 启动时查询）：
+
+```sh
+mgate capabilities-json
+```
+
+告知 agent 当前版本支持哪些特性、哪些命令是只读安全的、哪些是危险操作。
+
+**诊断采样**（低频，人工触发或问题排查）：
+
+```sh
+mgate wifi-doctor
+mgate gateway-doctor
+mgate tproxy-health
+mgate tproxy-doctor
+```
+
+> ⚠️ **agent 边界**：agent 不应直接调用危险或交互式命令（`wifi-connect`、`tproxy-start`、`self-update`、`tui` 等）。未来如需远程控制，须单独设计带白名单、参数校验、超时、锁和审计的 action API，本版本不包含此能力。
 
 ### 💾 备份与恢复
 
