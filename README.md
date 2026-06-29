@@ -169,7 +169,7 @@ mgate gateway-json
 mgate tproxy-check     # 检查内核/iptables 支持
 mgate tproxy-plan      # 预览将要执行的操作（不执行）
 mgate tproxy-dry-run   # 干跑模式
-mgate tproxy-start     # 启动（需输入 yes 强确认）
+mgate tproxy-start     # 启动 TProxy
 mgate tproxy-stop      # 停止并退回 NAT fallback
 mgate tproxy-status
 mgate tproxy-health
