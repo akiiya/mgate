@@ -4967,9 +4967,12 @@ cmd_tproxy_nodes() {
     fi
     now="$(printf '%s' "$result" | sed -n 's/.*"now"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
     [ -n "$now" ] && info "当前选中：$now"
-    printf '%s' "$result" | tr ',' '\n' | sed -n 's/.*"\([^"]*\)".*/\1/p' | grep -v '^$' | \
-        awk 'p&&/^\[/{exit} /^"all"/{p=1;next} p' || true
-    nodes="$(printf '%s' "$result" | sed 's/.*"all"[[:space:]]*:[[:space:]]*\[//' | sed 's/\].*//' | tr ',' '\n' | sed 's/[^"]*"\([^"]*\)".*/\1/' | grep -v '^$')"
+    # 从 "all":[ 之后提取所有引号内字符串，避免 sed 's/\].*//' 在节点名含 ] 时截断
+    nodes="$(printf '%s' "$result" | \
+        sed 's/.*"all"[[:space:]]*:[[:space:]]*\[//' | \
+        grep -o '"[^"]*"' | \
+        sed 's/^"//;s/"$//' | \
+        grep -v '^$')"
     if [ -n "$nodes" ]; then
         step "可用节点"
         printf '%s\n' "$nodes" | while IFS= read -r n; do
