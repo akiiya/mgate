@@ -1366,6 +1366,7 @@ nav() {
 <a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=account-password">账号密码</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=sub-status">订阅状态</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=wifi-page">WiFi 管理</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=sub-set">设置订阅</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-update">更新订阅</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-clear">清除订阅</a>
@@ -2064,6 +2065,57 @@ EOF
 }
 
 
+wifi_page() {
+    header
+    page_start "WiFi 管理"
+    nav
+    # 当前状态
+    cat <<'EOF'
+<div class="card">
+<h2>当前 WiFi 状态</h2>
+<pre>
+EOF
+    $MGATE wifi-status 2>&1 | html_escape
+    cat <<'EOF'
+</pre>
+</div>
+<div class="card">
+<h2>已保存 WiFi（按优先级排序）</h2>
+<pre>
+EOF
+    $MGATE wifi-list 2>&1 | html_escape
+    cat <<'EOF'
+</pre>
+</div>
+<div class="card">
+<h2>添加 WiFi 配置</h2>
+<p class="muted">添加后不会立即连接，需在终端或 TUI 执行 mgate wifi-connect 切换。</p>
+<p class="muted">⚠️ 此页面通过 HTTP 传输，密码不加密，请在受信任网络内使用。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="wifi-add-do">
+<div class="row"><input type="text" name="wifi_ssid" placeholder="WiFi 名称 (SSID)" required autocomplete="off"></div>
+<div class="row"><input type="password" name="wifi_password" placeholder="密码（留空 = 开放网络）" autocomplete="off"></div>
+<div class="row"><button class="primary" type="submit">添加 WiFi 配置</button></div>
+</form>
+</div>
+<div class="card">
+<h2>删除 WiFi 配置</h2>
+<p class="muted">只能删除非当前连接的已保存配置。配置名称见上方列表。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="wifi-delete-do">
+<div class="row"><input type="text" name="wifi_profile" placeholder="profile 名称（区分大小写）" required autocomplete="off"></div>
+<div class="row"><button class="btn danger" type="submit">删除 WiFi 配置</button></div>
+</form>
+</div>
+<div class="card">
+<h2>扫描 / 诊断</h2>
+<p><a class="btn" href="/cgi-bin/mgate.cgi?action=wifi-scan-do">扫描附近 WiFi</a>
+   <a class="btn" href="/cgi-bin/mgate.cgi?action=wifi-doctor-do">WiFi Doctor</a></p>
+</div>
+EOF
+    page_end
+}
+
 sub_status_page() {
     header
     page_start "订阅状态"
@@ -2190,6 +2242,18 @@ else
         tproxy-doctor) run_job_page "TProxy 诊断" tproxy-doctor ;;
         account-password) account_password_page ;;
         sub-status) sub_status_page ;;
+        wifi-page) wifi_page ;;
+        wifi-add-do)
+            wifi_ssid="$(url_decode "$(param_get "$post_body" wifi_ssid)")"
+            wifi_pw="$(url_decode "$(param_get "$post_body" wifi_password)")"
+            run_job_page "添加 WiFi $wifi_ssid" wifi-add "$wifi_ssid" "$wifi_pw" --yes
+            ;;
+        wifi-delete-do)
+            wifi_profile="$(url_decode "$(param_get "$post_body" wifi_profile)")"
+            run_job_page "删除 WiFi $wifi_profile" wifi-delete "$wifi_profile" --yes
+            ;;
+        wifi-scan-do) run_job_page "扫描 WiFi" wifi-scan ;;
+        wifi-doctor-do) run_job_page "WiFi Doctor" wifi-doctor ;;
         sub-set) sub_set_page ;;
         sub-set-do)
             sub_url="$(url_decode "$(param_get "$post_body" sub_url)")"
@@ -6278,18 +6342,28 @@ cmd_wifi_list() {
 }
 
 cmd_wifi_add() {
-    ssid="$1"
-    password="${2:-}"
+    _wa_yes=0; ssid=""; password=""
+    for _a in "$@"; do
+        case "$_a" in
+            --yes|-y) _wa_yes=1 ;;
+            -*) : ;;
+            *) [ -z "$ssid" ] && ssid="$_a" || password="$_a" ;;
+        esac
+    done
     [ -n "$ssid" ] || die "用法：mgate wifi-add <ssid> [password]"
     need_root
     mgr="$(wifi_detect_manager)"
     [ "$mgr" = "NetworkManager" ] || die "wifi-add 仅支持 NetworkManager 环境"
     if nmcli connection show "$ssid" >/dev/null 2>&1; then
+        if [ "$_wa_yes" = "1" ]; then
+            err "已存在同名连接配置：$ssid（web 模式不自动覆盖，请先删除再添加）"
+            return 1
+        fi
         warn "已存在同名连接配置：$ssid"
         tui_confirm "覆盖已有配置？" || return 1
         nmcli connection delete "$ssid" >/dev/null 2>&1 || true
     fi
-    if [ -z "$password" ]; then
+    if [ -z "$password" ] && [ "$_wa_yes" = "0" ]; then
         warn "未提供密码，将添加为开放网络（无加密）"
         tui_confirm "确认添加开放网络？" || return 1
     fi
@@ -6383,17 +6457,28 @@ cmd_wifi_disconnect() {
 }
 
 cmd_wifi_delete() {
-    profile="$1"
+    _wd_yes=0; profile=""
+    for _a in "$@"; do
+        case "$_a" in
+            --yes|-y) _wd_yes=1 ;;
+            -*) : ;;
+            *) profile="$_a" ;;
+        esac
+    done
     [ -n "$profile" ] || die "用法：mgate wifi-delete <ssid-或-profile名>"
     need_root
     mgr="$(wifi_detect_manager)"
     [ "$mgr" = "NetworkManager" ] || die "wifi-delete 仅支持 NetworkManager 环境"
-    current_ssid="$(wifi_connected_ssid)"
-    if [ "$current_ssid" = "$profile" ]; then
+    current_profile="$(wifi_current_profile)"
+    if [ "$current_profile" = "$profile" ]; then
+        if [ "$_wd_yes" = "1" ]; then
+            err "拒绝从 web 删除当前正在使用的 WiFi 配置（$profile），请在终端操作"
+            return 1
+        fi
         warn "警告：$profile 是当前正在连接的 WiFi，删除后将立即断开"
         tui_confirm_yes "确认删除当前连接的 WiFi 配置 $profile" || return 1
     else
-        tui_confirm "确认删除 WiFi 配置：$profile？" || return 1
+        [ "$_wd_yes" = "1" ] || { tui_confirm "确认删除 WiFi 配置：$profile？" || return 1; }
     fi
     nmcli connection delete "$profile" 2>&1 || die "删除失败，请确认配置名称正确"
     ok "已删除 WiFi 配置：$profile"
