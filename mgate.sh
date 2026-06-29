@@ -548,6 +548,9 @@ generate_config_content() {
 mode: rule
 log-level: warning
 ipv6: false
+allow-lan: true
+bind-address: '*'
+tproxy-port: __TPROXY_PORT__
 
 # Mixed listener supports both HTTP and SOCKS5 proxy protocols on one port.
 # Client examples:
@@ -624,6 +627,14 @@ proxies:
       grpc-service-name: "grpc-service-name"
 
 proxy-groups:
+  - name: TPROXY-OUT
+    type: select
+    proxies:
+      - node-DE
+      - node-JP
+      - node-US
+      - node-UK
+
   - name: DE
     type: select
     proxies:
@@ -645,6 +656,7 @@ proxy-groups:
       - node-UK
 
 rules:
+  - IN-TYPE,TPROXY,TPROXY-OUT
   - IN-USER,DE,DE
   - IN-USER,JP,JP
   - IN-USER,US,US
@@ -657,7 +669,8 @@ render_config_content() {
     generate_config_content | sed \
         -e "s/__MIXED_PORT__/$DEFAULT_MIXED_PORT/g" \
         -e "s/__SOCKS_PORT__/$DEFAULT_SOCKS_PORT/g" \
-        -e "s/__HTTP_PORT__/$DEFAULT_HTTP_PORT/g"
+        -e "s/__HTTP_PORT__/$DEFAULT_HTTP_PORT/g" \
+        -e "s/__TPROXY_PORT__/$TPROXY_PORT/g"
 }
 
 generate_config() {
@@ -4123,14 +4136,8 @@ cmd_tproxy_plan() {
     tproxy_capability_summary
 
     tproxy_plan_section "planned changes"
-    if [ "$current_port" = "none" ]; then
-        tproxy_info "mihomo config plan: add tproxy-port: $planned_port to $CONFIG_FILE"
-        tproxy_info "mihomo config plan: enable allow-lan and bind transparent listener on all addresses"
-        tproxy_info "mihomo config plan: add $TPROXY_OUT_GROUP outbound group and IN-TYPE,TPROXY rule"
-    else
-        tproxy_info "mihomo config plan: keep existing tproxy-port: $current_port"
-        tproxy_info "mihomo config plan: ensure allow-lan, bind-address, $TPROXY_OUT_GROUP outbound group, and IN-TYPE,TPROXY rule"
-    fi
+    tproxy_info "tproxy-port $TPROXY_PORT is always enabled when mihomo starts (built into default config)"
+    tproxy_info "tproxy-start only requires: mihomo running + port $TPROXY_PORT listening"
     tproxy_info "planned mark: $TPROXY_MARK"
     tproxy_info "planned route table: $TPROXY_ROUTE_TABLE"
     tproxy_info "planned mangle chain: $TPROXY_MANGLE_CHAIN"
@@ -4162,21 +4169,8 @@ cmd_tproxy_dry_run() {
     tproxy_current_state
 
     tproxy_plan_section "dry-run commands not executed"
-    if [ "$current_port" = "none" ]; then
-        say "# backup mihomo config before future change"
-        say "cp '$CONFIG_FILE' '$CONFIG_FILE.pre-tproxy'"
-        say "# add or set in $CONFIG_FILE: tproxy-port: $planned_port"
-        say "# add or set in $CONFIG_FILE: allow-lan: true"
-        say "# add or set in $CONFIG_FILE: bind-address: '*'"
-        say "# add proxy-group: $TPROXY_OUT_GROUP; provider configs use url-test to avoid a bad first node"
-        say "# add rule before IN-USER/MATCH rules: IN-TYPE,TPROXY,$TPROXY_OUT_GROUP"
-    else
-        say "# keep existing mihomo tproxy-port: $current_port"
-        say "# ensure in $CONFIG_FILE: allow-lan: true"
-        say "# ensure in $CONFIG_FILE: bind-address: '*'"
-        say "# ensure proxy-group: $TPROXY_OUT_GROUP; provider configs use url-test to avoid a bad first node"
-        say "# ensure rule before IN-USER/MATCH rules: IN-TYPE,TPROXY,$TPROXY_OUT_GROUP"
-    fi
+    say "# tproxy-port $TPROXY_PORT is always in mihomo config; no config modification at runtime"
+    say "# prerequisite: mgate start (mihomo must be running and port $TPROXY_PORT listening)"
     say "ip rule add fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
     say "ip route add local 0.0.0.0/0 dev lo table $TPROXY_ROUTE_TABLE"
     say "iptables -t mangle -N $TPROXY_MANGLE_CHAIN"
@@ -4201,11 +4195,7 @@ cmd_tproxy_dry_run() {
     say "ip rule del fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE 2>/dev/null || true"
     say "ip route del local 0.0.0.0/0 dev lo table $TPROXY_ROUTE_TABLE 2>/dev/null || true"
     say "ip route flush table $TPROXY_ROUTE_TABLE 2>/dev/null || true"
-    if [ "$current_port" = "none" ]; then
-        say "# restore mihomo config: cp '$CONFIG_FILE.pre-tproxy' '$CONFIG_FILE'"
-    else
-        say "# mihomo config restore not needed if existing tproxy-port is reused"
-    fi
+    say "# mihomo config is not modified at runtime; no config restore needed"
 
     tproxy_plan_section "risks"
     tproxy_print_risks
@@ -4752,22 +4742,6 @@ tproxy_rollback() {
         rollback_failed=1
     fi
 
-    if [ "${TPROXY_START_CONFIG_MODIFIED:-0}" = "1" ]; then
-        if tproxy_restore_config_from_backup "$TPROXY_START_BACKUP"; then
-            rm -f "$TPROXY_CONFIG_OWNED_FILE" "$TPROXY_CONFIG_BACKUP_FILE" 2>/dev/null || true
-            tproxy_ok "mihomo config restored during rollback"
-            if tproxy_restart_mihomo; then
-                tproxy_ok "mihomo restarted after rollback"
-            else
-                tproxy_warn "mihomo restart failed after rollback"
-                rollback_failed=1
-            fi
-        else
-            tproxy_warn "failed to restore mihomo config during rollback"
-            rollback_failed=1
-        fi
-    fi
-
     rm -f "$TPROXY_ENABLED_FILE" 2>/dev/null || true
     if [ "$rollback_failed" -eq 0 ]; then
         tproxy_ok "rollback complete; NAT gateway fallback was preserved"
@@ -4799,8 +4773,6 @@ cmd_tproxy_start() {
     need_root
     ensure_dirs
     ap_load_config
-    TPROXY_START_CONFIG_MODIFIED=0
-    TPROXY_START_BACKUP=""
     tproxy_clear_error
 
     tproxy_info "starting TProxy enable sequence"
@@ -4812,26 +4784,11 @@ cmd_tproxy_start() {
 
     tproxy_start_preflight || return 1
 
-    tproxy_info "backing up and checking mihomo config"
-    if ! tproxy_ensure_config_port; then
-        [ -f "$TPROXY_LAST_ERROR_FILE" ] || tproxy_save_error "failed to backup or update mihomo config"
-        [ "${TPROXY_START_CONFIG_MODIFIED:-0}" = "1" ] && tproxy_rollback "failed to backup or update mihomo config"
+    if ! tproxy_mihomo_running; then
+        tproxy_save_error "mihomo is not running; run: mgate start"
         return 1
     fi
-    if tproxy_test_config; then
-        tproxy_ok "mihomo config test passed"
-    else
-        tproxy_rollback "mihomo config test failed; see $TMP_DIR/tproxy-config-test.out"
-        return 1
-    fi
-
-    tproxy_info "restarting mihomo to apply tproxy-port"
-    if tproxy_restart_mihomo; then
-        tproxy_ok "mihomo restarted"
-    else
-        tproxy_rollback "mihomo restart failed"
-        return 1
-    fi
+    tproxy_ok "mihomo running"
 
     if tproxy_port_listening; then
         tproxy_ok "mihomo tproxy-port listening: $TPROXY_PORT"
@@ -4840,7 +4797,7 @@ cmd_tproxy_start() {
         if [ "$listen_rc" -eq 2 ]; then
             tproxy_warn "ss/netstat missing; cannot verify tproxy-port listener"
         else
-            tproxy_rollback "mihomo tproxy-port $TPROXY_PORT is not listening"
+            tproxy_save_error "mihomo tproxy-port $TPROXY_PORT is not listening; ensure config.yaml has tproxy-port: $TPROXY_PORT and restart mihomo"
             return 1
         fi
     fi
@@ -4887,18 +4844,6 @@ cmd_tproxy_stop() {
         tproxy_warn "some TProxy rules may remain; inspect mgate tproxy-debug"
     fi
     rm -f "$TPROXY_ENABLED_FILE" 2>/dev/null || true
-
-    if [ -f "$TPROXY_CONFIG_OWNED_FILE" ]; then
-        tproxy_info "restoring mgate-owned mihomo config backup"
-        if tproxy_restore_owned_config; then
-            tproxy_ok "mgate-owned tproxy-port config restored"
-        else
-            tproxy_warn "could not restore mgate-owned config; inspect markers in $DATA_DIR"
-        fi
-    else
-        tproxy_info "mihomo config not changed; no mgate-owned tproxy-port marker found"
-    fi
-
     tproxy_log "TProxy stopped; NAT gateway fallback preserved"
     cmd_tproxy_status
     cmd_gateway_status
@@ -6742,6 +6687,9 @@ generate_sub_config_file() {
 mode: rule
 log-level: warning
 ipv6: false
+allow-lan: true
+bind-address: '*'
+tproxy-port: $TPROXY_PORT
 
 authentication:
 EOF_SUB_CONFIG
@@ -6767,6 +6715,13 @@ proxy-providers:
       enable: false
 
 proxy-groups:
+  - name: $TPROXY_OUT_GROUP
+    type: url-test
+    use:
+      - mgate-sub
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+
 EOF_SUB_CONFIG
 
     while IFS= read -r code; do
@@ -6784,6 +6739,7 @@ EOF_GROUP
 
     cat >> "$out" <<EOF_RULES
 rules:
+  - IN-TYPE,TPROXY,$TPROXY_OUT_GROUP
 EOF_RULES
     while IFS= read -r code; do
         [ -n "$code" ] || continue
