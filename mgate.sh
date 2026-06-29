@@ -1937,6 +1937,15 @@ proxy_info_page() {
     mixed_port="$(listener_port mixed-users "$DEFAULT_MIXED_PORT")"
     tproxy_port="$(tproxy_mihomo_port 2>/dev/null || true)"
     [ -n "$tproxy_port" ] || tproxy_port="$TPROXY_PORT"
+    out_type="$(awk '
+        /^proxy-groups:[[:space:]]*$/ {in_groups=1; next}
+        /^rules:[[:space:]]*$/ {in_group=0; in_groups=0}
+        in_groups && /name:[[:space:]]*TPROXY-OUT/ {in_group=1; next}
+        in_group && /^[[:space:]]*type:[[:space:]]*/ {
+            sub(/.*type:[[:space:]]*/, ""); gsub(/[[:space:]]/, ""); print; exit
+        }
+    ' "$CONFIG_FILE" 2>/dev/null | head -1)"
+    [ -n "$out_type" ] || out_type="unknown"
 
     header
     page_start "连接信息"
@@ -1982,6 +1991,37 @@ EOF
 <tr><td>监听地址</td><td><span class="code">0.0.0.0:$tproxy_port</span></td></tr>
 <tr><td>启用方式</td><td>mgate start 后自动监听；mgate tproxy-start 后流量才实际转入</td></tr>
 </tbody></table>
+</div>
+<div class="card">
+<h2>透明代理节点切换</h2>
+<p class="muted">TProxy 流量由 <span class="code">TPROXY-OUT</span> 代理组统一处理。</p>
+<table class="table"><tbody>
+<tr><td>TPROXY-OUT 类型</td><td><span class="code">$out_type</span></td></tr>
+EOF
+    case "$out_type" in
+        url-test)
+            cat <<'EOF'
+<tr><td>节点选择</td><td>自动测速，选最快节点</td></tr>
+</tbody></table>
+<p class="muted">订阅模式下 TPROXY-OUT 自动测速并选择最快节点，无需手动切换。如需固定到某个节点，请执行 <span class="code">mgate edit</span>，将 TPROXY-OUT 类型改为 <span class="code">select</span> 并指定目标代理，然后执行 <span class="code">mgate restart</span>。</p>
+EOF
+            ;;
+        select)
+            cat <<'EOF'
+<tr><td>节点选择</td><td>手动指定</td></tr>
+</tbody></table>
+<p class="muted">手动模式下请执行 <span class="code">mgate edit</span>，在 TPROXY-OUT 的 proxies 列表中调整顺序或选择目标代理，然后执行 <span class="code">mgate restart</span> 生效。</p>
+EOF
+            ;;
+        *)
+            cat <<'EOF'
+<tr><td>节点选择</td><td>-</td></tr>
+</tbody></table>
+<p class="muted">未检测到 TPROXY-OUT 代理组。请先执行 <span class="code">mgate sub-set &lt;url&gt;</span> 配置订阅，或手动在 config.yaml 中添加 TPROXY-OUT 代理组。</p>
+EOF
+            ;;
+    esac
+    cat <<'EOF'
 </div>
 EOF
     page_end
