@@ -5953,13 +5953,14 @@ wifi_if_exists() {
 }
 
 wifi_list_profiles() {
-    # 输出已保存 WiFi profile 名，每行一个
+    # 输出已保存 WiFi profile 名，按优先级降序，每行一个
     mgr="$(wifi_detect_manager)"
     case "$mgr" in
         NetworkManager)
-            nmcli -t -f NAME,TYPE connection show 2>/dev/null | \
+            nmcli -t -f NAME,TYPE,AUTOCONNECT-PRIORITY connection show 2>/dev/null | \
                 grep ':802-11-wireless\|:wifi' | \
-                sed 's/:.*//' | grep -v '^$'
+                sort -t: -k3 -rn | \
+                cut -d: -f1 | grep -v '^$'
             ;;
     esac
 }
@@ -6106,18 +6107,22 @@ cmd_wifi_scan() {
 
 cmd_wifi_list() {
     mgr="$(wifi_detect_manager)"
-    step "已保存 WiFi 配置"
+    step "已保存 WiFi 配置（按优先级降序）"
     case "$mgr" in
         NetworkManager)
             current="$(wifi_current_profile)"
-            profiles="$(wifi_list_profiles)"
-            if [ -n "$profiles" ]; then
-                printf '%s\n' "$profiles" | while IFS= read -r name; do
+            data="$(nmcli -t -f NAME,TYPE,AUTOCONNECT-PRIORITY connection show 2>/dev/null | \
+                grep ':802-11-wireless\|:wifi' | \
+                sort -t: -k3 -rn)"
+            if [ -n "$data" ]; then
+                printf '%s\n' "$data" | while IFS= read -r line; do
+                    name="$(printf '%s' "$line" | cut -d: -f1)"
+                    priority="$(printf '%s' "$line" | rev | cut -d: -f1 | rev)"
                     [ -n "$name" ] || continue
                     if [ "$name" = "$current" ]; then
-                        info "* $name（当前连接）"
+                        info "* $name（优先级：${priority:-0}，当前连接）"
                     else
-                        info "  $name"
+                        info "  $name（优先级：${priority:-0}）"
                     fi
                 done
             else
