@@ -7365,6 +7365,20 @@ Web 管理：
   mgate help                查看帮助
 EOF_USAGE
 }
+tui_clear() {
+    printf '\033[2J\033[H'
+}
+
+tui_header() {
+    tui_clear
+    say "mgate  $WORKDIR"
+    say "========================================"
+    if [ -n "${1:-}" ]; then
+        say "$1"
+        say "----------------------------------------"
+    fi
+}
+
 tui_confirm() {
     msg="$1"
     printf '%s [y/N] ' "$msg"
@@ -7386,27 +7400,62 @@ tui_confirm_yes() {
     esac
 }
 
-menu_ap() {
+menu_mihomo() {
     while :; do
+        tui_header "Mihomo 管理"
         say ""
-        say "AP 热点管理"
-        say "1) AP 环境检查"
-        say "2) 安装 AP 依赖"
-        say "3) 查看 AP 配置"
-        say "4) 查看 AP 状态"
-        say "5) 启动 AP"
-        say "6) 停止 AP"
-        say "7) 输出 AP JSON"
-        say "0) 返回主菜单"
-        printf '请选择: '
+        say "1) 启动"
+        say "2) 停止"
+        say "3) 重启"
+        say "4) 查看状态"
+        say "5) 查看日志"
+        say "6) 测试配置"
+        say "7) 编辑配置"
+        say "8) 查看配置"
+        say "9) 系统诊断"
+        say ""
+        say "0 / Enter  返回"
+        printf '> '
         read -r choice || return 0
         case "$choice" in
+            ""|0) return 0 ;;
+            1) service_start; pause_enter ;;
+            2) service_stop; pause_enter ;;
+            3) service_restart; pause_enter ;;
+            4) service_status; pause_enter ;;
+            5) cmd_logs; pause_enter ;;
+            6) cmd_test; pause_enter ;;
+            7) cmd_edit; pause_enter ;;
+            8) cmd_config; pause_enter ;;
+            9) cmd_doctor; pause_enter ;;
+            *) warn "无效选项"; pause_enter ;;
+        esac
+    done
+}
+
+menu_ap() {
+    while :; do
+        tui_header "AP 热点管理"
+        say ""
+        say "1) 环境检查"
+        say "2) 安装依赖"
+        say "3) 查看配置"
+        say "4) 查看状态"
+        say "5) 启动 AP"
+        say "6) 停止 AP"
+        say "7) JSON 状态"
+        say ""
+        say "0 / Enter  返回"
+        printf '> '
+        read -r choice || return 0
+        case "$choice" in
+            ""|0) return 0 ;;
             1) cmd_ap_check; pause_enter ;;
             2) cmd_ap_install_deps; pause_enter ;;
             3) cmd_ap_config; pause_enter ;;
             4) cmd_ap_status; pause_enter ;;
             5)
-                if tui_confirm "将创建/复用 ap0，并启动 mgate 隔离的 hostapd/dnsmasq，继续吗？"; then
+                if tui_confirm "将创建/复用 ap0 并启动 mgate 隔离的 hostapd/dnsmasq，继续吗？"; then
                     cmd_ap_start
                 fi
                 pause_enter
@@ -7418,7 +7467,6 @@ menu_ap() {
                 pause_enter
                 ;;
             7) cmd_ap_json; pause_enter ;;
-            0) return 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
@@ -7426,19 +7474,21 @@ menu_ap() {
 
 menu_gateway() {
     while :; do
+        tui_header "网关 / NAT 管理"
         say ""
-        say "网关 / NAT 管理"
-        say "1) Gateway 检查"
-        say "2) 启动 NAT gateway"
-        say "3) 停止 NAT gateway"
-        say "4) 查看 gateway 状态"
-        say "5) Gateway doctor"
-        say "6) Gateway debug"
-        say "7) 输出 gateway JSON"
-        say "0) 返回主菜单"
-        printf '请选择: '
+        say "1) 环境检查"
+        say "2) 启动 NAT Gateway"
+        say "3) 停止 NAT Gateway"
+        say "4) 查看状态"
+        say "5) Doctor 诊断"
+        say "6) Debug 调试"
+        say "7) JSON 状态"
+        say ""
+        say "0 / Enter  返回"
+        printf '> '
         read -r choice || return 0
         case "$choice" in
+            ""|0) return 0 ;;
             1) cmd_gateway_check; pause_enter ;;
             2)
                 if tui_confirm "将启用 IPv4 forwarding 和 NAT fallback，继续吗？"; then
@@ -7447,7 +7497,7 @@ menu_gateway() {
                 pause_enter
                 ;;
             3)
-                if tui_confirm "将停止 NAT gateway，AP 客户端可能无法继续通过 NAT 上网，继续吗？"; then
+                if tui_confirm "将停止 NAT gateway，AP 客户端可能无法继续上网，继续吗？"; then
                     cmd_gateway_stop
                 fi
                 pause_enter
@@ -7456,7 +7506,6 @@ menu_gateway() {
             5) cmd_gateway_doctor; pause_enter ;;
             6) cmd_gateway_debug; pause_enter ;;
             7) cmd_gateway_json; pause_enter ;;
-            0) return 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
@@ -7464,28 +7513,32 @@ menu_gateway() {
 
 menu_tproxy() {
     while :; do
+        tui_header "TProxy 透明代理"
         say ""
-        say "TProxy 透明代理"
-        say "1) TProxy 能力检查"
-        say "2) TProxy 状态"
-        say "3) TProxy 计划"
-        say "4) TProxy dry-run"
-        say "5) 启动 TProxy"
-        say "6) 停止 TProxy"
-        say "7) TProxy health"
-        say "8) TProxy doctor"
-        say "9) TProxy debug"
-        say "10) 输出 TProxy JSON"
-        say "0) 返回主菜单"
-        printf '请选择: '
+        say "1)  能力检查"
+        say "2)  查看状态"
+        say "3)  执行计划"
+        say "4)  Dry-run"
+        say "5)  启动 TProxy"
+        say "6)  停止 TProxy"
+        say "7)  查看可用节点"
+        say "8)  切换代理节点"
+        say "9)  Health 检查"
+        say "10) Doctor 诊断"
+        say "11) Debug 调试"
+        say "12) JSON 状态"
+        say ""
+        say "0 / Enter  返回"
+        printf '> '
         read -r choice || return 0
         case "$choice" in
+            ""|0) return 0 ;;
             1) cmd_tproxy_check; pause_enter ;;
             2) cmd_tproxy_status; pause_enter ;;
             3) cmd_tproxy_plan; pause_enter ;;
             4) cmd_tproxy_dry_run; pause_enter ;;
             5)
-                if tui_confirm_yes "将修改 mihomo config，并写入 ip rule / route table / iptables mangle；失败会自动回滚。"; then
+                if tui_confirm_yes "将写入 ip rule / route table / iptables mangle；失败会自动回滚。"; then
                     cmd_tproxy_start
                 fi
                 pause_enter
@@ -7496,43 +7549,164 @@ menu_tproxy() {
                 fi
                 pause_enter
                 ;;
-            7) cmd_tproxy_health; pause_enter ;;
-            8) cmd_tproxy_doctor; pause_enter ;;
-            9) cmd_tproxy_debug; pause_enter ;;
-            10) cmd_tproxy_json; pause_enter ;;
-            0) return 0 ;;
+            7) cmd_tproxy_nodes; pause_enter ;;
+            8)
+                printf '节点名: '
+                read -r _node || _node=""
+                [ -n "$_node" ] && cmd_tproxy_select "$_node" || warn "未输入节点名"
+                pause_enter
+                ;;
+            9)  cmd_tproxy_health; pause_enter ;;
+            10) cmd_tproxy_doctor; pause_enter ;;
+            11) cmd_tproxy_debug; pause_enter ;;
+            12) cmd_tproxy_json; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
 }
 
-menu_status_json() {
+menu_web() {
     while :; do
+        tui_header "Web 管理"
         say ""
-        say "状态 / 诊断 / JSON"
-        say "1) mgate status"
-        say "2) mgate doctor"
-        say "3) mgate logs"
-        say "4) mgate proxy-info"
-        say "5) mgate preflight"
-        say "6) mgate status-json"
-        say "7) mgate ap-json"
-        say "8) mgate gateway-json"
-        say "9) mgate tproxy-json"
-        say "0) 返回主菜单"
-        printf '请选择: '
+        say "1) 开启 Web 管理"
+        say "2) 关闭 Web 管理"
+        say "3) 启动"
+        say "4) 停止"
+        say "5) 重启"
+        say "6) 查看状态"
+        say "7) 重置 Token"
+        say "8) 刷新 Web 文件"
+        say ""
+        say "0 / Enter  返回"
+        printf '> '
         read -r choice || return 0
         case "$choice" in
-            1) service_status; pause_enter ;;
-            2) cmd_doctor; pause_enter ;;
-            3) cmd_logs; pause_enter ;;
-            4) cmd_proxy_info; pause_enter ;;
-            5) cmd_preflight; pause_enter ;;
-            6) cmd_status_json; pause_enter ;;
-            7) cmd_ap_json; pause_enter ;;
-            8) cmd_gateway_json; pause_enter ;;
-            9) cmd_tproxy_json; pause_enter ;;
-            0) return 0 ;;
+            ""|0) return 0 ;;
+            1) web_enable; pause_enter ;;
+            2)
+                if tui_confirm "将关闭 Web 管理并取消开机自启，继续吗？"; then
+                    web_disable
+                fi
+                pause_enter
+                ;;
+            3) web_start; pause_enter ;;
+            4) web_stop; pause_enter ;;
+            5) web_restart; pause_enter ;;
+            6) web_status; pause_enter ;;
+            7)
+                if tui_confirm "将重置 Web Token，当前 Token 立即失效，继续吗？"; then
+                    web_token reset
+                fi
+                pause_enter
+                ;;
+            8) web_refresh; pause_enter ;;
+            *) warn "无效选项"; pause_enter ;;
+        esac
+    done
+}
+
+menu_sub() {
+    while :; do
+        tui_header "订阅管理"
+        say ""
+        say "1) 设置订阅"
+        say "2) 更新订阅"
+        say "3) 查看订阅状态"
+        say "4) 查看节点识别结果"
+        say "5) 查看未识别节点"
+        say "6) 调试信息"
+        say "7) 清除订阅"
+        say ""
+        say "0 / Enter  返回"
+        printf '> '
+        read -r choice || return 0
+        case "$choice" in
+            ""|0) return 0 ;;
+            1)
+                printf '订阅 URL: '
+                read -r _url || _url=""
+                [ -n "$_url" ] && cmd_sub_set "$_url" || warn "未输入 URL"
+                pause_enter
+                ;;
+            2) cmd_sub_update; pause_enter ;;
+            3) cmd_sub_status; pause_enter ;;
+            4) cmd_sub_nodes; pause_enter ;;
+            5) cmd_sub_unmatched; pause_enter ;;
+            6) cmd_sub_debug; pause_enter ;;
+            7)
+                if tui_confirm "将清除订阅链接和缓存，继续吗？"; then
+                    cmd_sub_clear
+                fi
+                pause_enter
+                ;;
+            *) warn "无效选项"; pause_enter ;;
+        esac
+    done
+}
+
+menu_system() {
+    while :; do
+        tui_header "系统 / 迁移"
+        say ""
+        say "1)  初始化/修复工作区"
+        say "2)  更新 mgate 脚本"
+        say "3)  Migrate（升级后同步）"
+        say "4)  安装/更新 Mihomo 内核"
+        say "5)  卸载 Mihomo 内核"
+        say "6)  设置开机自启"
+        say "7)  取消开机自启"
+        say "8)  preflight 检查"
+        say "9)  查看版本"
+        say "10) 创建备份"
+        say "11) 查看备份列表"
+        say "12) 恢复备份"
+        say "13) 完整卸载 mgate"
+        say ""
+        say "0 / Enter  返回"
+        printf '> '
+        read -r choice || return 0
+        case "$choice" in
+            ""|0) return 0 ;;
+            1) cmd_install; pause_enter ;;
+            2) cmd_self_update; pause_enter ;;
+            3) cmd_migrate; pause_enter ;;
+            4) install_core; pause_enter ;;
+            5) cmd_uninstall_core; pause_enter ;;
+            6) service_enable; pause_enter ;;
+            7) service_disable; pause_enter ;;
+            8) cmd_preflight; pause_enter ;;
+            9) cmd_version; pause_enter ;;
+            10) cmd_backup; pause_enter ;;
+            11) cmd_backups; pause_enter ;;
+            12) cmd_restore; pause_enter ;;
+            13)
+                if tui_confirm "将完整卸载 mgate，此操作不可逆，继续吗？"; then
+                    cmd_uninstall; exit 0
+                fi
+                pause_enter
+                ;;
+            *) warn "无效选项"; pause_enter ;;
+        esac
+    done
+}
+
+menu_account() {
+    while :; do
+        tui_header "账号与代理"
+        say ""
+        say "1) 查看代理连接信息"
+        say "2) 查看账号默认密码"
+        say "3) 修改账号默认密码"
+        say ""
+        say "0 / Enter  返回"
+        printf '> '
+        read -r choice || return 0
+        case "$choice" in
+            ""|0) return 0 ;;
+            1) cmd_proxy_info; pause_enter ;;
+            2) cmd_account_password; pause_enter ;;
+            3) cmd_account_password set; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
@@ -7540,114 +7714,29 @@ menu_status_json() {
 
 menu() {
     while :; do
+        tui_header
         say ""
-        say "mgate - Mobile Gateway Manager"
-        say "Workspace: $WORKDIR"
+        say "1) Mihomo 管理"
+        say "2) AP 热点管理"
+        say "3) 网关 / NAT 管理"
+        say "4) TProxy 透明代理"
+        say "5) Web 管理"
+        say "6) 订阅管理"
+        say "7) 系统 / 迁移"
+        say "8) 账号与代理"
         say ""
-        say "安装与更新"
-        say "1)  初始化/修复 mgate 工作区"
-        say "2)  更新 mgate 管理脚本（从 GitHub）"
-        say "3)  安装/更新 Mihomo 内核"
-        say "4)  卸载 Mihomo 内核"
-        say "5)  完整卸载 mgate"
-        say ""
-        say "服务管理"
-        say "6)  启动服务"
-        say "7)  停止服务"
-        say "8)  重启服务"
-        say "9)  查看服务状态"
-        say "10) 设置开机启动"
-        say "11) 关闭开机启动"
-        say ""
-        say "配置与诊断"
-        say "12) 查看配置"
-        say "13) 编辑配置"
-        say "14) 测试配置"
-        say "15) 查看日志"
-        say "16) 系统诊断"
-        say ""
-        say "备份与恢复"
-        say "17) 创建备份"
-        say "18) 查看备份列表"
-        say "19) 恢复备份"
-        say ""
-        say "订阅管理"
-        say "20) 设置/替换订阅"
-        say "21) 更新订阅"
-        say "22) 查看订阅状态"
-        say "23) 查看订阅调试信息"
-        say "24) 清除订阅设置"
-        say "25) 查看订阅节点识别结果"
-        say "26) 查看未识别订阅节点"
-        say ""
-        say "账号与连接"
-        say "27) 查看代理账号默认密码"
-        say "28) 修改代理账号默认密码"
-        say "29) 查看代理连接信息"
-        say ""
-        say "版本信息"
-        say "30) 查看版本"
-        say ""
-        say "Web 管理"
-        say "31) 开启 Web 管理"
-        say "32) 关闭 Web 管理"
-        say "33) 启动 Web 管理"
-        say "34) 停止 Web 管理"
-        say "35) 查看 Web 管理状态"
-        say "36) 重置 Web 管理 Token"
-        say "37) 刷新 Web 管理文件"
-        say ""
-        say "网关功能"
-        say "38) AP 热点管理"
-        say "39) 网关 / NAT 管理"
-        say "40) TProxy 透明代理"
-        say "41) 状态 / 诊断 / JSON"
-        say ""
-        say "0)  退出"
-        printf '请选择: '
-        read -r choice || return 0
+        say "0) 退出"
+        printf '> '
+        read -r choice || exit 0
         case "$choice" in
-            1) cmd_install; pause_enter ;;
-            2) cmd_self_update; pause_enter ;;
-            3) install_core; pause_enter ;;
-            4) cmd_uninstall_core; pause_enter ;;
-            5) cmd_uninstall; exit 0 ;;
-            6) service_start; pause_enter ;;
-            7) service_stop; pause_enter ;;
-            8) service_restart; pause_enter ;;
-            9) service_status; pause_enter ;;
-            10) service_enable; pause_enter ;;
-            11) service_disable; pause_enter ;;
-            12) cmd_config; pause_enter ;;
-            13) cmd_edit; pause_enter ;;
-            14) cmd_test; pause_enter ;;
-            15) cmd_logs; pause_enter ;;
-            16) cmd_doctor; pause_enter ;;
-            17) cmd_backup; pause_enter ;;
-            18) cmd_backups; pause_enter ;;
-            19) cmd_restore; pause_enter ;;
-            20) cmd_sub_set; pause_enter ;;
-            21) cmd_sub_update; pause_enter ;;
-            22) cmd_sub_status; pause_enter ;;
-            23) cmd_sub_debug; pause_enter ;;
-            24) cmd_sub_clear; pause_enter ;;
-            25) cmd_sub_nodes; pause_enter ;;
-            26) cmd_sub_unmatched; pause_enter ;;
-            27) cmd_account_password; pause_enter ;;
-            28) cmd_account_password set; pause_enter ;;
-            29) cmd_proxy_info; pause_enter ;;
-            30) cmd_version; pause_enter ;;
-            31) web_enable; pause_enter ;;
-            32) web_disable; pause_enter ;;
-            33) web_start; pause_enter ;;
-            34) web_stop; pause_enter ;;
-            35) web_status; pause_enter ;;
-            36) web_token reset; pause_enter ;;
-            37) web_refresh; pause_enter ;;
-            38) menu_ap ;;
-            39) menu_gateway ;;
-            40) menu_tproxy ;;
-            41) menu_status_json ;;
+            1) menu_mihomo ;;
+            2) menu_ap ;;
+            3) menu_gateway ;;
+            4) menu_tproxy ;;
+            5) menu_web ;;
+            6) menu_sub ;;
+            7) menu_system ;;
+            8) menu_account ;;
             0) exit 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
