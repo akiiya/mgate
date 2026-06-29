@@ -1,12 +1,13 @@
 # 🛰️ mgate.sh
 
-把刷了 Debian 的随身 WiFi 变成可管理的本地网关——AP 热点、NAT fallback、Mihomo 代理、TProxy 透明代理，单文件脚本，无外部依赖。
+把刷了 Debian 的随身 WiFi 变成可管理的本地网关——AP 热点、NAT fallback、Mihomo 代理、TProxy 透明代理、上级 WiFi 管理，单文件脚本，无外部依赖。
 
 ## ✨ 能力一览
 
 - 📡 管理 `ap0` 热点，提供 SSID / DHCP / DNS
 - 🌉 普通 NAT fallback：AP 客户端经 `wlan0` 出网
 - 🧩 TProxy 透明代理：AP 流量无感进入 Mihomo，无需客户端配代理
+- 📶 上级 WiFi 管理：通过系统网络管理器管理 `wlan0` 上级连接，不接管 `wlan0`
 - 🔁 Clash / Mihomo YAML 订阅，自动识别节点国家/地区并生成代理组
 - 🖥️ Web 管理后台，慢操作 job 化，不卡浏览器
 - 🧭 TUI 菜单，覆盖所有主要操作
@@ -194,6 +195,25 @@ mgate web-refresh      # 重新生成 Web 文件
 默认访问地址：`http://设备IP:31888`
 
 慢操作（启停、更新、订阅等）通过后台 job 执行，页面会跳转至 job 状态页，不会卡住浏览器。
+
+### 📶 上级 WiFi 管理
+
+通过系统现有网络管理器（优先 NetworkManager）管理 `wlan0` 的上级 WiFi 连接，不接管 `wlan0`，不破坏已有网络配置。
+
+```sh
+mgate wifi-status          # 查看连接状态、IP、信道、DNS
+mgate wifi-scan            # 扫描附近 WiFi
+mgate wifi-list            # 列出已保存 WiFi 配置
+mgate wifi-add <ssid> [pw] # 添加 WiFi 配置（不立即连接）
+mgate wifi-connect <ssid>  # 切换上级 WiFi
+mgate wifi-reconnect       # 重连当前 WiFi
+mgate wifi-disconnect      # 断开上级 WiFi
+mgate wifi-delete <ssid>   # 删除已保存配置
+mgate wifi-doctor          # 诊断上级连接
+mgate wifi-json            # JSON 状态输出
+```
+
+> ⚠️ **高风险操作**：`wifi-connect` / `wifi-reconnect` / `wifi-disconnect` 可能导致 SSH 断线、AP 信道变化、AP 客户端短暂掉线、NAT/TProxy 暂时不可用。执行前会提示确认，`wifi-disconnect` 需输入 `yes` 强确认。
 
 ### 📊 JSON / 自动化接口
 

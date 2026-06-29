@@ -85,6 +85,7 @@ DEFAULT_MIXED_PORT="${MIXED_PORT:-31800}"
 DEFAULT_SOCKS_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_HTTP_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_MIHOMO_API_PORT="${MGATE_MIHOMO_API_PORT:-9090}"
+WIFI_IF="${MGATE_WIFI_IF:-wlan0}"
 
 REPO="MetaCubeX/mihomo"
 GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
@@ -5934,6 +5935,340 @@ cmd_status_json() {
     printf '  }\n'
     printf '}\n'
 }
+# -----------------------------
+# WiFi management
+# -----------------------------
+wifi_detect_manager() {
+    if have nmcli && nmcli general status >/dev/null 2>&1; then
+        printf 'NetworkManager\n'
+    elif have wpa_cli && wpa_cli -i "$WIFI_IF" status >/dev/null 2>&1; then
+        printf 'wpa_supplicant\n'
+    else
+        printf 'unknown\n'
+    fi
+}
+
+wifi_if_exists() {
+    ip link show "$WIFI_IF" >/dev/null 2>&1
+}
+
+wifi_connected_ssid() {
+    mgr="$(wifi_detect_manager)"
+    case "$mgr" in
+        NetworkManager)
+            nmcli -t -f ACTIVE,SSID dev wifi list ifname "$WIFI_IF" 2>/dev/null | \
+                grep '^yes:' | sed 's/^yes://' | head -1
+            ;;
+        wpa_supplicant)
+            wpa_cli -i "$WIFI_IF" status 2>/dev/null | sed -n 's/^ssid=//p' | head -1
+            ;;
+        *)
+            iw dev "$WIFI_IF" link 2>/dev/null | sed -n 's/.*SSID: //p' | head -1
+            ;;
+    esac
+}
+
+wifi_current_ip() {
+    ip addr show "$WIFI_IF" 2>/dev/null | \
+        sed -n 's/.*inet \([0-9][0-9.]*\/[0-9]*\).*/\1/p' | head -1
+}
+
+wifi_current_channel() {
+    mgr="$(wifi_detect_manager)"
+    case "$mgr" in
+        NetworkManager)
+            nmcli -t -f ACTIVE,CHAN dev wifi list ifname "$WIFI_IF" 2>/dev/null | \
+                grep '^yes:' | sed 's/^yes://' | head -1
+            ;;
+        *)
+            iw dev "$WIFI_IF" link 2>/dev/null | \
+                sed -n 's/.*channel \([0-9]*\).*/\1/p' | head -1
+            ;;
+    esac
+}
+
+wifi_has_default_route() {
+    ip route show default 2>/dev/null | grep -q "dev $WIFI_IF"
+}
+
+wifi_current_dns() {
+    sed -n 's/^nameserver[[:space:]]*//p' /etc/resolv.conf 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+}
+
+wifi_doctor_ok()   { WIFI_DOCTOR_OK=$((WIFI_DOCTOR_OK+1));   say "[OK] $*"; }
+wifi_doctor_warn() { WIFI_DOCTOR_WARN=$((WIFI_DOCTOR_WARN+1)); say "[WARN] $*"; }
+wifi_doctor_fail() { WIFI_DOCTOR_FAIL=$((WIFI_DOCTOR_FAIL+1)); say "[ERROR] $*"; }
+
+cmd_wifi_status() {
+    mgr="$(wifi_detect_manager)"
+    info "接口：$WIFI_IF"
+    if wifi_if_exists; then
+        info "接口存在：yes"
+    else
+        warn "接口存在：no（$WIFI_IF 不存在）"
+    fi
+    info "管理器：$mgr"
+    ssid="$(wifi_connected_ssid)"
+    if [ -n "$ssid" ]; then
+        info "连接状态：已连接"
+        info "当前 SSID：$ssid"
+    else
+        info "连接状态：未连接"
+        info "当前 SSID：none"
+    fi
+    ip="$(wifi_current_ip)"
+    info "当前 IP：${ip:-none}"
+    channel="$(wifi_current_channel)"
+    info "当前信道：${channel:-unknown}"
+    if wifi_has_default_route; then
+        info "默认路由：通过 $WIFI_IF"
+    else
+        warn "默认路由：不通过 $WIFI_IF"
+    fi
+    dns="$(wifi_current_dns)"
+    info "DNS：${dns:-unknown}"
+    ap_is_running_healthy >/dev/null 2>&1 && info "AP 热点：运行中" || info "AP 热点：未运行"
+    gateway_rules_active  >/dev/null 2>&1 && info "NAT gateway：active" || info "NAT gateway：inactive"
+    [ -f "$TPROXY_ENABLED_FILE" ] && info "TProxy：enabled" || info "TProxy：disabled"
+}
+
+cmd_wifi_scan() {
+    mgr="$(wifi_detect_manager)"
+    step "扫描附近 WiFi（接口：$WIFI_IF）"
+    case "$mgr" in
+        NetworkManager)
+            nmcli dev wifi list ifname "$WIFI_IF" 2>&1 || \
+                warn "扫描失败，请确认 $WIFI_IF 存在且 NetworkManager 正在运行"
+            ;;
+        *)
+            if have iw; then
+                info "使用 iw 扫描，可能需要几秒..."
+                iw dev "$WIFI_IF" scan 2>&1 | grep -E 'SSID:|signal:|freq:' || \
+                    warn "扫描失败，请确认有 root 权限"
+            else
+                warn "没有 nmcli 或 iw，无法扫描"
+            fi
+            ;;
+    esac
+}
+
+cmd_wifi_list() {
+    mgr="$(wifi_detect_manager)"
+    step "已保存 WiFi 配置"
+    case "$mgr" in
+        NetworkManager)
+            result="$(nmcli -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null | \
+                grep '802-11-wireless\|wifi')"
+            if [ -n "$result" ]; then
+                printf '%s\n' "$result" | while IFS=: read -r name type auto rest; do
+                    [ -n "$name" ] || continue
+                    info "  $name（自动连接：$auto）"
+                done
+            else
+                info "暂无已保存的 WiFi 配置"
+            fi
+            ;;
+        wpa_supplicant)
+            warn "wpa_supplicant 模式：请直接查看 /etc/wpa_supplicant/wpa_supplicant.conf"
+            ;;
+        *)
+            warn "未检测到支持的网络管理器，无法列出已保存 WiFi"
+            ;;
+    esac
+}
+
+cmd_wifi_add() {
+    ssid="$1"
+    password="${2:-}"
+    [ -n "$ssid" ] || die "用法：mgate wifi-add <ssid> [password]"
+    need_root
+    mgr="$(wifi_detect_manager)"
+    [ "$mgr" = "NetworkManager" ] || die "wifi-add 仅支持 NetworkManager 环境"
+    if nmcli connection show "$ssid" >/dev/null 2>&1; then
+        warn "已存在同名连接配置：$ssid"
+        tui_confirm "覆盖已有配置？" || return 1
+        nmcli connection delete "$ssid" >/dev/null 2>&1 || true
+    fi
+    if [ -z "$password" ]; then
+        warn "未提供密码，将添加为开放网络（无加密）"
+        tui_confirm "确认添加开放网络？" || return 1
+    fi
+    step "添加 WiFi 配置：$ssid"
+    nmcli connection add type wifi ifname "$WIFI_IF" con-name "$ssid" ssid "$ssid" \
+        >/dev/null 2>&1 || die "添加 WiFi 配置失败"
+    if [ -n "$password" ]; then
+        nmcli connection modify "$ssid" \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" >/dev/null 2>&1 || {
+            nmcli connection delete "$ssid" >/dev/null 2>&1 || true
+            die "设置密码失败"
+        }
+    fi
+    ok "已添加 WiFi 配置：$ssid"
+    hint "执行 mgate wifi-connect '$ssid' 连接"
+}
+
+cmd_wifi_connect() {
+    profile="$1"
+    [ -n "$profile" ] || die "用法：mgate wifi-connect <ssid-或-profile名>"
+    need_root
+    mgr="$(wifi_detect_manager)"
+    [ "$mgr" = "NetworkManager" ] || die "wifi-connect 仅支持 NetworkManager 环境"
+    current_ssid="$(wifi_connected_ssid)"
+    warn "切换上级 WiFi 是高风险操作："
+    warn "  当前 SSH 连接可能断线"
+    warn "  AP 客户端可能因信道变化短暂掉线"
+    warn "  NAT / TProxy 可能短暂不可用"
+    [ -n "$current_ssid" ] && info "当前连接：$current_ssid"
+    info "目标连接：$profile"
+    tui_confirm "确认切换 $WIFI_IF 到 $profile？" || return 1
+    step "切换 $WIFI_IF 到 $profile"
+    nmcli connection up "$profile" ifname "$WIFI_IF" 2>&1 || \
+        die "连接失败，请确认配置存在（mgate wifi-list 查看）"
+    ok "已切换到 $profile"
+    cmd_wifi_status
+}
+
+cmd_wifi_disconnect() {
+    need_root
+    mgr="$(wifi_detect_manager)"
+    [ "$mgr" = "NetworkManager" ] || die "wifi-disconnect 仅支持 NetworkManager 环境"
+    warn "断开 $WIFI_IF 是高风险操作："
+    warn "  当前 SSH 连接将立即断线"
+    warn "  AP 客户端将失去上游出网能力"
+    warn "  NAT / TProxy 将失去上游"
+    tui_confirm_yes "确认断开 $WIFI_IF 上级 WiFi" || return 1
+    step "断开 $WIFI_IF"
+    nmcli dev disconnect "$WIFI_IF" 2>&1 || die "断开失败"
+    ok "$WIFI_IF 已断开"
+}
+
+cmd_wifi_delete() {
+    profile="$1"
+    [ -n "$profile" ] || die "用法：mgate wifi-delete <ssid-或-profile名>"
+    need_root
+    mgr="$(wifi_detect_manager)"
+    [ "$mgr" = "NetworkManager" ] || die "wifi-delete 仅支持 NetworkManager 环境"
+    current_ssid="$(wifi_connected_ssid)"
+    if [ "$current_ssid" = "$profile" ]; then
+        warn "警告：$profile 是当前正在连接的 WiFi，删除后将立即断开"
+        tui_confirm_yes "确认删除当前连接的 WiFi 配置 $profile" || return 1
+    else
+        tui_confirm "确认删除 WiFi 配置：$profile？" || return 1
+    fi
+    nmcli connection delete "$profile" 2>&1 || die "删除失败，请确认配置名称正确"
+    ok "已删除 WiFi 配置：$profile"
+}
+
+cmd_wifi_reconnect() {
+    need_root
+    mgr="$(wifi_detect_manager)"
+    [ "$mgr" = "NetworkManager" ] || die "wifi-reconnect 仅支持 NetworkManager 环境"
+    current_ssid="$(wifi_connected_ssid)"
+    [ -n "$current_ssid" ] || { warn "当前未连接 WiFi，无法重连"; return 1; }
+    warn "重连将短暂断开 $WIFI_IF，SSH 连接可能中断"
+    tui_confirm "确认重连 $current_ssid？" || return 1
+    step "重连 $WIFI_IF（$current_ssid）"
+    nmcli dev disconnect "$WIFI_IF" >/dev/null 2>&1 || true
+    sleep 1
+    nmcli connection up "$current_ssid" ifname "$WIFI_IF" 2>&1 || \
+        nmcli dev connect "$WIFI_IF" 2>&1 || die "重连失败"
+    ok "重连完成"
+    cmd_wifi_status
+}
+
+cmd_wifi_doctor() {
+    WIFI_DOCTOR_OK=0
+    WIFI_DOCTOR_WARN=0
+    WIFI_DOCTOR_FAIL=0
+    step "上级 WiFi 诊断（$WIFI_IF）"
+    if wifi_if_exists; then
+        wifi_doctor_ok "$WIFI_IF 存在"
+    else
+        wifi_doctor_fail "$WIFI_IF 不存在"
+    fi
+    mgr="$(wifi_detect_manager)"
+    case "$mgr" in
+        NetworkManager) wifi_doctor_ok "管理器：NetworkManager" ;;
+        wpa_supplicant) wifi_doctor_warn "管理器：wpa_supplicant（功能受限）" ;;
+        *) wifi_doctor_warn "未检测到已知网络管理器" ;;
+    esac
+    ssid="$(wifi_connected_ssid)"
+    if [ -n "$ssid" ]; then
+        wifi_doctor_ok "已连接：$ssid"
+    else
+        wifi_doctor_fail "未连接上级 WiFi"
+    fi
+    ip="$(wifi_current_ip)"
+    if [ -n "$ip" ]; then
+        wifi_doctor_ok "IP：$ip"
+    else
+        wifi_doctor_fail "$WIFI_IF 无 IP 地址"
+    fi
+    channel="$(wifi_current_channel)"
+    [ -n "$channel" ] && wifi_doctor_ok "信道：$channel" || wifi_doctor_warn "无法获取信道"
+    if wifi_has_default_route; then
+        wifi_doctor_ok "默认路由通过 $WIFI_IF"
+    else
+        wifi_doctor_warn "默认路由不通过 $WIFI_IF"
+    fi
+    dns="$(wifi_current_dns)"
+    [ -n "$dns" ] && wifi_doctor_ok "DNS：$dns" || wifi_doctor_warn "无 DNS 配置"
+    gw="$(ip route show default 2>/dev/null | sed -n 's/.*via \([0-9.]*\).*/\1/p' | head -1)"
+    if [ -n "$gw" ] && have ping; then
+        ping -c 1 -W 2 "$gw" >/dev/null 2>&1 && \
+            wifi_doctor_ok "ping 网关 $gw：OK" || \
+            wifi_doctor_warn "ping 网关 $gw：失败"
+    fi
+    if have ping; then
+        ping -c 1 -W 3 114.114.114.114 >/dev/null 2>&1 && \
+            wifi_doctor_ok "ping 公网（114.114.114.114）：OK" || \
+            wifi_doctor_warn "ping 公网（114.114.114.114）：失败"
+    fi
+    ap_is_running_healthy >/dev/null 2>&1 && \
+        wifi_doctor_warn "AP 热点运行中，切换 WiFi 可能影响 AP 客户端"
+    gateway_rules_active >/dev/null 2>&1 && \
+        wifi_doctor_warn "NAT gateway 运行中，依赖 $WIFI_IF 上游"
+    [ -f "$TPROXY_ENABLED_FILE" ] && \
+        wifi_doctor_warn "TProxy 运行中，依赖 $WIFI_IF 上游"
+    say ""
+    say "诊断汇总：OK=$WIFI_DOCTOR_OK WARN=$WIFI_DOCTOR_WARN ERROR=$WIFI_DOCTOR_FAIL"
+}
+
+cmd_wifi_json() {
+    mgr="$(wifi_detect_manager)"
+    ssid="$(wifi_connected_ssid)"
+    ip_addr="$(wifi_current_ip)"
+    channel="$(wifi_current_channel)"
+    dns_raw="$(wifi_current_dns)"
+    connected="false"; [ -n "$ssid" ] && connected="true"
+    default_route="false"; wifi_has_default_route && default_route="true"
+    ap_running="false"; ap_is_running_healthy >/dev/null 2>&1 && ap_running="true"
+    gw_active="false"; gateway_rules_active >/dev/null 2>&1 && gw_active="true"
+    tproxy_on="false"; [ -f "$TPROXY_ENABLED_FILE" ] && tproxy_on="true"
+    dns_json="["; first=1
+    for ns in $dns_raw; do
+        [ -z "$ns" ] && continue
+        [ "$first" = "1" ] && dns_json="${dns_json}\"$ns\"" || dns_json="${dns_json},\"$ns\""
+        first=0
+    done
+    dns_json="${dns_json}]"
+    printf '{\n'
+    printf '  "ok": true,\n'
+    printf '  "component": "wifi",\n'
+    printf '  "interface": "%s",\n' "$WIFI_IF"
+    printf '  "manager": "%s",\n' "$mgr"
+    printf '  "connected": %s,\n' "$connected"
+    printf '  "ssid": "%s",\n' "${ssid:-}"
+    printf '  "ip": "%s",\n' "${ip_addr:-}"
+    printf '  "channel": %s,\n' "${channel:-0}"
+    printf '  "default_route": %s,\n' "$default_route"
+    printf '  "dns": %s,\n' "$dns_json"
+    printf '  "ap_running": %s,\n' "$ap_running"
+    printf '  "gateway_active": %s,\n' "$gw_active"
+    printf '  "tproxy_enabled": %s\n' "$tproxy_on"
+    printf '}\n'
+}
+
 backup_copy_dir() {
     src="$1"
     dst="$2"
@@ -7357,6 +7692,18 @@ NAT 网关：
   mgate tproxy-doctor       检查 TProxy 闭环健康状态
   mgate tproxy-debug        输出 TProxy 排障信息
 
+上级 WiFi 管理：
+  mgate wifi-status         查看 wlan0 连接状态
+  mgate wifi-scan           扫描附近 WiFi
+  mgate wifi-list           列出已保存 WiFi 配置
+  mgate wifi-add <ssid> [pw] 添加 WiFi 配置（不立即连接）
+  mgate wifi-connect <ssid>  切换 wlan0 到指定 WiFi（高风险，可能断 SSH）
+  mgate wifi-disconnect      断开 wlan0（高风险，将断 SSH）
+  mgate wifi-reconnect       重连当前 WiFi
+  mgate wifi-delete <ssid>   删除已保存 WiFi 配置
+  mgate wifi-doctor         诊断上级 WiFi 连接
+  mgate wifi-json           输出 WiFi 状态 JSON
+
 升级与迁移：
   mgate migrate             升级后同步配置和生成文件（self-update 会自动调用）
 
@@ -7742,6 +8089,66 @@ menu_sub() {
     done
 }
 
+menu_wifi() {
+    while :; do
+        tui_header "上级 WiFi 管理"
+        say ""
+        say "    1.  WiFi 状态"
+        say "    2.  扫描附近 WiFi"
+        say "    3.  已保存 WiFi"
+        say "    4.  添加 WiFi"
+        say "    5.  切换 WiFi"
+        say "    6.  重连 WiFi"
+        say "    7.  断开 WiFi"
+        say "    8.  删除 WiFi"
+        say "    9.  WiFi Doctor"
+        say "   10.  WiFi JSON"
+        say ""
+        say "    0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
+        read -r choice || return 0
+        case "$choice" in
+            ""|0) return 0 ;;
+            1) cmd_wifi_status; pause_enter ;;
+            2) cmd_wifi_scan; pause_enter ;;
+            3) cmd_wifi_list; pause_enter ;;
+            4)
+                printf 'SSID: '
+                read -r _wssid || _wssid=""
+                [ -z "$_wssid" ] && { warn "未输入 SSID"; pause_enter; continue; }
+                warn "密码将在输入时显示，请注意周围环境"
+                printf '密码 (留空=开放网络): '
+                read -r _wpass || _wpass=""
+                cmd_wifi_add "$_wssid" "$_wpass"
+                pause_enter
+                ;;
+            5)
+                printf 'SSID 或 profile 名: '
+                read -r _wprofile || _wprofile=""
+                [ -n "$_wprofile" ] && cmd_wifi_connect "$_wprofile" || warn "未输入"
+                pause_enter
+                ;;
+            6) cmd_wifi_reconnect; pause_enter ;;
+            7)
+                if tui_confirm_yes "断开 $WIFI_IF 将导致 SSH 断线和上游中断"; then
+                    cmd_wifi_disconnect
+                fi
+                pause_enter
+                ;;
+            8)
+                printf '要删除的 profile 名: '
+                read -r _wdel || _wdel=""
+                [ -n "$_wdel" ] && cmd_wifi_delete "$_wdel" || warn "未输入"
+                pause_enter
+                ;;
+            9)  cmd_wifi_doctor; pause_enter ;;
+            10) cmd_wifi_json; pause_enter ;;
+            *) warn "无效选项"; pause_enter ;;
+        esac
+    done
+}
+
 menu_system() {
     while :; do
         tui_header "系统 / 迁移"
@@ -7799,7 +8206,8 @@ menu() {
         say "   4.  TProxy 透明代理"
         say "   5.  Web 管理"
         say "   6.  订阅 / 账号"
-        say "   7.  系统 / 迁移"
+        say "   7.  上级 WiFi 管理"
+        say "   8.  系统 / 迁移"
         say ""
         say "   0.  退出"
         say ""
@@ -7812,7 +8220,8 @@ menu() {
             4) menu_tproxy ;;
             5) menu_web ;;
             6) menu_sub ;;
-            7) menu_system ;;
+            7) menu_wifi ;;
+            8) menu_system ;;
             0) exit 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
@@ -7874,6 +8283,16 @@ main() {
         tproxy-doctor) cmd_tproxy_doctor "$@" ;;
         tproxy-debug) cmd_tproxy_debug "$@" ;;
         migrate) cmd_migrate "$@" ;;
+        wifi-status) cmd_wifi_status "$@" ;;
+        wifi-scan) cmd_wifi_scan "$@" ;;
+        wifi-list) cmd_wifi_list "$@" ;;
+        wifi-add) cmd_wifi_add "$@" ;;
+        wifi-connect) cmd_wifi_connect "$@" ;;
+        wifi-disconnect) cmd_wifi_disconnect "$@" ;;
+        wifi-delete) cmd_wifi_delete "$@" ;;
+        wifi-reconnect) cmd_wifi_reconnect "$@" ;;
+        wifi-doctor) cmd_wifi_doctor "$@" ;;
+        wifi-json) cmd_wifi_json "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
