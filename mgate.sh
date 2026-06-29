@@ -1934,13 +1934,15 @@ request_proxy_host() {
 proxy_info_page() {
     host="$(request_proxy_host)"
     mixed_port="$(listener_port mixed-users "$DEFAULT_MIXED_PORT")"
+    tproxy_port="$(tproxy_mihomo_port 2>/dev/null || true)"
+    [ -n "$tproxy_port" ] || tproxy_port="$TPROXY_PORT"
 
     header
     page_start "连接信息"
     nav
     cat <<EOF
 <div class="card">
-<h2>代理连接信息</h2>
+<h2>Mixed 代理连接信息</h2>
 <p class="muted">Mixed 端口同时支持 HTTP 和 SOCKS5 协议。客户端里仍需选择对应代理协议，但端口统一使用 $mixed_port。</p>
 <p class="muted">如果密码包含特殊字符，请在客户端代理 URL 中进行 URL 编码。</p>
 <table class="table"><thead><tr><th>用户</th><th>HTTP 代理</th><th>SOCKS5 代理</th></tr></thead><tbody>
@@ -1967,7 +1969,17 @@ EOF
                 "$(printf '%s' "$socks_url" | html_escape)"
         done
     fi
-    cat <<'EOF'
+    cat <<EOF
+</tbody></table>
+</div>
+<div class="card">
+<h2>TProxy 透明代理端口</h2>
+<p class="muted">TProxy 端口由 mihomo 启动后自动监听，AP 客户端流量由 iptables 规则自动重定向，无需客户端手动配置代理。</p>
+<table class="table"><tbody>
+<tr><td>端口</td><td><span class="code">$tproxy_port</span></td></tr>
+<tr><td>协议</td><td>TCP / UDP 透明代理</td></tr>
+<tr><td>监听地址</td><td><span class="code">0.0.0.0:$tproxy_port</span></td></tr>
+<tr><td>启用方式</td><td>mgate start 后自动监听；mgate tproxy-start 后流量才实际转入</td></tr>
 </tbody></table>
 </div>
 EOF
@@ -6986,8 +6998,10 @@ cmd_sub_clear() {
 cmd_proxy_info() {
     host="设备IP"
     mixed_port="$(config_listener_port mixed-users "$DEFAULT_MIXED_PORT")"
-    info "Mixed 代理端口：$mixed_port"
-    info "同一个端口同时支持 HTTP 和 SOCKS5 协议"
+    tproxy_port="$(tproxy_mihomo_port 2>/dev/null || true)"
+    [ -n "$tproxy_port" ] || tproxy_port="$TPROXY_PORT"
+    info "Mixed 代理端口：$mixed_port（HTTP / SOCKS5 统一端口，需客户端手动配置）"
+    info "TProxy 透明代理端口：$tproxy_port（AP 客户端流量由 iptables 自动重定向，无需客户端配置）"
     if [ -f "$CONFIG_FILE" ]; then
         step "代理连接信息"
         awk '
@@ -7009,6 +7023,10 @@ cmd_proxy_info() {
     else
         warn "配置文件不存在：$CONFIG_FILE"
     fi
+    step "TProxy 透明代理端口"
+    info "端口：$tproxy_port"
+    info "用途：AP 客户端流量由 iptables mangle/TPROXY 规则自动重定向至此端口"
+    info "前提：mgate start 后端口即监听；mgate tproxy-start 后流量才实际进入"
 }
 
 cmd_version() {
