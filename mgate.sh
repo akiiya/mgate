@@ -6253,17 +6253,25 @@ cmd_wifi_doctor() {
             wifi_doctor_ok "ping 网关 $gw：OK" || \
             wifi_doctor_warn "ping 网关 $gw：失败"
     fi
+    _baidu_ip="$(getent hosts baidu.com 2>/dev/null | awk '{print $1; exit}')"
+    if [ -n "$_baidu_ip" ]; then
+        wifi_doctor_ok "DNS 解析 baidu.com：$_baidu_ip"
+    else
+        wifi_doctor_warn "DNS 解析 baidu.com：失败（DNS 不可用或完全断网）"
+    fi
     if have ping; then
-        if ping -c 1 -W 3 baidu.com >/dev/null 2>&1; then
-            wifi_doctor_ok "ping baidu.com：OK（DNS + 连通性正常）"
-        else
-            _baidu_ip="$(getent hosts baidu.com 2>/dev/null | awk '{print $1; exit}')"
-            if [ -n "$_baidu_ip" ]; then
-                wifi_doctor_warn "ping baidu.com：DNS 解析正常（$_baidu_ip），但 ICMP 被屏蔽"
+        _ping_any_ok=0
+        for _t in "$_baidu_ip" "8.8.8.8" "1.1.1.1"; do
+            [ -n "$_t" ] || continue
+            if ping -c 1 -W 2 "$_t" >/dev/null 2>&1; then
+                wifi_doctor_ok "ping $_t：OK"
+                _ping_any_ok=1
             else
-                wifi_doctor_fail "ping baidu.com：DNS 解析失败（无法解析域名）"
+                wifi_doctor_warn "ping $_t：无响应"
             fi
-        fi
+        done
+        [ "$_ping_any_ok" -eq 0 ] && \
+            wifi_doctor_fail "所有公网目标均无响应，出口可能断开"
     fi
     ( ap_is_running_healthy ) >/dev/null 2>&1 && \
         wifi_doctor_warn "AP 热点运行中，切换 WiFi 可能影响 AP 客户端"
