@@ -86,6 +86,7 @@ DEFAULT_SOCKS_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_HTTP_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_MIHOMO_API_PORT="${MGATE_MIHOMO_API_PORT:-9090}"
 WIFI_IF="${MGATE_WIFI_IF:-wlan0}"
+WIFI_FALLBACK_TIMEOUT="${MGATE_WIFI_FALLBACK_TIMEOUT:-20}"
 
 REPO="MetaCubeX/mihomo"
 GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
@@ -5952,6 +5953,38 @@ wifi_if_exists() {
     ip link show "$WIFI_IF" >/dev/null 2>&1
 }
 
+wifi_start_fallback_watchdog() {
+    # 启动后台守护：N 秒后检查连通性，失败则回落到 prev_profile
+    # 返回取消标志文件路径（主进程成功后 touch 该文件即可取消回落）
+    prev_profile="$1"
+    cancel_flag="$TMP_DIR/wifi-fallback-cancel.$$"
+    (
+        sleep "$WIFI_FALLBACK_TIMEOUT"
+        [ -f "$cancel_flag" ] && rm -f "$cancel_flag" && exit 0
+        # 检查 wlan0 是否有 IP
+        _ip="$(ip addr show "$WIFI_IF" 2>/dev/null | \
+            sed -n 's/.*inet \([0-9.\/]*\).*/\1/p' | head -1)"
+        # 检查默认路由网关是否可达
+        _gw="$(ip route show default 2>/dev/null | \
+            sed -n 's/.*via \([0-9.]*\).*/\1/p' | head -1)"
+        _ok=1
+        [ -z "$_ip" ] && _ok=0
+        if [ "$_ok" = "1" ] && [ -n "$_gw" ]; then
+            ping -c 1 -W 3 "$_gw" >/dev/null 2>&1 || _ok=0
+        fi
+        rm -f "$cancel_flag"
+        if [ "$_ok" = "0" ]; then
+            logger -t mgate "wifi-fallback: no connectivity after ${WIFI_FALLBACK_TIMEOUT}s, restoring: $prev_profile"
+            nmcli connection up "$prev_profile" ifname "$WIFI_IF" >/dev/null 2>&1 && \
+                logger -t mgate "wifi-fallback: restored $prev_profile" || \
+                logger -t mgate "wifi-fallback: failed to restore $prev_profile"
+        else
+            logger -t mgate "wifi-fallback: new wifi ok, no restore needed"
+        fi
+    ) &
+    printf '%s\n' "$cancel_flag"
+}
+
 wifi_list_profiles() {
     # 输出已保存 WiFi profile 名，按优先级降序，每行一个
     mgr="$(wifi_detect_manager)"
@@ -6174,19 +6207,44 @@ cmd_wifi_connect() {
     need_root
     mgr="$(wifi_detect_manager)"
     [ "$mgr" = "NetworkManager" ] || die "wifi-connect 仅支持 NetworkManager 环境"
-    current_ssid="$(wifi_connected_ssid)"
+    prev_profile="$(wifi_current_profile)"
     warn "切换上级 WiFi 是高风险操作："
     warn "  当前 SSH 连接可能断线"
     warn "  AP 客户端可能因信道变化短暂掉线"
     warn "  NAT / TProxy 可能短暂不可用"
-    [ -n "$current_ssid" ] && info "当前连接：$current_ssid"
+    [ -n "$prev_profile" ] && info "当前连接：$prev_profile"
     info "目标连接：$profile"
+    [ -n "$prev_profile" ] && \
+        hint "失败保障：切换后 ${WIFI_FALLBACK_TIMEOUT}s 内无法连通将自动恢复 $prev_profile"
     tui_confirm "确认切换 $WIFI_IF 到 $profile？" || return 1
+    # 启动后台守护（在执行切换前启动，确保即使 SSH 断线也能回落）
+    cancel_flag=""
+    [ -n "$prev_profile" ] && cancel_flag="$(wifi_start_fallback_watchdog "$prev_profile")"
     step "切换 $WIFI_IF 到 $profile"
-    nmcli connection up "$profile" ifname "$WIFI_IF" 2>&1 || \
-        die "连接失败，请确认配置存在（mgate wifi-list 查看）"
-    ok "已切换到 $profile"
-    cmd_wifi_status
+    if nmcli connection up "$profile" ifname "$WIFI_IF" 2>&1; then
+        sleep 3
+        new_ip="$(wifi_current_ip)"
+        if [ -n "$new_ip" ]; then
+            # 连接成功，取消守护进程的回落
+            [ -n "$cancel_flag" ] && touch "$cancel_flag"
+            ok "已切换到 $profile（IP：$new_ip）"
+            cmd_wifi_status
+        else
+            warn "切换命令成功，但暂未获得 IP"
+            warn "守护进程将在 ${WIFI_FALLBACK_TIMEOUT}s 后检查连通性，失败时自动恢复 $prev_profile"
+        fi
+    else
+        # 立即失败，取消守护并即时回落
+        [ -n "$cancel_flag" ] && touch "$cancel_flag"
+        err "切换命令失败"
+        if [ -n "$prev_profile" ]; then
+            step "立即回落到 $prev_profile"
+            nmcli connection up "$prev_profile" ifname "$WIFI_IF" 2>&1 && \
+                ok "已回落到 $prev_profile" || \
+                err "回落也失败，设备可能已离线"
+        fi
+        return 1
+    fi
 }
 
 cmd_wifi_disconnect() {
@@ -6224,17 +6282,33 @@ cmd_wifi_reconnect() {
     need_root
     mgr="$(wifi_detect_manager)"
     [ "$mgr" = "NetworkManager" ] || die "wifi-reconnect 仅支持 NetworkManager 环境"
-    current_ssid="$(wifi_connected_ssid)"
-    [ -n "$current_ssid" ] || { warn "当前未连接 WiFi，无法重连"; return 1; }
+    current_profile="$(wifi_current_profile)"
+    [ -n "$current_profile" ] || { warn "当前未连接 WiFi，无法重连"; return 1; }
     warn "重连将短暂断开 $WIFI_IF，SSH 连接可能中断"
-    tui_confirm "确认重连 $current_ssid？" || return 1
-    step "重连 $WIFI_IF（$current_ssid）"
+    hint "失败保障：重连后 ${WIFI_FALLBACK_TIMEOUT}s 内无法连通将自动恢复 $current_profile"
+    tui_confirm "确认重连 $current_profile？" || return 1
+    # 启动守护进程（重连失败时恢复当前 profile）
+    cancel_flag="$(wifi_start_fallback_watchdog "$current_profile")"
+    step "重连 $WIFI_IF（$current_profile）"
     nmcli dev disconnect "$WIFI_IF" >/dev/null 2>&1 || true
     sleep 1
-    nmcli connection up "$current_ssid" ifname "$WIFI_IF" 2>&1 || \
-        nmcli dev connect "$WIFI_IF" 2>&1 || die "重连失败"
-    ok "重连完成"
-    cmd_wifi_status
+    if nmcli connection up "$current_profile" ifname "$WIFI_IF" 2>&1 || \
+       nmcli dev connect "$WIFI_IF" 2>&1; then
+        sleep 3
+        new_ip="$(wifi_current_ip)"
+        if [ -n "$new_ip" ]; then
+            touch "$cancel_flag"
+            ok "重连成功（IP：$new_ip）"
+            cmd_wifi_status
+        else
+            warn "重连命令完成，但暂未获得 IP"
+            warn "守护进程将在 ${WIFI_FALLBACK_TIMEOUT}s 后检查连通性"
+        fi
+    else
+        touch "$cancel_flag"
+        err "重连命令失败，设备可能已离线（守护进程将在 ${WIFI_FALLBACK_TIMEOUT}s 内自动恢复）"
+        return 1
+    fi
 }
 
 cmd_wifi_doctor() {
