@@ -7371,15 +7371,15 @@ tui_clear() {
 
 tui_header() {
     tui_clear
-    printf '================================================\n'
+    printf '%s\n' '================================================'
     if [ -n "${1:-}" ]; then
         printf '  mgate  /  %s\n' "$1"
-        printf '------------------------------------------------\n'
+        printf '%s\n' '------------------------------------------------'
     else
         printf '\n'
         printf '  mgate    %s\n' "$WORKDIR"
         printf '\n'
-        printf '================================================\n'
+        printf '%s\n' '================================================'
     fi
 }
 
@@ -7617,7 +7617,7 @@ menu_web() {
 
 menu_sub() {
     while :; do
-        tui_header "订阅管理"
+        tui_header "订阅 / 账号"
         say ""
         say "   1.  设置订阅"
         say "   2.  更新订阅"
@@ -7626,6 +7626,10 @@ menu_sub() {
         say "   5.  查看未识别节点"
         say "   6.  调试信息"
         say "   7.  清除订阅"
+        say ""
+        say "   8.  查看代理连接信息"
+        say "   9.  查看账号默认密码"
+        say "  10.  修改账号默认密码"
         say ""
         say "   0.  返回  ( Enter 也可 )"
         say ""
@@ -7650,6 +7654,9 @@ menu_sub() {
                 fi
                 pause_enter
                 ;;
+            8) cmd_proxy_info; pause_enter ;;
+            9) cmd_account_password; pause_enter ;;
+            10) cmd_account_password set; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
@@ -7702,28 +7709,6 @@ menu_system() {
     done
 }
 
-menu_account() {
-    while :; do
-        tui_header "账号与代理"
-        say ""
-        say "   1.  查看代理连接信息"
-        say "   2.  查看账号默认密码"
-        say "   3.  修改账号默认密码"
-        say ""
-        say "   0.  返回  ( Enter 也可 )"
-        say ""
-        printf '>>> '
-        read -r choice || return 0
-        case "$choice" in
-            ""|0) return 0 ;;
-            1) cmd_proxy_info; pause_enter ;;
-            2) cmd_account_password; pause_enter ;;
-            3) cmd_account_password set; pause_enter ;;
-            *) warn "无效选项"; pause_enter ;;
-        esac
-    done
-}
-
 menu() {
     while :; do
         tui_header
@@ -7733,9 +7718,8 @@ menu() {
         say "   3.  网关 / NAT 管理"
         say "   4.  TProxy 透明代理"
         say "   5.  Web 管理"
-        say "   6.  订阅管理"
+        say "   6.  订阅 / 账号"
         say "   7.  系统 / 迁移"
-        say "   8.  账号与代理"
         say ""
         say "   0.  退出"
         say ""
@@ -7749,7 +7733,6 @@ menu() {
             5) menu_web ;;
             6) menu_sub ;;
             7) menu_system ;;
-            8) menu_account ;;
             0) exit 0 ;;
             *) warn "无效选项"; pause_enter ;;
         esac
