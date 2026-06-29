@@ -7371,12 +7371,13 @@ tui_clear() {
 
 tui_header() {
     tui_clear
-    say "mgate  $WORKDIR"
-    say "========================================"
+    printf '================================================\n'
     if [ -n "${1:-}" ]; then
-        say "$1"
-        say "----------------------------------------"
+        printf '  mgate  /  %s\n' "$1"
+    else
+        printf '  mgate    %s\n' "$WORKDIR"
     fi
+    printf '================================================\n'
 }
 
 tui_confirm() {
@@ -7404,18 +7405,19 @@ menu_mihomo() {
     while :; do
         tui_header "Mihomo 管理"
         say ""
-        say "1) 启动"
-        say "2) 停止"
-        say "3) 重启"
-        say "4) 查看状态"
-        say "5) 查看日志"
-        say "6) 测试配置"
-        say "7) 编辑配置"
-        say "8) 查看配置"
-        say "9) 系统诊断"
+        say "   1.  启动"
+        say "   2.  停止"
+        say "   3.  重启"
+        say "   4.  查看状态"
+        say "   5.  查看日志"
+        say "   6.  测试配置"
+        say "   7.  编辑配置"
+        say "   8.  查看配置"
+        say "   9.  系统诊断"
         say ""
-        say "0 / Enter  返回"
-        printf '> '
+        say "   0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
@@ -7437,16 +7439,17 @@ menu_ap() {
     while :; do
         tui_header "AP 热点管理"
         say ""
-        say "1) 环境检查"
-        say "2) 安装依赖"
-        say "3) 查看配置"
-        say "4) 查看状态"
-        say "5) 启动 AP"
-        say "6) 停止 AP"
-        say "7) JSON 状态"
+        say "   1.  环境检查"
+        say "   2.  安装依赖"
+        say "   3.  查看配置"
+        say "   4.  查看状态"
+        say "   5.  启动 AP"
+        say "   6.  停止 AP"
+        say "   7.  JSON 状态"
         say ""
-        say "0 / Enter  返回"
-        printf '> '
+        say "   0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
@@ -7476,16 +7479,17 @@ menu_gateway() {
     while :; do
         tui_header "网关 / NAT 管理"
         say ""
-        say "1) 环境检查"
-        say "2) 启动 NAT Gateway"
-        say "3) 停止 NAT Gateway"
-        say "4) 查看状态"
-        say "5) Doctor 诊断"
-        say "6) Debug 调试"
-        say "7) JSON 状态"
+        say "   1.  环境检查"
+        say "   2.  启动 NAT Gateway"
+        say "   3.  停止 NAT Gateway"
+        say "   4.  查看状态"
+        say "   5.  Doctor 诊断"
+        say "   6.  Debug 调试"
+        say "   7.  JSON 状态"
         say ""
-        say "0 / Enter  返回"
-        printf '> '
+        say "   0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
@@ -7515,21 +7519,22 @@ menu_tproxy() {
     while :; do
         tui_header "TProxy 透明代理"
         say ""
-        say "1)  能力检查"
-        say "2)  查看状态"
-        say "3)  执行计划"
-        say "4)  Dry-run"
-        say "5)  启动 TProxy"
-        say "6)  停止 TProxy"
-        say "7)  查看可用节点"
-        say "8)  切换代理节点"
-        say "9)  Health 检查"
-        say "10) Doctor 诊断"
-        say "11) Debug 调试"
-        say "12) JSON 状态"
+        say "    1.  能力检查"
+        say "    2.  查看状态"
+        say "    3.  执行计划"
+        say "    4.  Dry-run"
+        say "    5.  启动 TProxy"
+        say "    6.  停止 TProxy"
+        say "    7.  查看可用节点"
+        say "    8.  切换代理节点"
+        say "    9.  Health 检查"
+        say "   10.  Doctor 诊断"
+        say "   11.  Debug 调试"
+        say "   12.  JSON 状态"
         say ""
-        say "0 / Enter  返回"
-        printf '> '
+        say "    0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
@@ -7569,17 +7574,18 @@ menu_web() {
     while :; do
         tui_header "Web 管理"
         say ""
-        say "1) 开启 Web 管理"
-        say "2) 关闭 Web 管理"
-        say "3) 启动"
-        say "4) 停止"
-        say "5) 重启"
-        say "6) 查看状态"
-        say "7) 重置 Token"
-        say "8) 刷新 Web 文件"
+        say "   1.  开启 Web 管理"
+        say "   2.  关闭 Web 管理"
+        say "   3.  启动"
+        say "   4.  停止"
+        say "   5.  重启"
+        say "   6.  查看状态"
+        say "   7.  重置 Token"
+        say "   8.  刷新 Web 文件"
         say ""
-        say "0 / Enter  返回"
-        printf '> '
+        say "   0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
@@ -7610,16 +7616,17 @@ menu_sub() {
     while :; do
         tui_header "订阅管理"
         say ""
-        say "1) 设置订阅"
-        say "2) 更新订阅"
-        say "3) 查看订阅状态"
-        say "4) 查看节点识别结果"
-        say "5) 查看未识别节点"
-        say "6) 调试信息"
-        say "7) 清除订阅"
+        say "   1.  设置订阅"
+        say "   2.  更新订阅"
+        say "   3.  查看订阅状态"
+        say "   4.  查看节点识别结果"
+        say "   5.  查看未识别节点"
+        say "   6.  调试信息"
+        say "   7.  清除订阅"
         say ""
-        say "0 / Enter  返回"
-        printf '> '
+        say "   0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
@@ -7649,22 +7656,23 @@ menu_system() {
     while :; do
         tui_header "系统 / 迁移"
         say ""
-        say "1)  初始化/修复工作区"
-        say "2)  更新 mgate 脚本"
-        say "3)  Migrate（升级后同步）"
-        say "4)  安装/更新 Mihomo 内核"
-        say "5)  卸载 Mihomo 内核"
-        say "6)  设置开机自启"
-        say "7)  取消开机自启"
-        say "8)  preflight 检查"
-        say "9)  查看版本"
-        say "10) 创建备份"
-        say "11) 查看备份列表"
-        say "12) 恢复备份"
-        say "13) 完整卸载 mgate"
+        say "    1.  初始化/修复工作区"
+        say "    2.  更新 mgate 脚本"
+        say "    3.  Migrate（升级后同步）"
+        say "    4.  安装/更新 Mihomo 内核"
+        say "    5.  卸载 Mihomo 内核"
+        say "    6.  设置开机自启"
+        say "    7.  取消开机自启"
+        say "    8.  preflight 检查"
+        say "    9.  查看版本"
+        say "   10.  创建备份"
+        say "   11.  查看备份列表"
+        say "   12.  恢复备份"
+        say "   13.  完整卸载 mgate"
         say ""
-        say "0 / Enter  返回"
-        printf '> '
+        say "    0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
@@ -7695,12 +7703,13 @@ menu_account() {
     while :; do
         tui_header "账号与代理"
         say ""
-        say "1) 查看代理连接信息"
-        say "2) 查看账号默认密码"
-        say "3) 修改账号默认密码"
+        say "   1.  查看代理连接信息"
+        say "   2.  查看账号默认密码"
+        say "   3.  修改账号默认密码"
         say ""
-        say "0 / Enter  返回"
-        printf '> '
+        say "   0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
@@ -7716,17 +7725,18 @@ menu() {
     while :; do
         tui_header
         say ""
-        say "1) Mihomo 管理"
-        say "2) AP 热点管理"
-        say "3) 网关 / NAT 管理"
-        say "4) TProxy 透明代理"
-        say "5) Web 管理"
-        say "6) 订阅管理"
-        say "7) 系统 / 迁移"
-        say "8) 账号与代理"
+        say "   1.  Mihomo 管理"
+        say "   2.  AP 热点管理"
+        say "   3.  网关 / NAT 管理"
+        say "   4.  TProxy 透明代理"
+        say "   5.  Web 管理"
+        say "   6.  订阅管理"
+        say "   7.  系统 / 迁移"
+        say "   8.  账号与代理"
         say ""
-        say "0) 退出"
-        printf '> '
+        say "   0.  退出"
+        say ""
+        printf '>>> '
         read -r choice || exit 0
         case "$choice" in
             1) menu_mihomo ;;
