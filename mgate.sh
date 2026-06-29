@@ -86,7 +86,8 @@ DEFAULT_SOCKS_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_HTTP_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_MIHOMO_API_PORT="${MGATE_MIHOMO_API_PORT:-9090}"
 WIFI_IF="${MGATE_WIFI_IF:-wlan0}"
-WIFI_FALLBACK_TIMEOUT="${MGATE_WIFI_FALLBACK_TIMEOUT:-20}"
+WIFI_FALLBACK_TIMEOUT="${MGATE_WIFI_FALLBACK_TIMEOUT:-50}"
+WIFI_SWITCH_LOCK_DIR="$RUN_DIR/wifi-switch.lock"
 
 REPO="MetaCubeX/mihomo"
 GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
@@ -5953,36 +5954,137 @@ wifi_if_exists() {
     ip link show "$WIFI_IF" >/dev/null 2>&1
 }
 
+wifi_new_txid() {
+    printf 'wx%s-%s\n' "$(date +%H%M%S 2>/dev/null || printf '0')" "$$"
+}
+
+wifi_switch_lock_acquire() {
+    if mkdir "$WIFI_SWITCH_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$WIFI_SWITCH_LOCK_DIR/pid" 2>/dev/null || true
+        return 0
+    fi
+    _lpid="$(cat "$WIFI_SWITCH_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$_lpid" ] && kill -0 "$_lpid" 2>/dev/null; then
+        return 1
+    fi
+    # 过期锁，清理后重试
+    rm -rf "$WIFI_SWITCH_LOCK_DIR" 2>/dev/null || true
+    mkdir "$WIFI_SWITCH_LOCK_DIR" 2>/dev/null && \
+        printf '%s\n' "$$" > "$WIFI_SWITCH_LOCK_DIR/pid" 2>/dev/null || true
+}
+
+wifi_switch_lock_release() {
+    rm -rf "$WIFI_SWITCH_LOCK_DIR" 2>/dev/null || true
+}
+
+wifi_full_connectivity_check() {
+    # 5 项全过才返回 0；txid 用于 logger 追踪
+    _txid="${1:-notxid}"
+    # 1. profile 已连接
+    _state="$(nmcli -t -f DEVICE,STATE dev status 2>/dev/null | \
+        grep "^${WIFI_IF}:" | sed 's/^[^:]*://' | head -1)"
+    logger -t mgate "[$_txid] check profile_connected:${_state:-none}"
+    [ "$_state" = "connected" ] || return 1
+    # 2. IPv4 地址
+    _ip="$(ip addr show "$WIFI_IF" 2>/dev/null | \
+        sed -n 's/.*inet \([0-9.\/]*\).*/\1/p' | head -1)"
+    logger -t mgate "[$_txid] check ip:${_ip:-none}"
+    [ -n "$_ip" ] || return 1
+    # 3. 默认路由经过 wlan0
+    ip route show default 2>/dev/null | grep -q "dev $WIFI_IF" || {
+        logger -t mgate "[$_txid] check default_route:missing"
+        return 1
+    }
+    logger -t mgate "[$_txid] check default_route:ok"
+    # 4. 网关可达
+    _gw="$(ip route show default 2>/dev/null | \
+        sed -n 's/.*via \([0-9.]*\).*/\1/p' | head -1)"
+    if [ -n "$_gw" ] && have ping; then
+        ping -c 1 -W 3 "$_gw" >/dev/null 2>&1 || {
+            logger -t mgate "[$_txid] check gateway_ping:failed gw=$_gw"
+            return 1
+        }
+        logger -t mgate "[$_txid] check gateway_ping:ok gw=$_gw"
+    fi
+    # 5. DNS 可解析
+    getent hosts baidu.com >/dev/null 2>&1 || {
+        logger -t mgate "[$_txid] check dns:failed"
+        return 1
+    }
+    logger -t mgate "[$_txid] check dns:ok"
+    logger -t mgate "[$_txid] check all:passed"
+    return 0
+}
+
+wifi_do_rollback() {
+    _txid="$1"
+    _prev="$2"
+    _target="$3"
+    _reason="$4"
+    logger -t mgate "[$_txid] rollback reason=$_reason prev=${_prev:-none} target=${_target:-none}"
+    # 禁用失败 target 的自动连接，避免 NM 抢回
+    if [ -n "$_target" ]; then
+        nmcli connection modify "$_target" connection.autoconnect no 2>/dev/null && \
+            logger -t mgate "[$_txid] disabled autoconnect: $_target" || true
+    fi
+    # 恢复 prev profile（先确认它存在）
+    if [ -n "$_prev" ] && nmcli connection show "$_prev" >/dev/null 2>&1; then
+        logger -t mgate "[$_txid] restoring: $_prev"
+        if nmcli connection up "$_prev" ifname "$WIFI_IF" >/dev/null 2>&1; then
+            logger -t mgate "[$_txid] status=switch_rollbacked restored=$_prev"
+            return 0
+        fi
+        logger -t mgate "[$_txid] restore_failed: $_prev"
+    else
+        logger -t mgate "[$_txid] prev_unavailable: ${_prev:-none}"
+    fi
+    # 救援 AP
+    logger -t mgate "[$_txid] status=rescue_ap_started"
+    "$SCRIPT_PATH" ap-start >/dev/null 2>&1 || true
+    return 1
+}
+
+# cmd_wifi_watchdog_run：内部命令，由 wifi_start_fallback_watchdog 通过 nohup 独立启动
+cmd_wifi_watchdog_run() {
+    _prev="${1:-}"
+    _target="${2:-}"
+    _txid="${3:-notxid}"
+    _cancel="${4:-}"
+    _timeout="${5:-$WIFI_FALLBACK_TIMEOUT}"
+    logger -t mgate "[$_txid] watchdog started prev=$_prev target=$_target timeout=${_timeout}s"
+    sleep "$_timeout"
+    if [ -n "$_cancel" ] && [ -f "$_cancel" ]; then
+        rm -f "$_cancel"
+        logger -t mgate "[$_txid] watchdog=cancelled"
+        return 0
+    fi
+    rm -f "$_cancel" 2>/dev/null || true
+    logger -t mgate "[$_txid] watchdog checking connectivity"
+    if wifi_full_connectivity_check "$_txid"; then
+        logger -t mgate "[$_txid] watchdog=ok no_rollback"
+    else
+        logger -t mgate "[$_txid] watchdog=failed initiating_rollback"
+        wifi_do_rollback "$_txid" "$_prev" "$_target" "watchdog_timeout"
+    fi
+}
+
 wifi_start_fallback_watchdog() {
-    # 启动后台守护：N 秒后检查连通性，失败则回落到 prev_profile
-    # 返回取消标志文件路径（主进程成功后 touch 该文件即可取消回落）
-    prev_profile="$1"
-    cancel_flag="$TMP_DIR/wifi-fallback-cancel.$$"
-    (
-        sleep "$WIFI_FALLBACK_TIMEOUT"
-        [ -f "$cancel_flag" ] && rm -f "$cancel_flag" && exit 0
-        # 检查 wlan0 是否有 IP
-        _ip="$(ip addr show "$WIFI_IF" 2>/dev/null | \
-            sed -n 's/.*inet \([0-9.\/]*\).*/\1/p' | head -1)"
-        # 检查默认路由网关是否可达
-        _gw="$(ip route show default 2>/dev/null | \
-            sed -n 's/.*via \([0-9.]*\).*/\1/p' | head -1)"
-        _ok=1
-        [ -z "$_ip" ] && _ok=0
-        if [ "$_ok" = "1" ] && [ -n "$_gw" ]; then
-            ping -c 1 -W 3 "$_gw" >/dev/null 2>&1 || _ok=0
-        fi
-        rm -f "$cancel_flag"
-        if [ "$_ok" = "0" ]; then
-            logger -t mgate "wifi-fallback: no connectivity after ${WIFI_FALLBACK_TIMEOUT}s, restoring: $prev_profile"
-            nmcli connection up "$prev_profile" ifname "$WIFI_IF" >/dev/null 2>&1 && \
-                logger -t mgate "wifi-fallback: restored $prev_profile" || \
-                logger -t mgate "wifi-fallback: failed to restore $prev_profile"
-        else
-            logger -t mgate "wifi-fallback: new wifi ok, no restore needed"
-        fi
-    ) &
-    printf '%s\n' "$cancel_flag"
+    # 通过 nohup + 独立进程启动守护，确保 SSH 断线后仍能运行
+    _prev="$1"
+    _target="$2"
+    _txid="$3"
+    _cancel="$TMP_DIR/wifi-cancel-${_txid}"
+    if have nohup; then
+        nohup "$SCRIPT_PATH" _wifi-watchdog \
+            "$_prev" "$_target" "$_txid" "$_cancel" "$WIFI_FALLBACK_TIMEOUT" \
+            >/dev/null 2>&1 &
+    else
+        "$SCRIPT_PATH" _wifi-watchdog \
+            "$_prev" "$_target" "$_txid" "$_cancel" "$WIFI_FALLBACK_TIMEOUT" \
+            >/dev/null 2>&1 &
+    fi
+    logger -t mgate "[$_txid] watchdog spawned pid=$! cancel=$_cancel"
+    printf '%s\n' "$_cancel"
 }
 
 wifi_list_profiles() {
@@ -6202,47 +6304,62 @@ cmd_wifi_add() {
 }
 
 cmd_wifi_connect() {
-    profile="$1"
-    [ -n "$profile" ] || die "用法：mgate wifi-connect <ssid-或-profile名>"
+    _wc_profile="$1"
+    [ -n "$_wc_profile" ] || die "用法：mgate wifi-connect <ssid-或-profile名>"
     need_root
-    mgr="$(wifi_detect_manager)"
-    [ "$mgr" = "NetworkManager" ] || die "wifi-connect 仅支持 NetworkManager 环境"
-    prev_profile="$(wifi_current_profile)"
+    [ "$(wifi_detect_manager)" = "NetworkManager" ] || die "wifi-connect 仅支持 NetworkManager 环境"
+
+    # 并发锁：同一时间只允许一个切换流程
+    wifi_switch_lock_acquire || {
+        err "[switch_failed] 另一个 WiFi 切换正在进行，请稍后重试"
+        return 1
+    }
+
+    _wc_txid="$(wifi_new_txid)"
+    _wc_prev="$(wifi_current_profile)"
+    logger -t mgate "[$_wc_txid] status=switch_started prev=${_wc_prev:-none} target=$_wc_profile"
+
     warn "切换上级 WiFi 是高风险操作："
     warn "  当前 SSH 连接可能断线"
     warn "  AP 客户端可能因信道变化短暂掉线"
     warn "  NAT / TProxy 可能短暂不可用"
-    [ -n "$prev_profile" ] && info "当前连接：$prev_profile"
-    info "目标连接：$profile"
-    [ -n "$prev_profile" ] && \
-        hint "失败保障：切换后 ${WIFI_FALLBACK_TIMEOUT}s 内无法连通将自动恢复 $prev_profile"
-    tui_confirm "确认切换 $WIFI_IF 到 $profile？" || return 1
-    # 启动后台守护（在执行切换前启动，确保即使 SSH 断线也能回落）
-    cancel_flag=""
-    [ -n "$prev_profile" ] && cancel_flag="$(wifi_start_fallback_watchdog "$prev_profile")"
-    step "切换 $WIFI_IF 到 $profile"
-    if nmcli connection up "$profile" ifname "$WIFI_IF" 2>&1; then
-        sleep 3
-        new_ip="$(wifi_current_ip)"
-        if [ -n "$new_ip" ]; then
-            # 连接成功，取消守护进程的回落
-            [ -n "$cancel_flag" ] && touch "$cancel_flag"
-            ok "已切换到 $profile（IP：$new_ip）"
+    [ -n "$_wc_prev" ] && info "当前连接：$_wc_prev"
+    info "目标连接：$_wc_profile"
+    [ -n "$_wc_prev" ] && \
+        hint "失败保障：${WIFI_FALLBACK_TIMEOUT}s 内未通过完整连通性检查将自动恢复 $_wc_prev"
+
+    tui_confirm "确认切换 $WIFI_IF 到 $_wc_profile？" || { wifi_switch_lock_release; return 1; }
+
+    # 启动守护（切换前启动，SSH 断线后仍能独立运行）
+    _wc_cancel=""
+    [ -n "$_wc_prev" ] && \
+        _wc_cancel="$(wifi_start_fallback_watchdog "$_wc_prev" "$_wc_profile" "$_wc_txid")"
+
+    info "[switch_started] txid=$_wc_txid"
+    step "切换 $WIFI_IF 到 $_wc_profile"
+
+    if nmcli connection up "$_wc_profile" ifname "$WIFI_IF" 2>&1; then
+        info "[switch_verifying] 等待连通性确认（5s）..."
+        sleep 5
+        if wifi_full_connectivity_check "$_wc_txid"; then
+            [ -n "$_wc_cancel" ] && touch "$_wc_cancel"
+            wifi_switch_lock_release
+            ok "[switch_succeeded] 已切换到 $_wc_profile"
+            logger -t mgate "[$_wc_txid] status=switch_succeeded"
             cmd_wifi_status
         else
-            warn "切换命令成功，但暂未获得 IP"
-            warn "守护进程将在 ${WIFI_FALLBACK_TIMEOUT}s 后检查连通性，失败时自动恢复 $prev_profile"
+            wifi_switch_lock_release
+            warn "[switch_verifying] 快速检查未完全通过"
+            warn "守护进程将在 ${WIFI_FALLBACK_TIMEOUT}s 后做最终判断，失败则自动恢复 ${_wc_prev:-无}"
+            logger -t mgate "[$_wc_txid] status=switch_verifying watchdog_pending"
         fi
     else
-        # 立即失败，取消守护并即时回落
-        [ -n "$cancel_flag" ] && touch "$cancel_flag"
-        err "切换命令失败"
-        if [ -n "$prev_profile" ]; then
-            step "立即回落到 $prev_profile"
-            nmcli connection up "$prev_profile" ifname "$WIFI_IF" 2>&1 && \
-                ok "已回落到 $prev_profile" || \
-                err "回落也失败，设备可能已离线"
-        fi
+        # nmcli 立即失败 → 取消守护 + 立即回落
+        [ -n "$_wc_cancel" ] && touch "$_wc_cancel"
+        err "[switch_failed] 切换命令失败，立即回落"
+        logger -t mgate "[$_wc_txid] status=switch_failed reason=nmcli_immediate"
+        wifi_do_rollback "$_wc_txid" "$_wc_prev" "$_wc_profile" "nmcli_immediate_failure"
+        wifi_switch_lock_release
         return 1
     fi
 }
@@ -6280,33 +6397,51 @@ cmd_wifi_delete() {
 
 cmd_wifi_reconnect() {
     need_root
-    mgr="$(wifi_detect_manager)"
-    [ "$mgr" = "NetworkManager" ] || die "wifi-reconnect 仅支持 NetworkManager 环境"
-    current_profile="$(wifi_current_profile)"
-    [ -n "$current_profile" ] || { warn "当前未连接 WiFi，无法重连"; return 1; }
+    [ "$(wifi_detect_manager)" = "NetworkManager" ] || die "wifi-reconnect 仅支持 NetworkManager 环境"
+
+    wifi_switch_lock_acquire || {
+        err "[switch_failed] 另一个 WiFi 切换正在进行，请稍后重试"
+        return 1
+    }
+
+    _wr_profile="$(wifi_current_profile)"
+    [ -n "$_wr_profile" ] || { wifi_switch_lock_release; warn "当前未连接 WiFi，无法重连"; return 1; }
+
+    _wr_txid="$(wifi_new_txid)"
+    logger -t mgate "[$_wr_txid] status=switch_started(reconnect) profile=$_wr_profile"
+
     warn "重连将短暂断开 $WIFI_IF，SSH 连接可能中断"
-    hint "失败保障：重连后 ${WIFI_FALLBACK_TIMEOUT}s 内无法连通将自动恢复 $current_profile"
-    tui_confirm "确认重连 $current_profile？" || return 1
-    # 启动守护进程（重连失败时恢复当前 profile）
-    cancel_flag="$(wifi_start_fallback_watchdog "$current_profile")"
-    step "重连 $WIFI_IF（$current_profile）"
+    hint "失败保障：${WIFI_FALLBACK_TIMEOUT}s 内未通过完整连通性检查将自动恢复 $_wr_profile"
+    tui_confirm "确认重连 $_wr_profile？" || { wifi_switch_lock_release; return 1; }
+
+    _wr_cancel="$(wifi_start_fallback_watchdog "$_wr_profile" "$_wr_profile" "$_wr_txid")"
+
+    info "[switch_started] txid=$_wr_txid"
+    step "重连 $WIFI_IF（$_wr_profile）"
     nmcli dev disconnect "$WIFI_IF" >/dev/null 2>&1 || true
     sleep 1
-    if nmcli connection up "$current_profile" ifname "$WIFI_IF" 2>&1 || \
+
+    if nmcli connection up "$_wr_profile" ifname "$WIFI_IF" 2>&1 || \
        nmcli dev connect "$WIFI_IF" 2>&1; then
-        sleep 3
-        new_ip="$(wifi_current_ip)"
-        if [ -n "$new_ip" ]; then
-            touch "$cancel_flag"
-            ok "重连成功（IP：$new_ip）"
+        info "[switch_verifying] 等待连通性确认（5s）..."
+        sleep 5
+        if wifi_full_connectivity_check "$_wr_txid"; then
+            touch "$_wr_cancel"
+            wifi_switch_lock_release
+            ok "[switch_succeeded] 重连成功"
+            logger -t mgate "[$_wr_txid] status=switch_succeeded(reconnect)"
             cmd_wifi_status
         else
-            warn "重连命令完成，但暂未获得 IP"
-            warn "守护进程将在 ${WIFI_FALLBACK_TIMEOUT}s 后检查连通性"
+            wifi_switch_lock_release
+            warn "[switch_verifying] 快速检查未完全通过，守护进程将在 ${WIFI_FALLBACK_TIMEOUT}s 后最终判断"
+            logger -t mgate "[$_wr_txid] status=switch_verifying watchdog_pending"
         fi
     else
-        touch "$cancel_flag"
-        err "重连命令失败，设备可能已离线（守护进程将在 ${WIFI_FALLBACK_TIMEOUT}s 内自动恢复）"
+        touch "$_wr_cancel"
+        wifi_switch_lock_release
+        err "[switch_failed] 重连命令失败"
+        logger -t mgate "[$_wr_txid] status=switch_failed(reconnect) reason=nmcli_immediate"
+        wifi_do_rollback "$_wr_txid" "$_wr_profile" "" "reconnect_nmcli_failure"
         return 1
     fi
 }
@@ -8505,6 +8640,7 @@ main() {
         wifi-reconnect) cmd_wifi_reconnect "$@" ;;
         wifi-doctor) cmd_wifi_doctor "$@" ;;
         wifi-json) cmd_wifi_json "$@" ;;
+        _wifi-watchdog) cmd_wifi_watchdog_run "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
