@@ -5952,6 +5952,24 @@ wifi_if_exists() {
     ip link show "$WIFI_IF" >/dev/null 2>&1
 }
 
+wifi_list_profiles() {
+    # 输出已保存 WiFi profile 名，每行一个
+    mgr="$(wifi_detect_manager)"
+    case "$mgr" in
+        NetworkManager)
+            nmcli -t -f NAME,TYPE connection show 2>/dev/null | \
+                grep ':802-11-wireless\|:wifi' | \
+                sed 's/:.*//' | grep -v '^$'
+            ;;
+    esac
+}
+
+wifi_current_profile() {
+    # 返回 wlan0 当前连接的 profile 名（nmcli connection 名）
+    nmcli -t -f DEVICE,CONNECTION dev status 2>/dev/null | \
+        grep "^${WIFI_IF}:" | sed 's/^[^:]*://' | head -1
+}
+
 wifi_is_connected() {
     mgr="$(wifi_detect_manager)"
     case "$mgr" in
@@ -6091,12 +6109,16 @@ cmd_wifi_list() {
     step "已保存 WiFi 配置"
     case "$mgr" in
         NetworkManager)
-            result="$(nmcli -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null | \
-                grep '802-11-wireless\|wifi')"
-            if [ -n "$result" ]; then
-                printf '%s\n' "$result" | while IFS=: read -r name type auto rest; do
+            current="$(wifi_current_profile)"
+            profiles="$(wifi_list_profiles)"
+            if [ -n "$profiles" ]; then
+                printf '%s\n' "$profiles" | while IFS= read -r name; do
                     [ -n "$name" ] || continue
-                    info "  $name（自动连接：$auto）"
+                    if [ "$name" = "$current" ]; then
+                        info "* $name（当前连接）"
+                    else
+                        info "  $name"
+                    fi
                 done
             else
                 info "暂无已保存的 WiFi 配置"
@@ -8138,6 +8160,73 @@ menu_sub() {
     done
 }
 
+menu_wifi_connect() {
+    while :; do
+        tui_header "切换 WiFi 连接"
+        mgr="$(wifi_detect_manager)"
+        if [ "$mgr" != "NetworkManager" ]; then
+            say ""
+            warn "wifi-connect 仅支持 NetworkManager 环境"
+            say ""
+            say "   0.  返回  ( Enter 也可 )"
+            say ""
+            printf '>>> '
+            read -r _ || return 0
+            return 1
+        fi
+        current="$(wifi_current_profile)"
+        profiles="$(wifi_list_profiles)"
+        if [ -z "$profiles" ]; then
+            say ""
+            warn "暂无已保存的 WiFi 配置，请先执行：mgate wifi-add <ssid>"
+            say ""
+            say "   0.  返回  ( Enter 也可 )"
+            say ""
+            printf '>>> '
+            read -r _ || return 0
+            return 0
+        fi
+        say ""
+        [ -n "$current" ] && info "当前连接：$current"
+        say ""
+        i=0
+        printf '%s\n' "$profiles" | while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            i=$((i + 1))
+            if [ "$name" = "$current" ]; then
+                [ "$i" -lt 10 ] && printf '   %d.* %s\n' "$i" "$name" \
+                                 || printf '  %d.* %s\n'  "$i" "$name"
+            else
+                [ "$i" -lt 10 ] && printf '   %d.  %s\n' "$i" "$name" \
+                                 || printf '  %d.  %s\n'  "$i" "$name"
+            fi
+        done
+        say ""
+        say "   0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
+        read -r choice || return 0
+        case "$choice" in
+            ""|0) return 0 ;;
+            *)
+                if printf '%s' "$choice" | grep -qE '^[0-9]+$'; then
+                    _wprofile="$(printf '%s\n' "$profiles" | sed -n "${choice}p")"
+                    if [ -n "$_wprofile" ]; then
+                        cmd_wifi_connect "$_wprofile" && return 0
+                        pause_enter
+                    else
+                        warn "编号 $choice 超出范围"
+                        pause_enter
+                    fi
+                else
+                    warn "请输入数字"
+                    pause_enter
+                fi
+                ;;
+        esac
+    done
+}
+
 menu_wifi() {
     while :; do
         tui_header "上级 WiFi 管理"
@@ -8172,12 +8261,7 @@ menu_wifi() {
                 cmd_wifi_add "$_wssid" "$_wpass"
                 pause_enter
                 ;;
-            5)
-                printf 'SSID 或 profile 名: '
-                read -r _wprofile || _wprofile=""
-                [ -n "$_wprofile" ] && cmd_wifi_connect "$_wprofile" || warn "未输入"
-                pause_enter
-                ;;
+            5) menu_wifi_connect ;;
             6) cmd_wifi_reconnect; pause_enter ;;
             7)
                 if tui_confirm_yes "断开 $WIFI_IF 将导致 SSH 断线和上游中断"; then
