@@ -7530,6 +7530,61 @@ menu_gateway() {
     done
 }
 
+menu_tproxy_select() {
+    while :; do
+        tui_header "切换代理节点"
+        now="$(tproxy_fetch_now)"
+        nodes="$(tproxy_fetch_nodes)" || {
+            say ""
+            warn "无法获取节点列表，请确认 mihomo 正在运行"
+            say ""
+            say "   0.  返回  ( Enter 也可 )"
+            say ""
+            printf '>>> '
+            read -r _ || return 0
+            return 1
+        }
+        say ""
+        [ -n "$now" ] && info "当前: $now"
+        say ""
+        i=0
+        printf '%s\n' "$nodes" | while IFS= read -r n; do
+            [ -n "$n" ] || continue
+            i=$((i + 1))
+            if [ "$n" = "$now" ]; then
+                [ "$i" -lt 10 ] && printf '   %d.* %s\n' "$i" "$n" \
+                                 || printf '  %d.* %s\n'  "$i" "$n"
+            else
+                [ "$i" -lt 10 ] && printf '   %d.  %s\n' "$i" "$n" \
+                                 || printf '  %d.  %s\n'  "$i" "$n"
+            fi
+        done
+        say ""
+        say "   0.  返回  ( Enter 也可 )"
+        say ""
+        printf '>>> '
+        read -r choice || return 0
+        case "$choice" in
+            ""|0) return 0 ;;
+            *)
+                if printf '%s' "$choice" | grep -qE '^[0-9]+$'; then
+                    _node="$(printf '%s\n' "$nodes" | sed -n "${choice}p")"
+                    if [ -n "$_node" ]; then
+                        cmd_tproxy_select "$_node" && return 0
+                        pause_enter
+                    else
+                        warn "编号 $choice 超出范围"
+                        pause_enter
+                    fi
+                else
+                    warn "请输入数字"
+                    pause_enter
+                fi
+                ;;
+        esac
+    done
+}
+
 menu_tproxy() {
     while :; do
         tui_header "TProxy 透明代理"
@@ -7570,26 +7625,7 @@ menu_tproxy() {
                 pause_enter
                 ;;
             7) cmd_tproxy_nodes; pause_enter ;;
-            8)
-                now="$(tproxy_fetch_now)"
-                nodes="$(tproxy_fetch_nodes)" || { warn "无法获取节点列表"; pause_enter; continue; }
-                step "可用节点（* 当前）"
-                i=0
-                printf '%s\n' "$nodes" | while IFS= read -r n; do
-                    [ -n "$n" ] || continue
-                    i=$((i + 1))
-                    [ "$n" = "$now" ] && info "$i) * $n" || info "$i)   $n"
-                done
-                printf '输入编号: '
-                read -r _idx || _idx=""
-                if printf '%s' "$_idx" | grep -qE '^[0-9]+$'; then
-                    _node="$(printf '%s\n' "$nodes" | sed -n "${_idx}p")"
-                    [ -n "$_node" ] && cmd_tproxy_select "$_node" || warn "编号无效"
-                else
-                    warn "请输入数字编号"
-                fi
-                pause_enter
-                ;;
+            8) menu_tproxy_select ;;
             9)  cmd_tproxy_health; pause_enter ;;
             10) cmd_tproxy_doctor; pause_enter ;;
             11) cmd_tproxy_debug; pause_enter ;;
