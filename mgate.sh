@@ -84,6 +84,7 @@ DEFAULT_MIXED_PORT="${MIXED_PORT:-31800}"
 # Backward-compatible internal aliases. The default proxy entry is now a single mixed listener.
 DEFAULT_SOCKS_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_HTTP_PORT="$DEFAULT_MIXED_PORT"
+DEFAULT_MIHOMO_API_PORT="${MGATE_MIHOMO_API_PORT:-9090}"
 
 REPO="MetaCubeX/mihomo"
 GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
@@ -551,6 +552,10 @@ ipv6: false
 allow-lan: true
 bind-address: '*'
 tproxy-port: __TPROXY_PORT__
+external-controller: 127.0.0.1:__MIHOMO_API_PORT__
+
+profile:
+  store-selected: true
 
 # Mixed listener supports both HTTP and SOCKS5 proxy protocols on one port.
 # Client examples:
@@ -670,7 +675,8 @@ render_config_content() {
         -e "s/__MIXED_PORT__/$DEFAULT_MIXED_PORT/g" \
         -e "s/__SOCKS_PORT__/$DEFAULT_SOCKS_PORT/g" \
         -e "s/__HTTP_PORT__/$DEFAULT_HTTP_PORT/g" \
-        -e "s/__TPROXY_PORT__/$TPROXY_PORT/g"
+        -e "s/__TPROXY_PORT__/$TPROXY_PORT/g" \
+        -e "s/__MIHOMO_API_PORT__/$DEFAULT_MIHOMO_API_PORT/g"
 }
 
 generate_config() {
@@ -1098,8 +1104,9 @@ cmd_self_update() {
 
     ok "mgate 管理脚本已更新：$SCRIPT_PATH"
     info "当前版本：$new_version"
+    step "自动执行 migrate 同步配置和生成文件"
+    "$SCRIPT_PATH" migrate || warn "migrate 未完全成功，请手动执行：mgate migrate"
     hint "执行 mgate version 查看版本信息"
-    hint "如需刷新 Web 管理文件，请执行：mgate web-refresh"
 }
 
 cmd_install() {
@@ -2260,6 +2267,7 @@ EOF_WEB_CGI
         -e "s#__DEFAULT_HTTP_PORT__#$DEFAULT_HTTP_PORT#g" \
         -e "s#__DEFAULT_SOCKS_PORT__#$DEFAULT_SOCKS_PORT#g" \
         -e "s#__TPROXY_PORT__#$TPROXY_PORT#g" \
+        -e "s#__MIHOMO_API_PORT__#$DEFAULT_MIHOMO_API_PORT#g" \
         "$WEB_CGI_FILE"
 
     chmod 755 "$WEB_CGI_FILE" || die "failed to chmod $WEB_CGI_FILE"
@@ -4904,6 +4912,93 @@ cmd_tproxy_stop() {
     cmd_gateway_status
 }
 
+config_mihomo_api_addr() {
+    addr="$(sed -n 's/^[[:space:]]*external-controller[[:space:]]*:[[:space:]]*//p' "$CONFIG_FILE" 2>/dev/null | head -1 | tr -d ' ')"
+    [ -n "$addr" ] && { printf '%s\n' "$addr"; return 0; }
+    printf '127.0.0.1:%s\n' "$DEFAULT_MIHOMO_API_PORT"
+}
+
+config_mihomo_api_secret() {
+    sed -n 's/^[[:space:]]*secret[[:space:]]*:[[:space:]]*//p' "$CONFIG_FILE" 2>/dev/null | head -1 | tr -d "\"' "
+}
+
+mihomo_api_call() {
+    method="$1"
+    path="$2"
+    body="${3:-}"
+    addr="$(config_mihomo_api_addr)"
+    secret="$(config_mihomo_api_secret)"
+    if have curl; then
+        if [ -n "$secret" ]; then
+            curl -sf -X "$method" "http://$addr$path" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $secret" \
+                ${body:+-d "$body"} 2>&1
+        else
+            curl -sf -X "$method" "http://$addr$path" \
+                -H "Content-Type: application/json" \
+                ${body:+-d "$body"} 2>&1
+        fi
+    elif have wget; then
+        if [ -n "$secret" ]; then
+            wget -qO- --method="$method" \
+                --header="Content-Type: application/json" \
+                --header="Authorization: Bearer $secret" \
+                ${body:+--body-data="$body"} \
+                "http://$addr$path" 2>&1
+        else
+            wget -qO- --method="$method" \
+                --header="Content-Type: application/json" \
+                ${body:+--body-data="$body"} \
+                "http://$addr$path" 2>&1
+        fi
+    else
+        err "curl 或 wget 不可用"; return 1
+    fi
+}
+
+cmd_tproxy_nodes() {
+    addr="$(config_mihomo_api_addr)"
+    info "查询 $TPROXY_OUT_GROUP 可用节点（mihomo API: $addr）"
+    result="$(mihomo_api_call GET "/proxies/$TPROXY_OUT_GROUP" || true)"
+    if [ -z "$result" ]; then
+        err "无法连接 mihomo API，请确认 mihomo 正在运行且 external-controller 已配置"
+        return 1
+    fi
+    now="$(printf '%s' "$result" | sed -n 's/.*"now"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    [ -n "$now" ] && info "当前选中：$now"
+    printf '%s' "$result" | tr ',' '\n' | sed -n 's/.*"\([^"]*\)".*/\1/p' | grep -v '^$' | \
+        awk 'p&&/^\[/{exit} /^"all"/{p=1;next} p' || true
+    nodes="$(printf '%s' "$result" | sed 's/.*"all"[[:space:]]*:[[:space:]]*\[//' | sed 's/\].*//' | tr ',' '\n' | sed 's/[^"]*"\([^"]*\)".*/\1/' | grep -v '^$')"
+    if [ -n "$nodes" ]; then
+        step "可用节点"
+        printf '%s\n' "$nodes" | while IFS= read -r n; do
+            [ -n "$n" ] || continue
+            if [ "$n" = "$now" ]; then
+                info "* $n（当前）"
+            else
+                info "  $n"
+            fi
+        done
+    else
+        warn "未能解析节点列表，原始响应：$result"
+    fi
+}
+
+cmd_tproxy_select() {
+    node="$1"
+    [ -n "$node" ] || die "用法：mgate tproxy-select <节点名>  （用 mgate tproxy-nodes 查看可用节点）"
+    addr="$(config_mihomo_api_addr)"
+    info "切换 $TPROXY_OUT_GROUP 到节点：$node"
+    result="$(mihomo_api_call PUT "/proxies/$TPROXY_OUT_GROUP" "{\"name\":\"$node\"}" || true)"
+    if [ -z "$result" ] || printf '%s' "$result" | grep -qi '"message"'; then
+        err "切换失败：${result:-无法连接 mihomo API}"
+        hint "请确认 mihomo 正在运行，且节点名拼写正确（用 mgate tproxy-nodes 查看）"
+        return 1
+    fi
+    ok "已切换 $TPROXY_OUT_GROUP -> $node（即时生效，无需重启）"
+}
+
 tproxy_doctor_section() {
     say ""
     say "[$1]"
@@ -6247,6 +6342,9 @@ cmd_doctor() {
         doctor_warn "Web 目录不存在：$WEB_DIR"
     fi
     [ -x "$WEB_CGI_FILE" ] && doctor_ok "Web CGI 可执行：$WEB_CGI_FILE" || doctor_warn "Web CGI 不可执行或不存在：$WEB_CGI_FILE"
+    if [ -f "$WEB_CGI_FILE" ] && ! grep -q "TPROXY_PORT=\"$TPROXY_PORT\"" "$WEB_CGI_FILE" 2>/dev/null; then
+        doctor_warn "Web CGI 可能是旧版本（缺少 TPROXY_PORT 注入），建议执行：mgate migrate"
+    fi
     [ -s "$WEB_TOKEN_FILE" ] && doctor_ok "Web Token 已生成：$WEB_TOKEN_FILE" || doctor_warn "Web Token 未生成"
     case "$mode" in
         openwrt)
@@ -6307,6 +6405,82 @@ cmd_doctor() {
     ok "诊断完成，未发现明显问题"
 }
 
+# -----------------------------
+# Migrate
+# -----------------------------
+MIGRATE_CONFIG_CHANGED=0
+
+migrate_config_ensure_key() {
+    key="$1"
+    value="$2"
+    grep -q "^[[:space:]]*${key}[[:space:]]*:" "$CONFIG_FILE" 2>/dev/null && return 0
+    printf '%s: %s\n' "$key" "$value" >> "$CONFIG_FILE" || return 1
+    MIGRATE_CONFIG_CHANGED=1
+    ok "migrate: 已添加 $key: $value"
+}
+
+migrate_patch_config() {
+    [ -f "$CONFIG_FILE" ] || { warn "migrate: config.yaml 不存在，跳过配置迁移"; return 0; }
+
+    step "检查并修补 config.yaml（只追加，不覆盖）"
+    backup_file "$CONFIG_FILE"
+
+    migrate_config_ensure_key "allow-lan" "true"
+    migrate_config_ensure_key "bind-address" "'*'"
+    migrate_config_ensure_key "tproxy-port" "$TPROXY_PORT"
+    migrate_config_ensure_key "external-controller" "127.0.0.1:$DEFAULT_MIHOMO_API_PORT"
+
+    if ! grep -q "^profile:" "$CONFIG_FILE" 2>/dev/null; then
+        printf '\nprofile:\n  store-selected: true\n' >> "$CONFIG_FILE"
+        MIGRATE_CONFIG_CHANGED=1
+        ok "migrate: 已添加 profile.store-selected"
+    fi
+
+    if ! tproxy_config_has_out_group 2>/dev/null; then
+        tproxy_config_insert_group && {
+            MIGRATE_CONFIG_CHANGED=1
+            ok "migrate: 已添加 $TPROXY_OUT_GROUP 代理组"
+        } || warn "migrate: 添加 $TPROXY_OUT_GROUP 代理组失败，请手动检查"
+    else
+        ok "migrate: $TPROXY_OUT_GROUP 代理组已存在"
+    fi
+
+    if ! tproxy_config_has_in_type_rule 2>/dev/null; then
+        tproxy_config_insert_rule && {
+            MIGRATE_CONFIG_CHANGED=1
+            ok "migrate: 已添加 IN-TYPE,TPROXY 规则"
+        } || warn "migrate: 添加 IN-TYPE,TPROXY 规则失败，请手动检查"
+    else
+        ok "migrate: IN-TYPE,TPROXY 规则已存在"
+    fi
+}
+
+cmd_migrate() {
+    need_root
+    ensure_dirs
+    MIGRATE_CONFIG_CHANGED=0
+
+    migrate_patch_config
+
+    step "刷新 Web 管理文件"
+    generate_web_files
+    create_web_service_files
+    ok "Web 文件已刷新"
+
+    step "刷新系统服务文件"
+    create_service_files
+    ok "服务文件已刷新"
+
+    if [ "$MIGRATE_CONFIG_CHANGED" -eq 1 ]; then
+        step "配置已更新，重启 mihomo 使其生效"
+        service_restart || warn "重启 mihomo 失败，请手动执行：mgate restart"
+    else
+        ok "配置无需变更"
+    fi
+
+    ok "migrate 完成"
+    hint "如 Web 管理正在运行，请执行：mgate web-restart"
+}
 
 # -----------------------------
 # Subscription management
@@ -6745,6 +6919,10 @@ ipv6: false
 allow-lan: true
 bind-address: '*'
 tproxy-port: $TPROXY_PORT
+external-controller: 127.0.0.1:$DEFAULT_MIHOMO_API_PORT
+
+profile:
+  store-selected: true
 
 authentication:
 EOF_SUB_CONFIG
@@ -6771,11 +6949,9 @@ proxy-providers:
 
 proxy-groups:
   - name: $TPROXY_OUT_GROUP
-    type: url-test
+    type: select
     use:
       - mgate-sub
-    url: http://www.gstatic.com/generate_204
-    interval: 300
 
 EOF_SUB_CONFIG
 
@@ -7146,8 +7322,13 @@ NAT 网关：
   mgate tproxy-dry-run      输出未来启用命令但不执行
   mgate tproxy-start        启用透明代理 TProxy 规则
   mgate tproxy-stop         停止并清理 mgate TProxy 规则
+  mgate tproxy-nodes        列出 TPROXY-OUT 可用节点（需 mihomo 运行）
+  mgate tproxy-select <节点> 切换 TPROXY-OUT 节点（即时生效，无需重启）
   mgate tproxy-doctor       检查 TProxy 闭环健康状态
   mgate tproxy-debug        输出 TProxy 排障信息
+
+升级与迁移：
+  mgate migrate             升级后同步配置和生成文件（self-update 会自动调用）
 
 备份与恢复：
   mgate backup [label]      创建备份
@@ -7523,8 +7704,11 @@ main() {
         tproxy-dry-run) cmd_tproxy_dry_run "$@" ;;
         tproxy-start) cmd_tproxy_start "$@" ;;
         tproxy-stop) cmd_tproxy_stop "$@" ;;
+        tproxy-nodes) cmd_tproxy_nodes "$@" ;;
+        tproxy-select) cmd_tproxy_select "$@" ;;
         tproxy-doctor) cmd_tproxy_doctor "$@" ;;
         tproxy-debug) cmd_tproxy_debug "$@" ;;
+        migrate) cmd_migrate "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
