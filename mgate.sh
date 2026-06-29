@@ -6027,9 +6027,21 @@ cmd_wifi_status() {
     fi
     dns="$(wifi_current_dns)"
     info "DNS：${dns:-unknown}"
-    ap_is_running_healthy >/dev/null 2>&1 && info "AP 热点：运行中" || info "AP 热点：未运行"
-    gateway_rules_active  >/dev/null 2>&1 && info "NAT gateway：active" || info "NAT gateway：inactive"
-    [ -f "$TPROXY_ENABLED_FILE" ] && info "TProxy：enabled" || info "TProxy：disabled"
+    if ( ap_is_running_healthy ) >/dev/null 2>&1; then
+        info "AP 热点：运行中"
+    else
+        info "AP 热点：未运行"
+    fi
+    if ( gateway_rules_active ) >/dev/null 2>&1; then
+        info "NAT gateway：active"
+    else
+        info "NAT gateway：inactive"
+    fi
+    if [ -f "$TPROXY_ENABLED_FILE" ]; then
+        info "TProxy：enabled"
+    else
+        info "TProxy：disabled"
+    fi
 }
 
 cmd_wifi_scan() {
@@ -6224,9 +6236,9 @@ cmd_wifi_doctor() {
             wifi_doctor_ok "ping 公网（114.114.114.114）：OK" || \
             wifi_doctor_warn "ping 公网（114.114.114.114）：失败"
     fi
-    ap_is_running_healthy >/dev/null 2>&1 && \
+    ( ap_is_running_healthy ) >/dev/null 2>&1 && \
         wifi_doctor_warn "AP 热点运行中，切换 WiFi 可能影响 AP 客户端"
-    gateway_rules_active >/dev/null 2>&1 && \
+    ( gateway_rules_active ) >/dev/null 2>&1 && \
         wifi_doctor_warn "NAT gateway 运行中，依赖 $WIFI_IF 上游"
     [ -f "$TPROXY_ENABLED_FILE" ] && \
         wifi_doctor_warn "TProxy 运行中，依赖 $WIFI_IF 上游"
@@ -6242,8 +6254,8 @@ cmd_wifi_json() {
     dns_raw="$(wifi_current_dns)"
     connected="false"; [ -n "$ssid" ] && connected="true"
     default_route="false"; wifi_has_default_route && default_route="true"
-    ap_running="false"; ap_is_running_healthy >/dev/null 2>&1 && ap_running="true"
-    gw_active="false"; gateway_rules_active >/dev/null 2>&1 && gw_active="true"
+    ap_running="false"; ( ap_is_running_healthy ) >/dev/null 2>&1 && ap_running="true"
+    gw_active="false"; ( gateway_rules_active ) >/dev/null 2>&1 && gw_active="true"
     tproxy_on="false"; [ -f "$TPROXY_ENABLED_FILE" ] && tproxy_on="true"
     dns_json="["; first=1
     for ns in $dns_raw; do
