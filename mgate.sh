@@ -5994,10 +5994,10 @@ wifi_current_ip() {
 }
 
 wifi_current_channel() {
-    # iw 直接从内核读信道，最可靠
+    # iw dev wlan0 info 直接输出 "channel N (freq MHz)"
     if have iw; then
-        ch="$(iw dev "$WIFI_IF" link 2>/dev/null | \
-            sed -n 's/.*channel \([0-9]*\).*/\1/p' | head -1)"
+        ch="$(iw dev "$WIFI_IF" info 2>/dev/null | \
+            sed -n 's/.*[[:space:]]channel \([0-9]*\)[[:space:]].*/\1/p' | head -1)"
         [ -n "$ch" ] && { printf '%s\n' "$ch"; return 0; }
     fi
     mgr="$(wifi_detect_manager)"
@@ -6256,7 +6256,7 @@ cmd_wifi_doctor() {
     if have ping; then
         ping -c 1 -W 3 114.114.114.114 >/dev/null 2>&1 && \
             wifi_doctor_ok "ping 公网（114.114.114.114）：OK" || \
-            wifi_doctor_warn "ping 公网（114.114.114.114）：失败"
+            wifi_doctor_warn "ping 公网（114.114.114.114）：失败（可能被上游路由或运营商屏蔽 ICMP，不一定代表无法上网）"
     fi
     ( ap_is_running_healthy ) >/dev/null 2>&1 && \
         wifi_doctor_warn "AP 热点运行中，切换 WiFi 可能影响 AP 客户端"
