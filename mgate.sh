@@ -2017,7 +2017,8 @@ EOF
             cat <<'EOF'
 <tr><td>节点选择</td><td>-</td></tr>
 </tbody></table>
-<p class="muted">未检测到 TPROXY-OUT 代理组。请先执行 <span class="code">mgate sub-set &lt;url&gt;</span> 配置订阅，或手动在 config.yaml 中添加 TPROXY-OUT 代理组。</p>
+<p class="muted">当前 config.yaml 中没有 TPROXY-OUT 代理组，这通常是因为配置文件是在本次更新前生成的。</p>
+<p class="muted">修复方法：如果使用订阅，请执行 <span class="code">mgate sub-update</span> 重新生成配置；如果使用手动配置，请执行 <span class="code">FORCE=1 mgate install</span> 重建配置文件。之后再执行 <span class="code">mgate web-refresh &amp;&amp; mgate web-restart</span> 刷新页面。</p>
 EOF
             ;;
     esac
