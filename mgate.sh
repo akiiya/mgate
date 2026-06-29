@@ -6254,9 +6254,16 @@ cmd_wifi_doctor() {
             wifi_doctor_warn "ping 网关 $gw：失败"
     fi
     if have ping; then
-        ping -c 1 -W 3 114.114.114.114 >/dev/null 2>&1 && \
-            wifi_doctor_ok "ping 公网（114.114.114.114）：OK" || \
-            wifi_doctor_warn "ping 公网（114.114.114.114）：失败（可能被上游路由或运营商屏蔽 ICMP，不一定代表无法上网）"
+        if ping -c 1 -W 3 baidu.com >/dev/null 2>&1; then
+            wifi_doctor_ok "ping baidu.com：OK（DNS + 连通性正常）"
+        else
+            _baidu_ip="$(getent hosts baidu.com 2>/dev/null | awk '{print $1; exit}')"
+            if [ -n "$_baidu_ip" ]; then
+                wifi_doctor_warn "ping baidu.com：DNS 解析正常（$_baidu_ip），但 ICMP 被屏蔽"
+            else
+                wifi_doctor_fail "ping baidu.com：DNS 解析失败（无法解析域名）"
+            fi
+        fi
     fi
     ( ap_is_running_healthy ) >/dev/null 2>&1 && \
         wifi_doctor_warn "AP 热点运行中，切换 WiFi 可能影响 AP 客户端"
