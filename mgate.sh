@@ -4957,35 +4957,44 @@ mihomo_api_call() {
     fi
 }
 
+tproxy_fetch_nodes() {
+    # 输出：每行一个节点名。失败返回非零。
+    result="$(mihomo_api_call GET "/proxies/$TPROXY_OUT_GROUP" || true)"
+    [ -n "$result" ] || return 1
+    # 先截到 "all":[ 之后，再用 "\][,}] 定位数组结尾，避免读到后续 JSON 字段
+    printf '%s' "$result" | \
+        sed 's/.*"all"[[:space:]]*:[[:space:]]*\[//' | \
+        sed 's/"\][,}].*//' | \
+        grep -o '"[^"]*"' | \
+        sed 's/^"//;s/"$//' | \
+        grep -v '^$'
+}
+
+tproxy_fetch_now() {
+    result="$(mihomo_api_call GET "/proxies/$TPROXY_OUT_GROUP" || true)"
+    printf '%s' "$result" | sed -n 's/.*"now"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
 cmd_tproxy_nodes() {
     addr="$(config_mihomo_api_addr)"
     info "查询 $TPROXY_OUT_GROUP 可用节点（mihomo API: $addr）"
-    result="$(mihomo_api_call GET "/proxies/$TPROXY_OUT_GROUP" || true)"
-    if [ -z "$result" ]; then
+    now="$(tproxy_fetch_now)"
+    nodes="$(tproxy_fetch_nodes)" || {
         err "无法连接 mihomo API，请确认 mihomo 正在运行且 external-controller 已配置"
         return 1
-    fi
-    now="$(printf '%s' "$result" | sed -n 's/.*"now"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    }
     [ -n "$now" ] && info "当前选中：$now"
-    # 从 "all":[ 之后提取所有引号内字符串，避免 sed 's/\].*//' 在节点名含 ] 时截断
-    nodes="$(printf '%s' "$result" | \
-        sed 's/.*"all"[[:space:]]*:[[:space:]]*\[//' | \
-        grep -o '"[^"]*"' | \
-        sed 's/^"//;s/"$//' | \
-        grep -v '^$')"
-    if [ -n "$nodes" ]; then
-        step "可用节点"
-        printf '%s\n' "$nodes" | while IFS= read -r n; do
-            [ -n "$n" ] || continue
-            if [ "$n" = "$now" ]; then
-                info "* $n（当前）"
-            else
-                info "  $n"
-            fi
-        done
-    else
-        warn "未能解析节点列表，原始响应：$result"
-    fi
+    step "可用节点"
+    i=0
+    printf '%s\n' "$nodes" | while IFS= read -r n; do
+        [ -n "$n" ] || continue
+        i=$((i + 1))
+        if [ "$n" = "$now" ]; then
+            info "$i) * $n"
+        else
+            info "$i)   $n"
+        fi
+    done
 }
 
 cmd_tproxy_select() {
@@ -7562,9 +7571,23 @@ menu_tproxy() {
                 ;;
             7) cmd_tproxy_nodes; pause_enter ;;
             8)
-                printf '节点名: '
-                read -r _node || _node=""
-                [ -n "$_node" ] && cmd_tproxy_select "$_node" || warn "未输入节点名"
+                now="$(tproxy_fetch_now)"
+                nodes="$(tproxy_fetch_nodes)" || { warn "无法获取节点列表"; pause_enter; continue; }
+                step "可用节点（* 当前）"
+                i=0
+                printf '%s\n' "$nodes" | while IFS= read -r n; do
+                    [ -n "$n" ] || continue
+                    i=$((i + 1))
+                    [ "$n" = "$now" ] && info "$i) * $n" || info "$i)   $n"
+                done
+                printf '输入编号: '
+                read -r _idx || _idx=""
+                if printf '%s' "$_idx" | grep -qE '^[0-9]+$'; then
+                    _node="$(printf '%s\n' "$nodes" | sed -n "${_idx}p")"
+                    [ -n "$_node" ] && cmd_tproxy_select "$_node" || warn "编号无效"
+                else
+                    warn "请输入数字编号"
+                fi
                 pause_enter
                 ;;
             9)  cmd_tproxy_health; pause_enter ;;
