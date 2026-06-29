@@ -4928,30 +4928,45 @@ mihomo_api_call() {
     body="${3:-}"
     addr="$(config_mihomo_api_addr)"
     secret="$(config_mihomo_api_secret)"
+    # 通过 stdin 传 body，避免 field splitting 拆碎含空格/特殊字符的节点名
     if have curl; then
-        if [ -n "$secret" ]; then
-            curl -sf -X "$method" "http://$addr$path" \
-                -H "Content-Type: application/json" \
-                -H "Authorization: Bearer $secret" \
-                ${body:+-d "$body"} 2>&1
+        if [ -n "$body" ]; then
+            if [ -n "$secret" ]; then
+                printf '%s' "$body" | curl -sf -X "$method" "http://$addr$path" \
+                    -H "Content-Type: application/json" \
+                    -H "Authorization: Bearer $secret" \
+                    -d @- 2>&1
+            else
+                printf '%s' "$body" | curl -sf -X "$method" "http://$addr$path" \
+                    -H "Content-Type: application/json" \
+                    -d @- 2>&1
+            fi
         else
-            curl -sf -X "$method" "http://$addr$path" \
-                -H "Content-Type: application/json" \
-                ${body:+-d "$body"} 2>&1
+            if [ -n "$secret" ]; then
+                curl -sf -X "$method" "http://$addr$path" \
+                    -H "Content-Type: application/json" \
+                    -H "Authorization: Bearer $secret" 2>&1
+            else
+                curl -sf -X "$method" "http://$addr$path" \
+                    -H "Content-Type: application/json" 2>&1
+            fi
         fi
     elif have wget; then
+        _api_tmp="$TMP_DIR/mgate.api.$$.json"
+        [ -n "$body" ] && printf '%s' "$body" > "$_api_tmp" || : > "$_api_tmp"
         if [ -n "$secret" ]; then
             wget -qO- --method="$method" \
                 --header="Content-Type: application/json" \
                 --header="Authorization: Bearer $secret" \
-                ${body:+--body-data="$body"} \
+                --body-file="$_api_tmp" \
                 "http://$addr$path" 2>&1
         else
             wget -qO- --method="$method" \
                 --header="Content-Type: application/json" \
-                ${body:+--body-data="$body"} \
+                --body-file="$_api_tmp" \
                 "http://$addr$path" 2>&1
         fi
+        rm -f "$_api_tmp"
     else
         err "curl 或 wget 不可用"; return 1
     fi
@@ -5002,10 +5017,13 @@ cmd_tproxy_select() {
     [ -n "$node" ] || die "用法：mgate tproxy-select <节点名>  （用 mgate tproxy-nodes 查看可用节点）"
     addr="$(config_mihomo_api_addr)"
     info "切换 $TPROXY_OUT_GROUP 到节点：$node"
-    result="$(mihomo_api_call PUT "/proxies/$TPROXY_OUT_GROUP" "{\"name\":\"$node\"}" || true)"
-    if [ -z "$result" ] || printf '%s' "$result" | grep -qi '"message"'; then
-        err "切换失败：${result:-无法连接 mihomo API}"
-        hint "请确认 mihomo 正在运行，且节点名拼写正确（用 mgate tproxy-nodes 查看）"
+    # PUT /proxies/{group} 成功返回 HTTP 204 空 body，用退出码判断结果
+    result="$(mihomo_api_call PUT "/proxies/$TPROXY_OUT_GROUP" "{\"name\":\"$node\"}")"
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        errmsg="$(printf '%s' "$result" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        err "切换失败：${errmsg:-请确认 mihomo 正在运行且节点名正确}"
+        hint "可用节点：mgate tproxy-nodes"
         return 1
     fi
     ok "已切换 $TPROXY_OUT_GROUP -> $node（即时生效，无需重启）"
