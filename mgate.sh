@@ -5952,18 +5952,38 @@ wifi_if_exists() {
     ip link show "$WIFI_IF" >/dev/null 2>&1
 }
 
-wifi_connected_ssid() {
+wifi_is_connected() {
     mgr="$(wifi_detect_manager)"
     case "$mgr" in
         NetworkManager)
-            nmcli -t -f ACTIVE,SSID dev wifi list ifname "$WIFI_IF" 2>/dev/null | \
-                grep '^yes:' | sed 's/^yes://' | head -1
+            state="$(nmcli -t -f DEVICE,STATE dev status 2>/dev/null | \
+                grep "^${WIFI_IF}:" | sed 's/^[^:]*://' | head -1)"
+            [ "$state" = "connected" ] && return 0
+            ;;
+        wpa_supplicant)
+            wpa_cli -i "$WIFI_IF" status 2>/dev/null | grep -q "wpa_state=COMPLETED" && return 0
+            ;;
+    esac
+    # 兜底：有 IP + 有默认路由 = 可以认为已连接
+    [ -n "$(wifi_current_ip)" ] && wifi_has_default_route
+}
+
+wifi_connected_ssid() {
+    # 优先用 iw 直接问内核（最准确，不依赖 nmcli 扫描缓存）
+    if have iw; then
+        ssid="$(iw dev "$WIFI_IF" link 2>/dev/null | \
+            grep -i 'SSID:' | sed 's/.*SSID:[[:space:]]*//')"
+        [ -n "$ssid" ] && { printf '%s\n' "$ssid"; return 0; }
+    fi
+    # 备用：nmcli 活动连接名
+    mgr="$(wifi_detect_manager)"
+    case "$mgr" in
+        NetworkManager)
+            nmcli -t -f DEVICE,CONNECTION dev status 2>/dev/null | \
+                grep "^${WIFI_IF}:" | sed 's/^[^:]*://' | head -1
             ;;
         wpa_supplicant)
             wpa_cli -i "$WIFI_IF" status 2>/dev/null | sed -n 's/^ssid=//p' | head -1
-            ;;
-        *)
-            iw dev "$WIFI_IF" link 2>/dev/null | sed -n 's/.*SSID: //p' | head -1
             ;;
     esac
 }
@@ -5974,15 +5994,17 @@ wifi_current_ip() {
 }
 
 wifi_current_channel() {
+    # iw 直接从内核读信道，最可靠
+    if have iw; then
+        ch="$(iw dev "$WIFI_IF" link 2>/dev/null | \
+            sed -n 's/.*channel \([0-9]*\).*/\1/p' | head -1)"
+        [ -n "$ch" ] && { printf '%s\n' "$ch"; return 0; }
+    fi
     mgr="$(wifi_detect_manager)"
     case "$mgr" in
         NetworkManager)
             nmcli -t -f ACTIVE,CHAN dev wifi list ifname "$WIFI_IF" 2>/dev/null | \
                 grep '^yes:' | sed 's/^yes://' | head -1
-            ;;
-        *)
-            iw dev "$WIFI_IF" link 2>/dev/null | \
-                sed -n 's/.*channel \([0-9]*\).*/\1/p' | head -1
             ;;
     esac
 }
@@ -6008,10 +6030,10 @@ cmd_wifi_status() {
         warn "接口存在：no（$WIFI_IF 不存在）"
     fi
     info "管理器：$mgr"
-    ssid="$(wifi_connected_ssid)"
-    if [ -n "$ssid" ]; then
+    if ( wifi_is_connected ) 2>/dev/null; then
         info "连接状态：已连接"
-        info "当前 SSID：$ssid"
+        ssid="$(wifi_connected_ssid)"
+        info "当前 SSID：${ssid:-unknown}"
     else
         info "连接状态：未连接"
         info "当前 SSID：none"
@@ -6204,9 +6226,9 @@ cmd_wifi_doctor() {
         wpa_supplicant) wifi_doctor_warn "管理器：wpa_supplicant（功能受限）" ;;
         *) wifi_doctor_warn "未检测到已知网络管理器" ;;
     esac
-    ssid="$(wifi_connected_ssid)"
-    if [ -n "$ssid" ]; then
-        wifi_doctor_ok "已连接：$ssid"
+    if ( wifi_is_connected ) 2>/dev/null; then
+        ssid="$(wifi_connected_ssid)"
+        wifi_doctor_ok "已连接：${ssid:-unknown}"
     else
         wifi_doctor_fail "未连接上级 WiFi"
     fi
@@ -6252,7 +6274,7 @@ cmd_wifi_json() {
     ip_addr="$(wifi_current_ip)"
     channel="$(wifi_current_channel)"
     dns_raw="$(wifi_current_dns)"
-    connected="false"; [ -n "$ssid" ] && connected="true"
+    connected="false"; ( wifi_is_connected ) 2>/dev/null && connected="true"
     default_route="false"; wifi_has_default_route && default_route="true"
     ap_running="false"; ( ap_is_running_healthy ) >/dev/null 2>&1 && ap_running="true"
     gw_active="false"; ( gateway_rules_active ) >/dev/null 2>&1 && gw_active="true"
