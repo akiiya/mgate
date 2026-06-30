@@ -89,6 +89,17 @@ WIFI_IF="${MGATE_WIFI_IF:-wlan0}"
 WIFI_FALLBACK_TIMEOUT="${MGATE_WIFI_FALLBACK_TIMEOUT:-50}"
 WIFI_SWITCH_LOCK_DIR="$RUN_DIR/wifi-switch.lock"
 
+MGATE_AGENT_REPO="${MGATE_AGENT_REPO:-akiiya/mgate-agent}"
+MGATE_AGENT_BIN="${MGATE_AGENT_BIN:-/usr/local/bin/mgate-agent}"
+MGATE_AGENT_SERVICE_FILE="/etc/systemd/system/mgate-agent.service"
+MGATE_AGENT_CONFIG_DIR="/etc/mgate-agent"
+MGATE_AGENT_CONFIG_FILE="/etc/mgate-agent/agent.yaml"
+MGATE_AGENT_DATA_DIR="/var/lib/mgate-agent"
+MGATE_AGENT_LOG_DIR="/var/log/mgate-agent"
+MGATE_AGENT_CREDS_FILE="/var/lib/mgate-agent/credentials.json"
+MGATE_AGENT_TOKEN_FILE_DEFAULT="/etc/mgate-agent/install-token"
+MGATE_AGENT_ACTIVE_TOKEN=""
+
 REPO="MetaCubeX/mihomo"
 GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
 GITHUB_API_LATEST="https://api.github.com/repos/$REPO/releases/latest"
@@ -6816,10 +6827,29 @@ cmd_agent_snapshot() {
     printf '    "mixed_port": %s,\n' "$DEFAULT_MIXED_PORT"
     printf '    "tproxy_port": %s\n' "$TPROXY_PORT"
     printf '  },\n'
+    # Agent field (fast file/PID checks only)
+    _ag_installed="false"; [ -x "$MGATE_AGENT_BIN" ] && _ag_installed="true"
+    _ag_svc="false"; [ -f "$MGATE_AGENT_SERVICE_FILE" ] && _ag_svc="true"
+    _ag_running="false"
+    have systemctl && systemctl is-active mgate-agent >/dev/null 2>&1 && _ag_running="true"
+    _ag_enabled="false"
+    have systemctl && systemctl is-enabled mgate-agent >/dev/null 2>&1 && _ag_enabled="true"
+    _ag_ver="unknown"
+    [ "$_ag_installed" = "true" ] && \
+        _ag_ver="$("$MGATE_AGENT_BIN" version 2>/dev/null || \
+                   "$MGATE_AGENT_BIN" --version 2>/dev/null || printf 'unknown')"
+
     printf '  "last_errors": {\n'
     printf '    "tproxy": %s,\n' "$_err_tproxy"
     printf '    "gateway": null,\n'
     printf '    "wifi": null\n'
+    printf '  },\n'
+    printf '  "agent": {\n'
+    printf '    "installed": %s,\n' "$_ag_installed"
+    printf '    "service_exists": %s,\n' "$_ag_svc"
+    printf '    "running": %s,\n' "$_ag_running"
+    printf '    "enabled": %s,\n' "$_ag_enabled"
+    printf '    "version": "%s"\n' "${_ag_ver:-unknown}"
     printf '  },\n'
     printf '  "warnings": []\n'
     printf '}\n'
@@ -6842,7 +6872,8 @@ cmd_capabilities_json() {
     printf '    "tproxy": true,\n'
     printf '    "json": true,\n'
     printf '    "preflight": true,\n'
-    printf '    "agent_snapshot": true\n'
+    printf '    "agent_snapshot": true,\n'
+    printf '    "agent_management": true\n'
     printf '  },\n'
     printf '  "commands": {\n'
     printf '    "read_only": [\n'
@@ -6853,13 +6884,15 @@ cmd_capabilities_json() {
     printf '      "gateway-status","gateway-check","gateway-doctor","gateway-json",\n'
     printf '      "tproxy-status","tproxy-check","tproxy-health","tproxy-doctor","tproxy-json",\n'
     printf '      "sub-status","sub-nodes","sub-unmatched",\n'
-    printf '      "proxy-info","version","doctor","preflight"\n'
+    printf '      "proxy-info","version","doctor","preflight",\n'
+    printf '      "agent status","agent doctor"\n'
     printf '    ],\n'
     printf '    "dangerous": [\n'
     printf '      "wifi-connect","wifi-disconnect","wifi-reconnect","wifi-delete",\n'
     printf '      "ap-start","ap-stop","gateway-start","gateway-stop",\n'
     printf '      "tproxy-start","tproxy-stop","self-update","update",\n'
-    printf '      "install-core","migrate","sub-update","web-disable","uninstall"\n'
+    printf '      "install-core","migrate","sub-update","web-disable","uninstall",\n'
+    printf '      "agent install","agent update","agent start","agent stop","agent restart","agent uninstall"\n'
     printf '    ],\n'
     printf '    "interactive": [\n'
     printf '      "tui","ap-install-deps","edit"\n'
@@ -6874,6 +6907,492 @@ cmd_capabilities_json() {
     printf '    "dangerous_actions_require_dedicated_action_api": true\n'
     printf '  }\n'
     printf '}\n'
+}
+
+# -----------------------------
+# mgate-agent lifecycle management
+# -----------------------------
+AGENT_DR_OK=0; AGENT_DR_WARN=0; AGENT_DR_FAIL=0
+agent_dr_ok()   { AGENT_DR_OK=$((AGENT_DR_OK+1));     say "[OK] $*"; }
+agent_dr_warn() { AGENT_DR_WARN=$((AGENT_DR_WARN+1)); say "[WARN] $*"; }
+agent_dr_fail() { AGENT_DR_FAIL=$((AGENT_DR_FAIL+1)); say "[ERROR] $*"; }
+
+agent_detect_arch() {
+    case "$(uname -m)" in
+        x86_64)        printf 'amd64\n' ;;
+        aarch64|arm64) printf 'arm64\n' ;;
+        armv7l|armv7*) printf 'armv7\n' ;;
+        *)
+            err "不支持的系统架构：$(uname -m)"
+            hint "支持：x86_64 (amd64) / aarch64 (arm64) / armv7l (armv7)"
+            return 1 ;;
+    esac
+}
+
+agent_load_token() {
+    _tf="${1:-}"
+    MGATE_AGENT_ACTIVE_TOKEN=""
+    if [ -n "$_tf" ]; then
+        [ -f "$_tf" ] || { err "token 文件不存在：$_tf"; return 1; }
+        MGATE_AGENT_ACTIVE_TOKEN="$(tr -d '[:space:]' < "$_tf" 2>/dev/null || true)"
+        [ -n "$MGATE_AGENT_ACTIVE_TOKEN" ] || { err "token 文件为空：$_tf"; return 1; }
+        info "已加载 token 文件：$_tf"
+        return 0
+    fi
+    if [ -f "$MGATE_AGENT_TOKEN_FILE_DEFAULT" ]; then
+        MGATE_AGENT_ACTIVE_TOKEN="$(tr -d '[:space:]' < "$MGATE_AGENT_TOKEN_FILE_DEFAULT" 2>/dev/null || true)"
+        [ -n "$MGATE_AGENT_ACTIVE_TOKEN" ] && \
+            info "已加载 token：$MGATE_AGENT_TOKEN_FILE_DEFAULT"
+    fi
+    return 0
+}
+
+agent_curl_auth() {
+    # token 写入临时 curl config 文件，不暴露在进程参数中
+    if [ -n "${MGATE_AGENT_ACTIVE_TOKEN:-}" ]; then
+        _acfg="$TMP_DIR/mgate-agent-curl.$$.cfg"
+        chmod 600 "$_acfg" 2>/dev/null || true
+        printf 'header = "Authorization: Bearer %s"\n' "$MGATE_AGENT_ACTIVE_TOKEN" > "$_acfg"
+        curl --connect-timeout "$MGATE_CONNECT_TIMEOUT" \
+            --max-time "$MGATE_DOWNLOAD_TIMEOUT" \
+            -K "$_acfg" "$@"
+        _arc=$?; rm -f "$_acfg" 2>/dev/null || true; return $_arc
+    else
+        curl --connect-timeout "$MGATE_CONNECT_TIMEOUT" \
+            --max-time "$MGATE_DOWNLOAD_TIMEOUT" "$@"
+    fi
+}
+
+agent_download_fail_hint() {
+    hint "下载失败可能原因："
+    hint "  1. 网络不通"
+    hint "  2. private repo 需要 token 文件：$MGATE_AGENT_TOKEN_FILE_DEFAULT"
+    hint "  3. 版本号不存在，使用 --version 指定"
+    hint "token 文件权限：chmod 600 $MGATE_AGENT_TOKEN_FILE_DEFAULT"
+    hint "请勿将 token 直接粘贴进命令行"
+}
+
+agent_get_latest_version() {
+    _api="https://api.github.com/repos/$MGATE_AGENT_REPO/releases/latest"
+    _r="$(agent_curl_auth -sf "$_api" 2>/dev/null || true)"
+    [ -n "$_r" ] || return 1
+    _tag="$(printf '%s' "$_r" | \
+        sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    [ -n "$_tag" ] || return 1
+    printf '%s\n' "$_tag"
+}
+
+agent_get_installed_version() {
+    [ -x "$MGATE_AGENT_BIN" ] || { printf 'unknown\n'; return 1; }
+    v="$("$MGATE_AGENT_BIN" version 2>/dev/null || \
+         "$MGATE_AGENT_BIN" --version 2>/dev/null || printf 'unknown')"
+    printf '%s\n' "${v:-unknown}"
+}
+
+agent_create_dirs() {
+    mkdir -p "$MGATE_AGENT_CONFIG_DIR" "$MGATE_AGENT_DATA_DIR" "$MGATE_AGENT_LOG_DIR" \
+        2>/dev/null || true
+    chmod 750 "$MGATE_AGENT_CONFIG_DIR" "$MGATE_AGENT_DATA_DIR" 2>/dev/null || true
+    ok "目录就绪：$MGATE_AGENT_CONFIG_DIR / $MGATE_AGENT_DATA_DIR / $MGATE_AGENT_LOG_DIR"
+}
+
+agent_install_service() {
+    step "安装 systemd service"
+    mkdir -p "$(dirname "$MGATE_AGENT_SERVICE_FILE")" 2>/dev/null || true
+    cat > "$MGATE_AGENT_SERVICE_FILE" <<EOF
+[Unit]
+Description=mgate Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$MGATE_AGENT_BIN --config $MGATE_AGENT_CONFIG_FILE
+WorkingDirectory=$MGATE_AGENT_DATA_DIR
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mgate-agent
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    ok "已写入：$MGATE_AGENT_SERVICE_FILE"
+}
+
+agent_install_config() {
+    _xdir="$1"
+    _force="${2:-0}"
+    if [ -f "$MGATE_AGENT_CONFIG_FILE" ] && [ "$_force" = "0" ]; then
+        info "保留现有配置：$MGATE_AGENT_CONFIG_FILE"; return 0
+    fi
+    if [ -f "$MGATE_AGENT_CONFIG_FILE" ] && [ "$_force" = "1" ]; then
+        _bak="${MGATE_AGENT_CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S 2>/dev/null || printf 'backup')"
+        cp "$MGATE_AGENT_CONFIG_FILE" "$_bak" 2>/dev/null && info "已备份现有配置：$_bak" || true
+    fi
+    _ex=""
+    for _p in \
+        "$_xdir/agent.yaml.example" "$_xdir/agent.example.yaml" \
+        "$_xdir/config/agent.yaml.example" "$_xdir/config.yaml.example"; do
+        [ -f "$_p" ] && { _ex="$_p"; break; }
+    done
+    if [ -n "$_ex" ]; then
+        cp "$_ex" "$MGATE_AGENT_CONFIG_FILE"
+        ok "已生成配置（来自 release 示例）：$MGATE_AGENT_CONFIG_FILE"
+    else
+        printf '# mgate-agent configuration\n# 请参考 mgate-agent 文档完善此配置\nmgate_snapshot_command: "mgate agent-snapshot"\n' \
+            > "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || true
+        warn "release 包中无示例配置，已生成最小占位配置"
+        hint "请参考 mgate-agent 文档完善：$MGATE_AGENT_CONFIG_FILE"
+    fi
+}
+
+agent_download_and_verify() {
+    _ver="$1"; _arch="$2"; _wdir="$3"
+    _asset="mgate-agent-${_ver}-linux-${_arch}.tar.gz"
+    _base="https://github.com/$MGATE_AGENT_REPO/releases/download/$_ver"
+
+    step "下载 checksums.txt"
+    agent_curl_auth -fL -o "$_wdir/checksums.txt" "$_base/checksums.txt" 2>&1 || {
+        err "下载 checksums.txt 失败"; agent_download_fail_hint; return 1; }
+
+    step "下载 $_asset"
+    agent_curl_auth -fL -o "$_wdir/$_asset" "$_base/$_asset" 2>&1 || {
+        err "下载 $_asset 失败"; agent_download_fail_hint; return 1; }
+
+    step "校验 SHA256"
+    if ! grep -q "$_asset" "$_wdir/checksums.txt"; then
+        err "checksums.txt 不包含 $_asset，拒绝安装"; return 1; fi
+    grep "$_asset" "$_wdir/checksums.txt" > "$_wdir/verify.txt"
+    ( cd "$_wdir" && sha256sum -c verify.txt 2>&1 ) || {
+        err "SHA256 校验失败，文件可能损坏或被篡改"; return 1; }
+    ok "SHA256 校验通过"
+
+    step "解压"
+    tar -xzf "$_wdir/$_asset" -C "$_wdir" 2>&1 || { err "解压失败"; return 1; }
+    _bin="$(find "$_wdir" -name "mgate-agent" -type f 2>/dev/null | head -1)"
+    [ -n "$_bin" ] && [ -f "$_bin" ] || { err "解压后未找到 mgate-agent 二进制"; return 1; }
+    chmod +x "$_bin" 2>/dev/null || true
+    printf '%s\n' "$_bin"
+}
+
+cmd_agent_install() {
+    _ai_ver="" _ai_tf="" _ai_yes=0 _ai_force=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --version)    _ai_ver="$2";  shift 2 ;;
+            --version=*)  _ai_ver="${1#--version=}"; shift ;;
+            --token-file) _ai_tf="$2";   shift 2 ;;
+            --token-file=*) _ai_tf="${1#--token-file=}"; shift ;;
+            --yes|-y) _ai_yes=1; shift ;;
+            --force|-f) _ai_force=1; shift ;;
+            *) err "未知参数：$1"
+               hint "用法：mgate agent install [--version v0.x.x] [--token-file FILE] [--yes] [--force]"
+               return 1 ;;
+        esac
+    done
+    need_root
+    _ai_arch="$(agent_detect_arch)" || return 1
+    agent_load_token "$_ai_tf" || return 1
+    if [ -z "$_ai_ver" ]; then
+        step "获取最新版本..."
+        _ai_ver="$(agent_get_latest_version)" || {
+            err "无法获取最新版本"; agent_download_fail_hint; return 1; }
+        info "最新版本：$_ai_ver"
+    fi
+    if [ -x "$MGATE_AGENT_BIN" ] && [ "$_ai_force" = "0" ]; then
+        warn "mgate-agent 已安装：$(agent_get_installed_version)"
+        hint "使用 mgate agent update 更新，或 --force 强制重装"
+        return 1
+    fi
+    [ "$_ai_yes" = "1" ] || tui_confirm "确认安装 mgate-agent $_ai_ver？" || return 1
+    _ai_tmp="$TMP_DIR/mgate-agent-install.$$"
+    mkdir -p "$_ai_tmp" || { err "无法创建临时目录"; return 1; }
+    step "开始安装 mgate-agent $_ai_ver（$_ai_arch）"
+    _ai_bin="$(agent_download_and_verify "$_ai_ver" "$_ai_arch" "$_ai_tmp")" || {
+        rm -rf "$_ai_tmp" 2>/dev/null; return 1; }
+    agent_create_dirs
+    step "安装 binary"
+    cp "$_ai_bin" "$MGATE_AGENT_BIN" || { err "安装 binary 失败"; rm -rf "$_ai_tmp"; return 1; }
+    chmod 755 "$MGATE_AGENT_BIN"
+    ok "已安装：$MGATE_AGENT_BIN"
+    agent_install_config "$_ai_tmp" "$_ai_force"
+    agent_install_service
+    systemctl daemon-reload 2>/dev/null || true
+    rm -rf "$_ai_tmp" 2>/dev/null || true
+    MGATE_AGENT_ACTIVE_TOKEN=""
+    ok "mgate-agent $_ai_ver 安装完成"
+    info "service：$MGATE_AGENT_SERVICE_FILE  配置：$MGATE_AGENT_CONFIG_FILE"
+    [ -f "$MGATE_AGENT_CREDS_FILE" ] || \
+        hint "credentials 未配置：$MGATE_AGENT_CREDS_FILE（连接 cloud 前需配置）"
+    hint "启动：mgate agent start"
+}
+
+cmd_agent_update() {
+    _au_ver="" _au_tf="" _au_yes=0 _au_force=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --version)    _au_ver="$2"; shift 2 ;;
+            --version=*)  _au_ver="${1#--version=}"; shift ;;
+            --token-file) _au_tf="$2"; shift 2 ;;
+            --token-file=*) _au_tf="${1#--token-file=}"; shift ;;
+            --yes|-y)   _au_yes=1; shift ;;
+            --force|-f) _au_force=1; shift ;;
+            *) err "未知参数：$1"; return 1 ;;
+        esac
+    done
+    need_root
+    _au_arch="$(agent_detect_arch)" || return 1
+    agent_load_token "$_au_tf" || return 1
+    if [ -z "$_au_ver" ]; then
+        step "获取最新版本..."
+        _au_ver="$(agent_get_latest_version)" || {
+            err "无法获取最新版本"; agent_download_fail_hint; return 1; }
+        info "最新版本：$_au_ver"
+    fi
+    [ -x "$MGATE_AGENT_BIN" ] && info "当前版本：$(agent_get_installed_version)" || \
+        info "当前版本：未安装"
+    [ "$_au_yes" = "1" ] || tui_confirm "确认更新 mgate-agent 到 $_au_ver？" || return 1
+    _au_tmp="$TMP_DIR/mgate-agent-update.$$"
+    mkdir -p "$_au_tmp" || { err "无法创建临时目录"; return 1; }
+    step "开始更新 mgate-agent $_au_ver（$_au_arch）"
+    _au_bin="$(agent_download_and_verify "$_au_ver" "$_au_arch" "$_au_tmp")" || {
+        rm -rf "$_au_tmp" 2>/dev/null; return 1; }
+    _au_was_running=0
+    have systemctl && systemctl is-active mgate-agent >/dev/null 2>&1 && {
+        _au_was_running=1
+        step "临时停止服务..."
+        systemctl stop mgate-agent 2>/dev/null || true; }
+    step "替换 binary"
+    cp "$_au_bin" "$MGATE_AGENT_BIN" || {
+        err "替换 binary 失败"
+        rm -rf "$_au_tmp"
+        [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
+        return 1; }
+    chmod 755 "$MGATE_AGENT_BIN"
+    ok "binary 已更新：$MGATE_AGENT_BIN"
+    agent_install_service
+    systemctl daemon-reload 2>/dev/null || true
+    for _p in "$_au_tmp/agent.yaml.example" "$_au_tmp/agent.example.yaml" \
+              "$_au_tmp/config/agent.yaml.example"; do
+        [ -f "$_p" ] && {
+            cp "$_p" "${MGATE_AGENT_CONFIG_FILE}.new-example" 2>/dev/null && \
+                hint "新示例配置：${MGATE_AGENT_CONFIG_FILE}.new-example（可与现有配置对比）"
+            break; }
+    done
+    rm -rf "$_au_tmp" 2>/dev/null || true
+    MGATE_AGENT_ACTIVE_TOKEN=""
+    [ "$_au_was_running" = "1" ] && {
+        step "重启服务..."
+        systemctl start mgate-agent 2>/dev/null && ok "服务已重启" || \
+            warn "服务重启失败：mgate agent status"; }
+    ok "mgate-agent 已更新至 $_au_ver"
+    info "配置和 credentials 已保留"
+}
+
+cmd_agent_start() {
+    need_root
+    [ -f "$MGATE_AGENT_SERVICE_FILE" ] || \
+        { err "service 文件不存在，请先安装：mgate agent install"; return 1; }
+    [ -x "$MGATE_AGENT_BIN" ] || \
+        { err "binary 不存在，请先安装：mgate agent install"; return 1; }
+    [ -f "$MGATE_AGENT_CONFIG_FILE" ] || warn "配置文件不存在：$MGATE_AGENT_CONFIG_FILE"
+    [ -f "$MGATE_AGENT_CREDS_FILE" ] || \
+        warn "credentials 未配置：$MGATE_AGENT_CREDS_FILE（服务可能无法连接 cloud）"
+    step "启动 mgate-agent"
+    systemctl enable mgate-agent 2>&1 || true
+    systemctl start mgate-agent 2>&1 || { err "启动失败"; return 1; }
+    sleep 1
+    ok "mgate-agent 状态：$(systemctl is-active mgate-agent 2>/dev/null || printf 'unknown')"
+    hint "查看日志：journalctl -u mgate-agent -f"
+}
+
+cmd_agent_stop() {
+    _as_yes=0
+    case "${1:-}" in --yes|-y) _as_yes=1 ;; esac
+    need_root
+    [ "$_as_yes" = "1" ] || {
+        warn "停止 mgate-agent 将中断 cloud 状态上报（不影响 mgate.sh 本地功能）"
+        tui_confirm "确认停止 mgate-agent？" || return 1; }
+    systemctl stop mgate-agent 2>&1 || { err "停止失败"; return 1; }
+    ok "mgate-agent 已停止"
+}
+
+cmd_agent_restart() {
+    need_root
+    [ -f "$MGATE_AGENT_SERVICE_FILE" ] || \
+        { err "service 文件不存在，请先安装：mgate agent install"; return 1; }
+    step "重启 mgate-agent"
+    systemctl restart mgate-agent 2>&1 || { err "重启失败"; return 1; }
+    sleep 1
+    ok "mgate-agent 状态：$(systemctl is-active mgate-agent 2>/dev/null || printf 'unknown')"
+}
+
+cmd_agent_status() {
+    step "mgate-agent 状态"
+    if [ -x "$MGATE_AGENT_BIN" ]; then
+        info "binary：$MGATE_AGENT_BIN（存在）"
+        info "版本：$(agent_get_installed_version)"
+    else
+        warn "binary：$MGATE_AGENT_BIN（不存在）"
+    fi
+    [ -f "$MGATE_AGENT_SERVICE_FILE" ] && info "service 文件：存在" || warn "service 文件：不存在（未安装）"
+    if have systemctl; then
+        info "enabled：$(systemctl is-enabled mgate-agent 2>/dev/null || printf 'unknown')"
+        info "running：$(systemctl is-active mgate-agent 2>/dev/null || printf 'unknown')"
+    else
+        warn "systemctl 不可用（非 systemd 环境）"
+    fi
+    [ -f "$MGATE_AGENT_CONFIG_FILE" ] && info "agent.yaml：存在" || warn "agent.yaml：不存在"
+    if [ -f "$MGATE_AGENT_CREDS_FILE" ]; then
+        info "credentials.json：存在"
+        _sp="$(stat -c '%a' "$MGATE_AGENT_CREDS_FILE" 2>/dev/null || printf 'unknown')"
+        case "$_sp" in
+            600|400) info "credentials.json 权限：$_sp（OK）" ;;
+            unknown) warn "credentials.json 权限：无法读取" ;;
+            *) warn "credentials.json 权限：$_sp（建议 600）" ;;
+        esac
+    else
+        warn "credentials.json：不存在（需配置才能连接 cloud）"
+    fi
+    say ""
+    step "最近日志"
+    if have journalctl; then
+        journalctl -u mgate-agent -n 20 --no-pager 2>/dev/null || \
+            warn "无法读取 journal（权限不足或日志为空）"
+    else
+        warn "journalctl 不可用"
+    fi
+}
+
+cmd_agent_doctor() {
+    AGENT_DR_OK=0; AGENT_DR_WARN=0; AGENT_DR_FAIL=0
+    step "mgate-agent 诊断"
+    if [ -x "$MGATE_AGENT_BIN" ]; then
+        agent_dr_ok "binary 存在且可执行：$MGATE_AGENT_BIN"
+        _dver="$(agent_get_installed_version 2>/dev/null || printf '')"
+        [ -n "$_dver" ] && [ "$_dver" != "unknown" ] && \
+            agent_dr_ok "version 可读：$_dver" || agent_dr_warn "version 无法读取"
+    elif [ -f "$MGATE_AGENT_BIN" ]; then
+        agent_dr_fail "binary 存在但不可执行：$MGATE_AGENT_BIN"
+    else
+        agent_dr_fail "binary 不存在：$MGATE_AGENT_BIN"
+    fi
+    have systemctl && agent_dr_ok "systemd 可用" || agent_dr_warn "systemd 不可用"
+    [ -f "$MGATE_AGENT_SERVICE_FILE" ] && \
+        agent_dr_ok "service 文件存在" || agent_dr_fail "service 文件不存在"
+    if have systemctl; then
+        _de="$(systemctl is-enabled mgate-agent 2>/dev/null || printf 'unknown')"
+        _da="$(systemctl is-active mgate-agent 2>/dev/null || printf 'unknown')"
+        [ "$_de" = "enabled" ] && agent_dr_ok "service enabled" || \
+            agent_dr_warn "service not enabled（$_de）"
+        [ "$_da" = "active" ] && agent_dr_ok "service running" || \
+            agent_dr_warn "service not running（$_da）"
+    fi
+    [ -f "$MGATE_AGENT_CONFIG_FILE" ] && \
+        agent_dr_ok "agent.yaml 存在" || agent_dr_fail "agent.yaml 不存在：$MGATE_AGENT_CONFIG_FILE"
+    if [ -f "$MGATE_AGENT_CREDS_FILE" ]; then
+        agent_dr_ok "credentials.json 存在"
+        _cp="$(stat -c '%a' "$MGATE_AGENT_CREDS_FILE" 2>/dev/null || printf 'unknown')"
+        case "$_cp" in
+            600|400) agent_dr_ok "credentials.json 权限：$_cp" ;;
+            unknown) agent_dr_warn "credentials.json 权限：无法读取" ;;
+            *) agent_dr_warn "credentials.json 权限：$_cp（建议 600）" ;;
+        esac
+    else
+        agent_dr_warn "credentials.json 不存在（cloud 上报不可用）"
+    fi
+    if [ -d "$MGATE_AGENT_CONFIG_DIR" ]; then
+        _dp="$(stat -c '%a' "$MGATE_AGENT_CONFIG_DIR" 2>/dev/null || printf 'unknown')"
+        case "$_dp" in
+            700|750|755) agent_dr_ok "配置目录权限：$_dp" ;;
+            *) agent_dr_warn "配置目录权限：$_dp（建议 750）" ;;
+        esac
+    else
+        agent_dr_fail "配置目录不存在：$MGATE_AGENT_CONFIG_DIR"
+    fi
+    [ -d "$MGATE_AGENT_DATA_DIR" ] && agent_dr_ok "数据目录存在" || \
+        agent_dr_warn "数据目录不存在：$MGATE_AGENT_DATA_DIR"
+    [ -d "$MGATE_AGENT_LOG_DIR" ] && agent_dr_ok "日志目录存在" || \
+        agent_dr_warn "日志目录不存在：$MGATE_AGENT_LOG_DIR"
+    have mgate && agent_dr_ok "mgate 命令可用" || agent_dr_warn "mgate 命令不可用"
+    _snap="$(mgate agent-snapshot 2>/dev/null | head -1 || true)"
+    printf '%s' "${_snap:-}" | grep -q '^{' && \
+        agent_dr_ok "mgate agent-snapshot 输出合法 JSON" || \
+        agent_dr_warn "mgate agent-snapshot 输出异常"
+    _cap="$(mgate capabilities-json 2>/dev/null | head -1 || true)"
+    printf '%s' "${_cap:-}" | grep -q '^{' && \
+        agent_dr_ok "mgate capabilities-json 输出合法 JSON" || \
+        agent_dr_warn "mgate capabilities-json 输出异常"
+    if [ -f "$MGATE_AGENT_TOKEN_FILE_DEFAULT" ]; then
+        _tp="$(stat -c '%a' "$MGATE_AGENT_TOKEN_FILE_DEFAULT" 2>/dev/null || printf 'unknown')"
+        case "$_tp" in
+            600|400) agent_dr_ok "token 文件权限：$_tp" ;;
+            *) agent_dr_warn "token 文件权限：$_tp（建议 600）" ;;
+        esac
+    fi
+    if have journalctl && have systemctl && systemctl is-active mgate-agent >/dev/null 2>&1; then
+        _errs="$(journalctl -u mgate-agent --since '1 hour ago' --no-pager -q 2>/dev/null | \
+            grep -ciE 'error|failed|panic|fatal' || printf '0')"
+        [ "$_errs" = "0" ] && agent_dr_ok "近 1h journal 无严重错误" || \
+            agent_dr_warn "近 1h journal 有 $_errs 条错误日志"
+    fi
+    say ""
+    say "诊断汇总：OK=$AGENT_DR_OK WARN=$AGENT_DR_WARN ERROR=$AGENT_DR_FAIL"
+    [ "$AGENT_DR_FAIL" -gt 0 ] && return 1 || return 0
+}
+
+cmd_agent_uninstall() {
+    _aun_yes=0; _aun_purge=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --yes|-y) _aun_yes=1; shift ;;
+            --purge)  _aun_purge=1; shift ;;
+            *) err "未知参数：$1"; return 1 ;;
+        esac
+    done
+    need_root
+    if [ "$_aun_purge" = "1" ] && [ "$_aun_yes" = "0" ]; then
+        warn "--purge 将删除以下目录（含配置、credentials、日志）："
+        warn "  $MGATE_AGENT_CONFIG_DIR  $MGATE_AGENT_DATA_DIR  $MGATE_AGENT_LOG_DIR"
+        tui_confirm "确认完整删除（purge）mgate-agent 及所有数据？" || return 1
+    elif [ "$_aun_purge" = "0" ] && [ "$_aun_yes" = "0" ]; then
+        warn "卸载将停止 cloud 上报；配置、credentials、日志将保留"
+        tui_confirm "确认卸载 mgate-agent？" || return 1
+    fi
+    step "停止并禁用服务"
+    systemctl stop mgate-agent 2>/dev/null || true
+    systemctl disable mgate-agent 2>/dev/null || true
+    rm -f "$MGATE_AGENT_SERVICE_FILE"
+    rm -f "$MGATE_AGENT_BIN"
+    systemctl daemon-reload 2>/dev/null || true
+    if [ "$_aun_purge" = "1" ]; then
+        step "清除数据目录（purge）"
+        rm -rf "$MGATE_AGENT_CONFIG_DIR" "$MGATE_AGENT_DATA_DIR" "$MGATE_AGENT_LOG_DIR"
+        ok "已完整清除"
+    else
+        info "已保留：$MGATE_AGENT_CONFIG_DIR / $MGATE_AGENT_DATA_DIR / $MGATE_AGENT_LOG_DIR"
+    fi
+    ok "mgate-agent 已卸载"
+}
+
+cmd_agent() {
+    _subcmd="${1:-status}"
+    [ $# -gt 0 ] && shift || true
+    case "$_subcmd" in
+        install)   cmd_agent_install "$@" ;;
+        update)    cmd_agent_update "$@" ;;
+        start)     cmd_agent_start "$@" ;;
+        stop)      cmd_agent_stop "$@" ;;
+        restart)   cmd_agent_restart "$@" ;;
+        status)    cmd_agent_status "$@" ;;
+        doctor)    cmd_agent_doctor "$@" ;;
+        uninstall) cmd_agent_uninstall "$@" ;;
+        *)
+            err "未知的 agent 子命令：$_subcmd"
+            hint "可用：install / update / start / stop / restart / status / doctor / uninstall"
+            return 1 ;;
+    esac
 }
 
 backup_copy_dir() {
@@ -8311,6 +8830,14 @@ NAT 网关：
   mgate wifi-doctor         诊断上级 WiFi 连接
   mgate wifi-json           输出 WiFi 状态 JSON
 
+mgate-agent 管理：
+  mgate agent install [--version v0.x.x] [--token-file FILE] [--yes] [--force]
+  mgate agent update  [--version v0.x.x] [--token-file FILE] [--yes] [--force]
+  mgate agent start / stop [--yes] / restart
+  mgate agent status        显示 mgate-agent 安装和运行状态
+  mgate agent doctor        诊断 mgate-agent 环境
+  mgate agent uninstall [--purge] [--yes]
+
 Agent 接口（只读，JSON，schema_version=1）：
   mgate agent-snapshot      agent 专用完整只读快照（推荐高频采集入口）
   mgate capabilities-json   能力声明，告知 agent 支持哪些命令和特性
@@ -8966,6 +9493,7 @@ main() {
         wifi-reconnect) cmd_wifi_reconnect "$@" ;;
         wifi-doctor) cmd_wifi_doctor "$@" ;;
         wifi-json) cmd_wifi_json "$@" ;;
+        agent) cmd_agent "$@" ;;
         agent-snapshot) cmd_agent_snapshot "$@" ;;
         capabilities-json) cmd_capabilities_json "$@" ;;
         _wifi-watchdog) cmd_wifi_watchdog_run "$@" ;;

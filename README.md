@@ -229,34 +229,81 @@ mgate capabilities-json    # 能力声明
 
 只读接口，不修改 iptables / ip rule / config.yaml。所有 JSON 接口均包含 `schema_version: 1`，字段名保持稳定。
 
-### 🤖 mgate-agent 对接
+### 🤖 mgate-agent 管理
 
-**推荐采集入口**（高频，目标 < 1s）：
+mgate.sh 是设备本机总控入口，mgate-agent 是被 mgate 安装和管理的组件，不反向安装 mgate.sh。
 
-```sh
-mgate agent-snapshot
-```
-
-一次性输出完整只读快照：WiFi / AP / Gateway / TProxy / Web / 订阅 / Mihomo 状态，无 ping、无 sleep、无服务变更。
-
-**能力声明**（低频，agent 启动时查询）：
+**安装**
 
 ```sh
-mgate capabilities-json
+mgate agent install                              # 自动获取最新版本
+mgate agent install --version v0.1.0-rc2        # 指定版本
+mgate agent install --token-file /etc/mgate-agent/install-token  # private repo
+mgate agent install --force                      # 强制重装
 ```
 
-告知 agent 当前版本支持哪些特性、哪些命令是只读安全的、哪些是危险操作。
-
-**诊断采样**（低频，人工触发或问题排查）：
+**private repo token**
 
 ```sh
-mgate wifi-doctor
-mgate gateway-doctor
-mgate tproxy-health
-mgate tproxy-doctor
+# 创建 token 文件（不要粘贴进命令行）
+echo "ghp_your_token_here" > /etc/mgate-agent/install-token
+chmod 600 /etc/mgate-agent/install-token
+
+mgate agent install --token-file /etc/mgate-agent/install-token
 ```
 
-> ⚠️ **agent 边界**：agent 不应直接调用危险或交互式命令（`wifi-connect`、`tproxy-start`、`self-update`、`tui` 等）。未来如需远程控制，须单独设计带白名单、参数校验、超时、锁和审计的 action API，本版本不包含此能力。
+**更新**
+
+```sh
+mgate agent update
+mgate agent update --version v0.1.0-rc2
+```
+
+update 保留现有 `agent.yaml`、`credentials.json`、日志目录。
+
+**服务管理**
+
+```sh
+mgate agent start
+mgate agent stop
+mgate agent restart
+mgate agent status
+```
+
+**排障**
+
+```sh
+mgate agent doctor
+```
+
+**卸载**
+
+```sh
+mgate agent uninstall           # 卸载 binary 和 service，保留配置和日志
+mgate agent uninstall --purge   # 完整删除，含配置、credentials、日志
+```
+
+**关键路径**
+
+```text
+binary:       /usr/local/bin/mgate-agent
+service:      /etc/systemd/system/mgate-agent.service
+配置:         /etc/mgate-agent/agent.yaml
+credentials:  /var/lib/mgate-agent/credentials.json
+日志:         /var/log/mgate-agent
+token 文件:   /etc/mgate-agent/install-token（chmod 600）
+```
+
+**采集接口**
+
+推荐 agent 高频采集（目标 < 1s，无 ping/sleep/服务变更）：
+
+```sh
+mgate agent-snapshot      # 完整只读快照
+mgate capabilities-json   # 能力声明
+```
+
+> ⚠️ **agent 边界**：agent 不应直接调用危险或交互式命令（`wifi-connect`、`tproxy-start`、`self-update`、`tui` 等）。当前不开发远程控制能力，未来如需远程控制须单独设计带白名单、参数校验、超时、锁和审计的 action API。
 
 ### 💾 备份与恢复
 
