@@ -2006,41 +2006,44 @@ EOF
 </div>
 <div class="card">
 <h2>TProxy 透明代理端口</h2>
-<p class="muted">TProxy 端口由 mihomo 启动后自动监听，AP 客户端流量由 iptables 规则自动重定向，无需客户端手动配置代理。</p>
+<p class="muted">端口由 mihomo 启动后自动监听（无需额外操作）。执行 <span class="code">mgate tproxy-start</span> 后，iptables 将 AP 客户端的 <strong>TCP 和 UDP</strong> 流量自动重定向至此端口，客户端无需手动配置代理。</p>
 <table class="table"><tbody>
 <tr><td>端口</td><td><span class="code">$tproxy_port</span></td></tr>
-<tr><td>协议</td><td>TCP / UDP 透明代理</td></tr>
+<tr><td>协议覆盖</td><td>TCP + UDP（含游戏、视频通话等 UDP 流量）</td></tr>
 <tr><td>监听地址</td><td><span class="code">0.0.0.0:$tproxy_port</span></td></tr>
-<tr><td>启用方式</td><td>mgate start 后自动监听；mgate tproxy-start 后流量才实际转入</td></tr>
+<tr><td>状态</td><td>mgate start → 端口自动监听；mgate tproxy-start → iptables 重定向生效</td></tr>
 </tbody></table>
 </div>
 <div class="card">
 <h2>透明代理节点切换</h2>
-<p class="muted">TProxy 流量由 <span class="code">TPROXY-OUT</span> 代理组统一处理。</p>
+<p class="muted">TProxy 流量统一走 <span class="code">TPROXY-OUT</span> 代理组，当前类型：<span class="code">$out_type</span>。</p>
 <table class="table"><tbody>
 <tr><td>TPROXY-OUT 类型</td><td><span class="code">$out_type</span></td></tr>
 EOF
     case "$out_type" in
-        url-test)
-            cat <<'EOF'
-<tr><td>节点选择</td><td>自动测速，选最快节点</td></tr>
-</tbody></table>
-<p class="muted">订阅模式下 TPROXY-OUT 自动测速并选择最快节点，无需手动切换。如需固定到某个节点，请执行 <span class="code">mgate edit</span>，将 TPROXY-OUT 类型改为 <span class="code">select</span> 并指定目标代理，然后执行 <span class="code">mgate restart</span>。</p>
-EOF
-            ;;
         select)
             cat <<'EOF'
-<tr><td>节点选择</td><td>手动指定</td></tr>
+<tr><td>节点选择</td><td>手动指定（切换即时生效，无需重启）</td></tr>
 </tbody></table>
-<p class="muted">手动模式下请执行 <span class="code">mgate edit</span>，在 TPROXY-OUT 的 proxies 列表中调整顺序或选择目标代理，然后执行 <span class="code">mgate restart</span> 生效。</p>
+<p class="muted">切换节点命令（即时生效，不重启 mihomo）：</p>
+<pre>mgate tproxy-nodes          # 查看可用节点列表（含当前选中）
+mgate tproxy-select &lt;节点名&gt;  # 切换节点</pre>
+<p class="muted">也可进入 TUI 菜单 → TProxy 透明代理 → 切换代理节点，按编号选择。</p>
+EOF
+            ;;
+        url-test)
+            cat <<'EOF'
+<tr><td>节点选择</td><td>自动测速</td></tr>
+</tbody></table>
+<p class="muted">TPROXY-OUT 当前为 url-test 自动测速模式（非默认配置）。如需手动指定节点，请执行 <span class="code">mgate sub-update</span> 重新生成配置（默认已改为 select 类型），然后使用 <span class="code">mgate tproxy-select</span> 切换。</p>
 EOF
             ;;
         *)
             cat <<'EOF'
 <tr><td>节点选择</td><td>-</td></tr>
 </tbody></table>
-<p class="muted">当前 config.yaml 中没有 TPROXY-OUT 代理组，这通常是因为配置文件是在本次更新前生成的。</p>
-<p class="muted">修复方法：如果使用订阅，请执行 <span class="code">mgate sub-update</span> 重新生成配置；如果使用手动配置，请执行 <span class="code">FORCE=1 mgate install</span> 重建配置文件。之后再执行 <span class="code">mgate web-refresh &amp;&amp; mgate web-restart</span> 刷新页面。</p>
+<p class="muted">未检测到 TPROXY-OUT 代理组，配置可能是在旧版本生成的。</p>
+<p class="muted">修复：执行 <span class="code">mgate migrate</span> 自动补全缺失配置，或执行 <span class="code">mgate sub-update</span>（订阅模式）重新生成，然后执行 <span class="code">mgate web-refresh &amp;&amp; mgate web-restart</span>。</p>
 EOF
             ;;
     esac
