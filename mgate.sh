@@ -6976,8 +6976,20 @@ agent_download_fail_hint() {
 }
 
 agent_get_latest_version() {
-    _api="https://api.github.com/repos/$MGATE_AGENT_REPO/releases/latest"
-    _r="$(agent_curl_auth -sf "$_api" 2>/dev/null || true)"
+    _api_base="https://api.github.com/repos/$MGATE_AGENT_REPO/releases/latest"
+    if [ -n "${MGATE_AGENT_ACTIVE_TOKEN:-}" ]; then
+        # private repo: go direct with token (proxy can't auth private repos)
+        _r="$(agent_curl_auth -sf "$_api_base" 2>/dev/null || true)"
+    else
+        # public repo: try direct then proxy (same pattern as get_latest_mihomo_version)
+        _api_proxy="$(with_github_proxy "$_api_base")"
+        _r=""
+        for _u in "$_api_base" "$_api_proxy"; do
+            [ -n "$_u" ] || continue
+            _r="$(fetch_to_stdout "$_u" 2>/dev/null || true)"
+            [ -n "$_r" ] && break
+        done
+    fi
     [ -n "$_r" ] || return 1
     _tag="$(printf '%s' "$_r" | \
         sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
@@ -7053,15 +7065,29 @@ agent_install_config() {
 agent_download_and_verify() {
     _ver="$1"; _arch="$2"; _wdir="$3"
     _asset="mgate-agent-${_ver}-linux-${_arch}.tar.gz"
-    _base="https://github.com/$MGATE_AGENT_REPO/releases/download/$_ver"
+    _base_direct="https://github.com/$MGATE_AGENT_REPO/releases/download/$_ver"
+
+    # public repo: use proxy; private (token set): go direct
+    if [ -n "${MGATE_AGENT_ACTIVE_TOKEN:-}" ]; then
+        _base="$_base_direct"
+    else
+        _base="$(with_github_proxy "$_base_direct")"
+    fi
+    info "下载地址：$_base"
 
     step "下载 checksums.txt"
-    agent_curl_auth -fL -o "$_wdir/checksums.txt" "$_base/checksums.txt" 2>&1 || {
-        err "下载 checksums.txt 失败"; agent_download_fail_hint; return 1; }
+    if [ -n "${MGATE_AGENT_ACTIVE_TOKEN:-}" ]; then
+        agent_curl_auth -fL -o "$_wdir/checksums.txt" "$_base/checksums.txt" 2>&1
+    else
+        download_file "$_base/checksums.txt" "$_wdir/checksums.txt" 2>&1
+    fi || { err "下载 checksums.txt 失败"; agent_download_fail_hint; return 1; }
 
     step "下载 $_asset"
-    agent_curl_auth -fL -o "$_wdir/$_asset" "$_base/$_asset" 2>&1 || {
-        err "下载 $_asset 失败"; agent_download_fail_hint; return 1; }
+    if [ -n "${MGATE_AGENT_ACTIVE_TOKEN:-}" ]; then
+        agent_curl_auth -fL -o "$_wdir/$_asset" "$_base/$_asset" 2>&1
+    else
+        download_file "$_base/$_asset" "$_wdir/$_asset" 2>&1
+    fi || { err "下载 $_asset 失败"; agent_download_fail_hint; return 1; }
 
     step "校验 SHA256"
     if ! grep -q "$_asset" "$_wdir/checksums.txt"; then
