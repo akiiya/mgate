@@ -7110,7 +7110,8 @@ agent_download_and_verify() {
     _bin="$(find "$_wdir" -name "mgate-agent" -type f 2>/dev/null | head -1)"
     [ -n "$_bin" ] && [ -f "$_bin" ] || { err "解压后未找到 mgate-agent 二进制"; return 1; }
     chmod +x "$_bin" 2>/dev/null || true
-    printf '%s\n' "$_bin"
+    # 结果通过全局变量传回，不写 stdout（避免 $() 捕获导致混入日志文本）
+    AGENT_DOWNLOAD_BIN_PATH="$_bin"
 }
 
 cmd_agent_install() {
@@ -7146,11 +7147,12 @@ cmd_agent_install() {
     _ai_tmp="$TMP_DIR/mgate-agent-install.$$"
     mkdir -p "$_ai_tmp" || { err "无法创建临时目录"; return 1; }
     step "开始安装 mgate-agent $_ai_ver（$_ai_arch）"
-    _ai_bin="$(agent_download_and_verify "$_ai_ver" "$_ai_arch" "$_ai_tmp")" || {
+    AGENT_DOWNLOAD_BIN_PATH=""
+    agent_download_and_verify "$_ai_ver" "$_ai_arch" "$_ai_tmp" || {
         rm -rf "$_ai_tmp" 2>/dev/null; return 1; }
     agent_create_dirs
     step "安装 binary"
-    cp "$_ai_bin" "$MGATE_AGENT_BIN" || { err "安装 binary 失败"; rm -rf "$_ai_tmp"; return 1; }
+    cp "$AGENT_DOWNLOAD_BIN_PATH" "$MGATE_AGENT_BIN" || { err "安装 binary 失败"; rm -rf "$_ai_tmp"; return 1; }
     chmod 755 "$MGATE_AGENT_BIN"
     ok "已安装：$MGATE_AGENT_BIN"
     agent_install_config "$_ai_tmp" "$_ai_force"
@@ -7193,7 +7195,8 @@ cmd_agent_update() {
     _au_tmp="$TMP_DIR/mgate-agent-update.$$"
     mkdir -p "$_au_tmp" || { err "无法创建临时目录"; return 1; }
     step "开始更新 mgate-agent $_au_ver（$_au_arch）"
-    _au_bin="$(agent_download_and_verify "$_au_ver" "$_au_arch" "$_au_tmp")" || {
+    AGENT_DOWNLOAD_BIN_PATH=""
+    agent_download_and_verify "$_au_ver" "$_au_arch" "$_au_tmp" || {
         rm -rf "$_au_tmp" 2>/dev/null; return 1; }
     _au_was_running=0
     have systemctl && systemctl is-active mgate-agent >/dev/null 2>&1 && {
@@ -7201,7 +7204,7 @@ cmd_agent_update() {
         step "临时停止服务..."
         systemctl stop mgate-agent 2>/dev/null || true; }
     step "替换 binary"
-    cp "$_au_bin" "$MGATE_AGENT_BIN" || {
+    cp "$AGENT_DOWNLOAD_BIN_PATH" "$MGATE_AGENT_BIN" || {
         err "替换 binary 失败"
         rm -rf "$_au_tmp"
         [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
