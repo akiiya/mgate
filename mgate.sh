@@ -6841,6 +6841,12 @@ cmd_agent_snapshot() {
     [ "$_ag_installed" = "true" ] && \
         _ag_ver="$("$MGATE_AGENT_BIN" version 2>/dev/null || \
                    "$MGATE_AGENT_BIN" --version 2>/dev/null || printf 'unknown')"
+    _ag_enrolled="false"; _ag_device_id=""
+    if [ -f "$MGATE_AGENT_CREDS_FILE" ]; then
+        _ag_did="$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$MGATE_AGENT_CREDS_FILE" 2>/dev/null | head -1)"
+        [ -n "$_ag_did" ] && { _ag_enrolled="true"; _ag_device_id="$_ag_did"; }
+    fi
 
     printf '  "last_errors": {\n'
     printf '    "tproxy": %s,\n' "$_err_tproxy"
@@ -6852,7 +6858,9 @@ cmd_agent_snapshot() {
     printf '    "service_exists": %s,\n' "$_ag_svc"
     printf '    "running": %s,\n' "$_ag_running"
     printf '    "enabled": %s,\n' "$_ag_enabled"
-    printf '    "version": "%s"\n' "${_ag_ver:-unknown}"
+    printf '    "version": "%s",\n' "${_ag_ver:-unknown}"
+    printf '    "enrolled": %s,\n' "$_ag_enrolled"
+    printf '    "device_id": "%s"\n' "${_ag_device_id:-}"
     printf '  },\n'
     printf '  "warnings": []\n'
     printf '}\n'
@@ -7339,8 +7347,16 @@ cmd_agent_doctor() {
             unknown) agent_dr_warn "credentials.json 权限：无法读取" ;;
             *) agent_dr_warn "credentials.json 权限：$_cp（建议 600）" ;;
         esac
+        _did="$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$MGATE_AGENT_CREDS_FILE" 2>/dev/null | head -1)"
+        _cgw="$(sed -n 's/.*"gateway"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$MGATE_AGENT_CREDS_FILE" 2>/dev/null | head -1)"
+        [ -n "$_did" ] && agent_dr_ok "cloud 已绑定 device_id：$_did" || \
+            agent_dr_warn "device_id 为空（执行 mgate agent enroll 重新绑定）"
+        [ -n "$_cgw" ] && agent_dr_ok "cloud gateway：$_cgw" || \
+            agent_dr_warn "gateway 为空"
     else
-        agent_dr_warn "credentials.json 不存在（cloud 上报不可用）"
+        agent_dr_warn "credentials.json 不存在（执行 mgate agent enroll 绑定到 cloud）"
     fi
     if [ -d "$MGATE_AGENT_CONFIG_DIR" ]; then
         _dp="$(stat -c '%a' "$MGATE_AGENT_CONFIG_DIR" 2>/dev/null || printf 'unknown')"
@@ -7416,21 +7432,152 @@ cmd_agent_uninstall() {
     ok "mgate-agent 已卸载"
 }
 
+cmd_agent_enroll() {
+    _dc="${1:-}"
+    [ -n "$_dc" ] || die "用法：mgate agent enroll <device_code>"
+    need_root
+
+    # 校验格式
+    case "$_dc" in
+        mgate1.*.*) : ;;
+        *) err "设备码格式无效（应为 mgate1.<payload>.<signature>）"; return 1 ;;
+    esac
+
+    # 从 payload 解码 gateway URL（base64url → base64 → json）
+    _pl_b64="$(printf '%s' "$_dc" | cut -d. -f2)"
+    _pl_std="$(printf '%s' "$_pl_b64" | tr '-_' '+/')"
+    # 补 base64 padding
+    case "$(( ${#_pl_std} % 4 ))" in
+        2) _pl_std="${_pl_std}==" ;;
+        3) _pl_std="${_pl_std}=" ;;
+    esac
+    _pl_json="$(printf '%s' "$_pl_std" | base64 -d 2>/dev/null)"
+    [ -n "$_pl_json" ] || { err "设备码 payload 解码失败，格式可能有误"; return 1; }
+    _gateway="$(printf '%s' "$_pl_json" | \
+        sed -n 's/.*"gateway"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    [ -n "$_gateway" ] || { err "设备码中未找到 gateway 字段"; return 1; }
+    info "Cloud 地址：$_gateway"
+
+    # 如果已有 credentials，需要确认覆盖
+    if [ -f "$MGATE_AGENT_CREDS_FILE" ]; then
+        warn "credentials.json 已存在，重新 enroll 将覆盖"
+        tui_confirm "确认重新绑定设备？" || return 1
+    fi
+
+    # 收集 device_info
+    _host="$(hostname 2>/dev/null || printf 'unknown')"
+    _aver="$(agent_get_installed_version 2>/dev/null || printf 'unknown')"
+
+    # 构建 JSON 请求体（所有字段均为简单字符串，无需 jq）
+    _body="{\"device_code\":\"${_dc}\",\"agent_version\":\"${_aver}\",\"device_info\":{\"hostname\":\"${_host}\",\"model\":\"ufi\",\"mgate_version\":\"${MGATE_VERSION}\",\"firmware_info\":\"debian\"}}"
+
+    step "向 cloud 注册设备（$_gateway）"
+    _resp="$(curl -sf --connect-timeout 20 --max-time 30 \
+        -X POST "${_gateway}/api/agent/enroll" \
+        -H 'Content-Type: application/json' \
+        -d "$_body" 2>&1)"
+    _enroll_rc=$?
+
+    if [ "$_enroll_rc" -ne 0 ] || [ -z "$_resp" ]; then
+        err "enroll 请求失败（网络超时或 HTTP 错误）"
+        hint "请确认 cloud 地址可达：$_gateway"
+        hint "设备码是否已过期？请在 cloud 控制台重新生成"
+        return 1
+    fi
+
+    # 检查响应 ok 字段
+    if ! printf '%s' "$_resp" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+        _ecode="$(printf '%s' "$_resp" | \
+            sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+        _emsg="$(printf '%s' "$_resp" | \
+            sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+        err "enroll 失败：${_ecode:-unknown_error} - ${_emsg:-服务端拒绝}"
+        return 1
+    fi
+
+    # 解析 credentials（device_token 不打印、不记日志）
+    _device_id="$(printf '%s' "$_resp" | \
+        sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    _device_token="$(printf '%s' "$_resp" | \
+        sed -n 's/.*"device_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    _gw_resp="$(printf '%s' "$_resp" | \
+        sed -n 's/.*"gateway"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    _ws_url="$(printf '%s' "$_resp" | \
+        sed -n 's/.*"ws_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    _pull_url="$(printf '%s' "$_resp" | \
+        sed -n 's/.*"pull_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+
+    [ -n "$_device_id" ]    || { err "响应缺少 device_id"; return 1; }
+    [ -n "$_device_token" ] || { err "响应缺少 device_token"; return 1; }
+
+    # 写入 credentials.json（通过临时文件确保权限在写入前就收紧）
+    mkdir -p "$MGATE_AGENT_DATA_DIR" 2>/dev/null || true
+    _ctmp="$MGATE_AGENT_DATA_DIR/.credentials.json.tmp.$$"
+    cat > "$_ctmp" <<CREDS_EOF
+{
+  "device_id": "${_device_id}",
+  "device_token": "${_device_token}",
+  "gateway": "${_gw_resp:-$_gateway}",
+  "ws_url": "${_ws_url:-}",
+  "pull_url": "${_pull_url:-}"
+}
+CREDS_EOF
+    chmod 600 "$_ctmp"
+    mv "$_ctmp" "$MGATE_AGENT_CREDS_FILE"
+
+    # 清空敏感变量
+    _device_token=""
+    _resp=""
+
+    ok "设备绑定成功"
+    info "device_id：$_device_id"
+    info "gateway：${_gw_resp:-$_gateway}"
+    info "credentials 已写入：$MGATE_AGENT_CREDS_FILE（token 不显示）"
+    hint "下一步：mgate agent start"
+}
+
+cmd_agent_enroll_status() {
+    step "cloud 绑定状态"
+    if [ -f "$MGATE_AGENT_CREDS_FILE" ]; then
+        ok "已绑定：$MGATE_AGENT_CREDS_FILE"
+        _perm="$(stat -c '%a' "$MGATE_AGENT_CREDS_FILE" 2>/dev/null || printf 'unknown')"
+        case "$_perm" in
+            600|400) info "文件权限：$_perm（OK）" ;;
+            *) warn "文件权限：$_perm（建议 600）" ;;
+        esac
+        _did="$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$MGATE_AGENT_CREDS_FILE" 2>/dev/null | head -1)"
+        _gw="$(sed -n 's/.*"gateway"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$MGATE_AGENT_CREDS_FILE" 2>/dev/null | head -1)"
+        _ws="$(sed -n 's/.*"ws_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$MGATE_AGENT_CREDS_FILE" 2>/dev/null | head -1)"
+        [ -n "$_did" ] && info "device_id：$_did"   || warn "device_id 未找到"
+        [ -n "$_gw"  ] && info "gateway：$_gw"      || warn "gateway 未找到"
+        [ -n "$_ws"  ] && info "ws_url：$_ws"
+        info "device_token：（已保存，不显示）"
+    else
+        warn "尚未绑定，credentials.json 不存在"
+        hint "执行 mgate agent enroll <device_code> 完成绑定"
+    fi
+}
+
 cmd_agent() {
     _subcmd="${1:-status}"
     [ $# -gt 0 ] && shift || true
     case "$_subcmd" in
-        install)   cmd_agent_install "$@" ;;
-        update)    cmd_agent_update "$@" ;;
-        start)     cmd_agent_start "$@" ;;
-        stop)      cmd_agent_stop "$@" ;;
-        restart)   cmd_agent_restart "$@" ;;
-        status)    cmd_agent_status "$@" ;;
-        doctor)    cmd_agent_doctor "$@" ;;
-        uninstall) cmd_agent_uninstall "$@" ;;
+        install)        cmd_agent_install "$@" ;;
+        update)         cmd_agent_update "$@" ;;
+        start)          cmd_agent_start "$@" ;;
+        stop)           cmd_agent_stop "$@" ;;
+        restart)        cmd_agent_restart "$@" ;;
+        status)         cmd_agent_status "$@" ;;
+        doctor)         cmd_agent_doctor "$@" ;;
+        uninstall)      cmd_agent_uninstall "$@" ;;
+        enroll)         cmd_agent_enroll "$@" ;;
+        enroll-status)  cmd_agent_enroll_status "$@" ;;
         *)
             err "未知的 agent 子命令：$_subcmd"
-            hint "可用：install / update / start / stop / restart / status / doctor / uninstall"
+            hint "可用：install / update / start / stop / restart / status / doctor / uninstall / enroll / enroll-status"
             return 1 ;;
     esac
 }
@@ -8877,6 +9024,8 @@ mgate-agent 管理：
   mgate agent status        显示 mgate-agent 安装和运行状态
   mgate agent doctor        诊断 mgate-agent 环境
   mgate agent uninstall [--purge] [--yes]
+  mgate agent enroll <device_code>    绑定设备到 mgate-cloud
+  mgate agent enroll-status           查看当前绑定状态
 
 Agent 接口（只读，JSON，schema_version=1）：
   mgate agent-snapshot      agent 专用完整只读快照（推荐高频采集入口）
