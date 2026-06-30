@@ -6976,18 +6976,26 @@ agent_download_fail_hint() {
 }
 
 agent_get_latest_version() {
-    _api_base="https://api.github.com/repos/$MGATE_AGENT_REPO/releases/latest"
+    # /releases/latest 只返回 stable release，pre-release/RC 版本需用 /releases（列表取第一）
+    _api_list="https://api.github.com/repos/$MGATE_AGENT_REPO/releases"
+    _api_latest="${_api_list}/latest"
     if [ -n "${MGATE_AGENT_ACTIVE_TOKEN:-}" ]; then
-        # private repo: go direct with token (proxy can't auth private repos)
-        _r="$(agent_curl_auth -sf "$_api_base" 2>/dev/null || true)"
+        # private repo: go direct with token
+        _r="$(agent_curl_auth -sf "$_api_latest" 2>/dev/null || true)"
+        [ -z "$_r" ] || ! printf '%s' "$_r" | grep -q '"tag_name"' && \
+            _r="$(agent_curl_auth -sf "$_api_list" 2>/dev/null || true)"
     else
-        # public repo: try direct then proxy (same pattern as get_latest_mihomo_version)
-        _api_proxy="$(with_github_proxy "$_api_base")"
+        # public repo: try /releases/latest then /releases（兼容 pre-release only）
+        # each with direct then proxy fallback
         _r=""
-        for _u in "$_api_base" "$_api_proxy"; do
-            [ -n "$_u" ] || continue
-            _r="$(fetch_to_stdout "$_u" 2>/dev/null || true)"
-            [ -n "$_r" ] && break
+        for _api in "$_api_latest" "$_api_list"; do
+            _proxy="$(with_github_proxy "$_api")"
+            for _u in "$_api" "$_proxy"; do
+                [ -n "$_u" ] || continue
+                _r="$(fetch_to_stdout "$_u" 2>/dev/null || true)"
+                printf '%s' "${_r:-}" | grep -q '"tag_name"' && break 2
+                _r=""
+            done
         done
     fi
     [ -n "$_r" ] || return 1
