@@ -1485,24 +1485,22 @@ page_start() {
 <span class="sb-name">mgate</span>
 </div>
 <nav class="sb-nav">
-<div class="sb-sec">概览</div>
-<a class="nav-link" data-act="status" href="?action=status">&#x1F4CA; Dashboard</a>
-<div class="sb-sec">代理</div>
+<div class="sb-sec">主页</div>
+<a class="nav-link" data-act="status" href="?action=status">&#x1F3E0; 总览</a>
+<div class="sb-sec">上网</div>
+<a class="nav-link" data-act="wifi-page" href="?action=wifi-page">&#x1F4F6; WiFi 上游</a>
+<a class="nav-link" data-act="subscription" href="?action=subscription">&#x1F504; 代理订阅</a>
 <a class="nav-link" data-act="proxy-info" href="?action=proxy-info">&#x1F517; 连接信息</a>
-<a class="nav-link" data-act="subscription" href="?action=subscription">&#x1F4E6; 订阅管理</a>
-<a class="nav-link" data-act="sub-status" href="?action=sub-status">&#x1F4CB; 订阅状态</a>
-<a class="nav-link" data-act="account-password" href="?action=account-password">&#x1F511; 账号密码</a>
-<div class="sb-sec">网络</div>
+<div class="sb-sec">热点</div>
+<a class="nav-link" data-act="hotspot-page" href="?action=hotspot-page">&#x1F4E1; 热点设置</a>
+<a class="nav-link" data-act="devices-page" href="?action=devices-page">&#x1F4F1; 已连接设备</a>
+<div class="sb-sec">高级</div>
 <a class="nav-link" data-act="gateway-status" href="?action=gateway-status">&#x1F309; 网关 / NAT</a>
-<a class="nav-link" data-act="tproxy-health" href="?action=tproxy-health">&#x1F9E9; TProxy</a>
-<a class="nav-link" data-act="wifi-page" href="?action=wifi-page">&#x1F4F6; WiFi</a>
+<a class="nav-link" data-act="tproxy-health" href="?action=tproxy-health">&#x1F6E1;&#xFE0F; 透明代理</a>
 <div class="sb-sec">系统</div>
 <a class="nav-link" data-act="doctor" href="?action=doctor">&#x1F50D; 诊断</a>
 <a class="nav-link" data-act="logs" href="?action=logs&amp;lines=100">&#x1F4C4; 日志</a>
-<a class="nav-link" data-act="config" href="?action=config">&#x2699;&#xFE0F; 配置</a>
 <a class="nav-link" data-act="backups" href="?action=backups">&#x1F4BE; 备份</a>
-<a class="nav-link" data-act="version" href="?action=version">&#x2139;&#xFE0F; 版本</a>
-<div class="sb-sec">管理</div>
 <a class="nav-link" data-act="token" href="?action=token">&#x1F512; 密码</a>
 <a class="nav-link nl-danger" href="?action=logout">&#x1F6AA; 退出</a>
 </nav>
@@ -2053,37 +2051,44 @@ status_page() {
         healthy) health_cls="good" ;; degraded|broken) health_cls="danger" ;; *) health_cls="warn" ;;
     esac
 
+    # AP info
+    ap_load_config 2>/dev/null || true
+    _ap_ssid="${AP_SSID:-mgate}"
+
+    # Internet status (can we reach upstream)
+    _inet_cls="warn"; _inet_val="检测中"
+    case "$WEB_NAT_FALLBACK" in
+        active) _inet_cls="good"; _inet_val="已连接" ;;
+        inactive) _inet_cls="warn"; _inet_val="未连接" ;;
+    esac
+    [ "$_ap_cls" = "good" ] || _inet_cls="warn"
+
+    # Proxy status
+    _proxy_val="未启动"; _proxy_cls="warn"
+    case "$_svc_running" in yes) _proxy_val="运行中"; _proxy_cls="good" ;; esac
+
     cat <<EOF
 <div class="stat-grid">
-$(_sc "Mihomo" "$_svc_running" "$svc_cls" "混合端口 $DEFAULT_MIXED_PORT")
-$(_sc "AP 热点" "$_ap_disp" "$ap_cls" "$_ap_sub")
-$(_sc "网关 / NAT" "$WEB_NAT_FALLBACK" "$(web_class_for_state "$WEB_NAT_FALLBACK")" "${WEB_GATEWAY_MODE:-nat}")
-$(_sc "TProxy" "$WEB_TPROXY_ENABLED" "$(case "$WEB_TPROXY_ENABLED" in disabled|unknown) printf 'neutral';; *) web_class_for_state "$WEB_TPROXY_ENABLED";; esac)" "端口 $TPROXY_PORT")
-$(_sc "整体健康" "$WEB_FINAL_HEALTH" "$health_cls" "")
+$(_sc "上网状态" "$_inet_val" "$_inet_cls" "$([ "$_ap_cls" = "good" ] && printf '%s 台设备已连接' "$(arp -n 2>/dev/null | grep -c '10\.88\.0\.' || echo 0)" || printf '热点未启动')")
+$(_sc "热点" "$([ "$_ap_cls" = "good" ] && printf '已开启' || printf '已关闭')" "$_ap_cls" "$_ap_ssid")
+$(_sc "代理" "$_proxy_val" "$_proxy_cls" "混合端口 $DEFAULT_MIXED_PORT")
+$(_sc "透明代理" "$WEB_TPROXY_ENABLED" "$(case "$WEB_TPROXY_ENABLED" in disabled|unknown) printf 'neutral';; *) web_class_for_state "$WEB_TPROXY_ENABLED";; esac)" "端口 $TPROXY_PORT")
 </div>
 EOF
 
-    # Quick actions
     cat <<'EOF'
 <div class="card">
 <div class="card-title"><h2>快捷操作</h2></div>
 <div class="btn-group">
-<a class="btn primary" href="?action=start">启动 Mihomo</a>
-<a class="btn" href="?action=confirm&target=restart">重启</a>
-<a class="btn danger" href="?action=confirm&target=stop">停止</a>
-<a class="btn" href="?action=test">测试配置</a>
-<a class="btn" href="?action=logs&lines=100">查看日志</a>
-<a class="btn" href="?action=gateway-status">网关详情</a>
-<a class="btn" href="?action=tproxy-health">TProxy 健康</a>
-<a class="btn" href="?action=doctor">系统诊断</a>
+<a class="btn primary" href="?action=hotspot-page">热点设置</a>
+<a class="btn" href="?action=devices-page">查看连接设备</a>
+<a class="btn" href="?action=subscription">切换代理订阅</a>
+<a class="btn" href="?action=proxy-info">查看代理信息</a>
+<a class="btn" href="?action=confirm&target=restart">重启 Mihomo</a>
+<a class="btn" href="?action=doctor">网络诊断</a>
 </div>
 </div>
 EOF
-
-    # Version
-    printf '<div class="card"><h2>版本信息</h2><pre>'
-    printf '%s\n' "$version_out" | html_escape
-    printf '</pre></div>\n'
     page_end
 }
 
@@ -2314,14 +2319,41 @@ EOF
 </pre>
 </div>
 <div class="card">
-<h2>添加 WiFi 配置</h2>
-<p class="muted">添加后不会立即连接，需在终端或 TUI 执行 mgate wifi-connect 切换。</p>
+<h2>添加 WiFi</h2>
+<p class="muted">添加后不会立即切换，可在下方"切换 WiFi 上游"中选择并切换。</p>
 <p class="muted">⚠️ 此页面通过 HTTP 传输，密码不加密，请在受信任网络内使用。</p>
 <form method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="wifi-add-do">
-<div class="row"><input type="text" name="wifi_ssid" placeholder="WiFi 名称 (SSID)" required autocomplete="off"></div>
-<div class="row"><input type="password" name="wifi_password" placeholder="密码（留空 = 开放网络）" autocomplete="off"></div>
-<div class="row"><button class="primary" type="submit">添加 WiFi 配置</button></div>
+<table class="table" style="margin-bottom:12px">
+<tbody>
+<tr>
+<td style="color:var(--muted);font-size:12px;width:100px;vertical-align:middle">WiFi 名称</td>
+<td><input type="text" name="wifi_ssid" placeholder="路由器的 WiFi 名称（SSID）" required autocomplete="off" style="width:100%"></td>
+</tr>
+<tr>
+<td style="color:var(--muted);font-size:12px;vertical-align:middle">密码</td>
+<td><input type="password" name="wifi_password" placeholder="WiFi 密码（留空 = 开放网络）" autocomplete="off" style="width:100%"></td>
+</tr>
+<tr>
+<td style="color:var(--muted);font-size:12px;vertical-align:middle">备注名称</td>
+<td><input type="text" name="wifi_alias" placeholder="给这个 WiFi 起个好记的名字（如：家里、公司、酒店）" autocomplete="off" style="width:100%">
+<div style="font-size:11px;color:var(--muted);margin-top:4px">不填则使用 WiFi 名称，建议填写方便识别</div></td>
+</tr>
+<tr>
+<td style="color:var(--muted);font-size:12px;vertical-align:middle">优先级</td>
+<td>
+<select name="wifi_priority" style="min-width:0;width:100%">
+<option value="0">普通（默认）</option>
+<option value="10">较高 — 同等条件下优先连接</option>
+<option value="50">高 — 有此网络时优先使用</option>
+<option value="100">最高 — 首选，始终优先</option>
+</select>
+<div style="font-size:11px;color:var(--muted);margin-top:4px">优先级越高，设备在多个已保存 WiFi 都可用时越优先连接</div>
+</td>
+</tr>
+</tbody>
+</table>
+<div class="row"><button class="primary" type="submit">&#x2795; 添加 WiFi</button></div>
 </form>
 </div>
 <div class="card">
@@ -2351,6 +2383,118 @@ EOF
    <a class="btn" href="/cgi-bin/mgate.cgi?action=wifi-doctor-do">WiFi Doctor</a></p>
 </div>
 EOF
+    page_end
+}
+
+hotspot_page() {
+    header
+    page_start "热点设置"
+    nav
+    ap_load_config 2>/dev/null || true
+    _hs_healthy="false"; ( ap_is_running_healthy ) >/dev/null 2>&1 && _hs_healthy="true"
+    _hs_ip="${AP_IPADDR:-10.88.0.1}"
+
+    # 热点状态卡
+    printf '<div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">\n'
+    if [ "$_hs_healthy" = "true" ]; then
+        _hs_badge="sb-good"; _hs_label="正在广播"
+    else
+        _hs_badge="sb-warn"; _hs_label="已关闭"
+    fi
+    printf '<div class="stat-card %s"><div class="stat-label">热点状态</div>' "$([ "$_hs_healthy" = "true" ] && echo sc-good || echo sc-warn)"
+    printf '<div class="stat-val"><span class="stat-badge %s">%s</span></div></div>\n' "$_hs_badge" "$_hs_label"
+    printf '<div class="stat-card sc-unknown"><div class="stat-label">SSID（热点名称）</div><div class="stat-val" style="font-size:16px;font-weight:700">%s</div></div>\n' "$(printf '%s' "${AP_SSID:-mgate}" | html_escape)"
+    printf '<div class="stat-card sc-unknown"><div class="stat-label">热点 IP 地址</div><div class="stat-val" style="font-size:16px;font-weight:700">%s</div></div>\n' "$_hs_ip"
+    printf '</div>\n'
+
+    # 启停控制
+    cat <<'EOF'
+<div class="card">
+<h2>热点控制</h2>
+<div class="btn-group">
+EOF
+    if [ "$_hs_healthy" = "true" ]; then
+        cat <<'EOF'
+<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=ap-stop">关闭热点</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=ap-restart">重启热点</a>
+EOF
+    else
+        cat <<'EOF'
+<a class="btn primary" href="/cgi-bin/mgate.cgi?action=ap-start-do">开启热点</a>
+EOF
+    fi
+    cat <<'EOF'
+</div>
+</div>
+<div class="card">
+<h2>热点信息</h2>
+<table class="table">
+<tbody>
+EOF
+    _kv2() { printf '<tr><td style="color:var(--muted);font-size:12px;width:120px">%s</td><td><strong>%s</strong></td></tr>\n' "$(printf '%s' "$1" | html_escape)" "$(printf '%s' "$2" | html_escape)"; }
+    _kv2 "SSID（名称）" "${AP_SSID:-mgate}"
+    _kv2 "密码" "${AP_PASSWORD:-mgate12345678}"
+    _kv2 "频段" "2.4GHz"
+    _kv2 "热点 IP" "${AP_IPADDR:-10.88.0.1}"
+    _kv2 "DHCP 范围" "10.88.0.100 – 10.88.0.200"
+    _kv2 "接口" "${AP_IF:-ap0}"
+    cat <<'EOF'
+</tbody>
+</table>
+<p class="muted" style="margin-top:12px">修改 SSID 或密码需要重启热点生效。如需修改，请在系统终端执行 <span class="code">mgate ap-config</span>。</p>
+</div>
+EOF
+    page_end
+}
+
+devices_page() {
+    header
+    page_start "已连接设备"
+    nav
+
+    # 获取连接设备：优先读 dnsmasq lease 文件，降级用 arp
+    _lease_file="/var/lib/misc/dnsmasq.leases"
+    [ -f "$_lease_file" ] || _lease_file="/opt/mgate/run/ap/dnsmasq.leases"
+    [ -f "$_lease_file" ] || _lease_file=""
+
+    printf '<div class="card">\n'
+    printf '<h2>已连接设备</h2>\n'
+    printf '<table class="table"><thead><tr><th>设备名称</th><th>IP 地址</th><th>MAC 地址</th><th>连接时间</th></tr></thead><tbody>\n'
+
+    _device_count=0
+    if [ -n "$_lease_file" ] && [ -f "$_lease_file" ]; then
+        # dnsmasq lease format: expire_time mac ip hostname clientid
+        while IFS=' ' read -r _exp _mac _ip _name _cid; do
+            [ -z "$_ip" ] && continue
+            [ "$_name" = "*" ] && _name="未知设备"
+            _device_count=$((_device_count + 1))
+            printf '<tr><td>%s</td><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td>%s</td></tr>\n' \
+                "$(printf '%s' "$_name" | html_escape)" \
+                "$(printf '%s' "$_ip" | html_escape)" \
+                "$(printf '%s' "$_mac" | html_escape)" \
+                "活跃"
+        done < "$_lease_file"
+    else
+        # 降级：ARP 表过滤热点子网
+        while IFS= read -r _line; do
+            case "$_line" in 10.88.0.*) : ;; *) continue ;; esac
+            _arp_ip="$(printf '%s' "$_line" | awk '{print $1}')"
+            _arp_mac="$(printf '%s' "$_line" | awk '{print $3}')"
+            [ "$_arp_mac" = "<incomplete>" ] && continue
+            _device_count=$((_device_count + 1))
+            printf '<tr><td>%s</td><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td>活跃</td></tr>\n' \
+                "设备 $_device_count" \
+                "$(printf '%s' "$_arp_ip" | html_escape)" \
+                "$(printf '%s' "$_arp_mac" | html_escape)"
+        done < <(arp -n 2>/dev/null | tail -n +2)
+    fi
+
+    if [ "$_device_count" -eq 0 ]; then
+        printf '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">暂无设备连接到热点</td></tr>\n'
+    fi
+    printf '</tbody></table>\n'
+    printf '<p class="muted" style="margin-top:12px">共 <strong>%d</strong> 台设备连接中。页面不自动刷新，请手动刷新查看最新状态。</p>\n' "$_device_count"
+    printf '</div>\n'
     page_end
 }
 
@@ -2697,6 +2841,10 @@ else
         sub-status) sub_status_page ;;
         subscription) subscription_page ;;
         group-page) subscription_page ;;
+        hotspot-page) hotspot_page ;;
+        devices-page) devices_page ;;
+        ap-start-do) run_job_page "开启热点" ap-start ;;
+        ap-restart) run_job_page "重启热点" ap-stop && run_job_page "重启热点" ap-start ;;
         custom-nodes-save)
             custom_yaml="$(url_decode "$(param_get "$post_body" custom_yaml)")"
             printf '%s\n' "$custom_yaml" > "$CUSTOM_PROVIDER_FILE" 2>/dev/null
@@ -2720,7 +2868,11 @@ else
         wifi-add-do)
             wifi_ssid="$(url_decode "$(param_get "$post_body" wifi_ssid)")"
             wifi_pw="$(url_decode "$(param_get "$post_body" wifi_password)")"
-            run_job_page "添加 WiFi $wifi_ssid" wifi-add "$wifi_ssid" "$wifi_pw" --yes
+            wifi_alias="$(url_decode "$(param_get "$post_body" wifi_alias)")"
+            wifi_priority="$(param_get "$post_body" wifi_priority)"
+            [ -z "$wifi_priority" ] && wifi_priority="0"
+            run_job_page "添加 WiFi $wifi_ssid" wifi-add "$wifi_ssid" "$wifi_pw" \
+                --alias="$wifi_alias" --priority="$wifi_priority" --yes
             ;;
         wifi-delete-do)
             wifi_profile="$(url_decode "$(param_get "$post_body" wifi_profile)")"
@@ -6820,43 +6972,53 @@ cmd_wifi_list() {
 }
 
 cmd_wifi_add() {
-    _wa_yes=0; ssid=""; password=""
+    _wa_yes=0; ssid=""; password=""; _wa_alias=""; _wa_priority="0"
     for _a in "$@"; do
         case "$_a" in
             --yes|-y) _wa_yes=1 ;;
+            --alias=*) _wa_alias="${_a#--alias=}" ;;
+            --priority=*) _wa_priority="${_a#--priority=}" ;;
             -*) : ;;
             *) [ -z "$ssid" ] && ssid="$_a" || password="$_a" ;;
         esac
     done
-    [ -n "$ssid" ] || die "用法：mgate wifi-add <ssid> [password]"
+    [ -n "$ssid" ] || die "用法：mgate wifi-add <ssid> [password] [--alias=名称] [--priority=0-100]"
+    # 别名作为 connection name；未填则用 SSID
+    [ -z "$_wa_alias" ] && _wa_alias="$ssid"
     need_root
     mgr="$(wifi_detect_manager)"
     [ "$mgr" = "NetworkManager" ] || die "wifi-add 仅支持 NetworkManager 环境"
-    if nmcli connection show "$ssid" >/dev/null 2>&1; then
+    if nmcli connection show "$_wa_alias" >/dev/null 2>&1; then
         if [ "$_wa_yes" = "1" ]; then
-            err "已存在同名连接配置：$ssid（web 模式不自动覆盖，请先删除再添加）"
+            err "已存在同名配置：$_wa_alias（请先删除再添加）"
             return 1
         fi
-        warn "已存在同名连接配置：$ssid"
+        warn "已存在同名配置：$_wa_alias"
         tui_confirm "覆盖已有配置？" || return 1
-        nmcli connection delete "$ssid" >/dev/null 2>&1 || true
+        nmcli connection delete "$_wa_alias" >/dev/null 2>&1 || true
     fi
     if [ -z "$password" ] && [ "$_wa_yes" = "0" ]; then
         warn "未提供密码，将添加为开放网络（无加密）"
         tui_confirm "确认添加开放网络？" || return 1
     fi
-    step "添加 WiFi 配置：$ssid"
-    nmcli connection add type wifi ifname "$WIFI_IF" con-name "$ssid" ssid "$ssid" \
+    step "添加 WiFi 配置：$_wa_alias（SSID: $ssid）"
+    nmcli connection add type wifi ifname "$WIFI_IF" con-name "$_wa_alias" ssid "$ssid" \
         >/dev/null 2>&1 || die "添加 WiFi 配置失败"
     if [ -n "$password" ]; then
-        nmcli connection modify "$ssid" \
+        nmcli connection modify "$_wa_alias" \
             wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" >/dev/null 2>&1 || {
-            nmcli connection delete "$ssid" >/dev/null 2>&1 || true
+            nmcli connection delete "$_wa_alias" >/dev/null 2>&1 || true
             die "设置密码失败"
         }
     fi
-    ok "已添加 WiFi 配置：$ssid"
-    hint "执行 mgate wifi-connect '$ssid' 连接"
+    # 设置优先级
+    if [ -n "$_wa_priority" ] && [ "$_wa_priority" != "0" ]; then
+        nmcli connection modify "$_wa_alias" \
+            connection.autoconnect-priority "$_wa_priority" >/dev/null 2>&1 || true
+        ok "优先级已设置：$_wa_priority"
+    fi
+    ok "已添加 WiFi 配置：$_wa_alias（SSID: $ssid）"
+    hint "执行 mgate wifi-connect '$_wa_alias' 连接"
 }
 
 cmd_wifi_connect() {
