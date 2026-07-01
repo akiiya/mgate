@@ -1359,6 +1359,19 @@ pre{background:#0f172a;color:#e2e8f0;padding:16px;border-radius:8px;overflow:aut
 .warn-box{background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:12px 16px;font-size:13px;color:#92400e;margin:8px 0}
 details{margin:8px 0}
 summary{cursor:pointer;color:var(--accent);font-size:13px}
+.sb-neutral{background:#f1f5f9;color:#475569}.sb-neutral::before{background:#94a3b8}
+.stat-card.sc-neutral::after{background:#94a3b8}
+.theme-btn{border:none;background:none;cursor:pointer;font-size:18px;padding:4px 8px;border-radius:6px;color:var(--muted);transition:background .12s}
+.theme-btn:hover{background:var(--bg)}
+body.auth-body{align-items:center;justify-content:center;display:flex;min-height:100vh}
+.auth-wrap{width:100%;max-width:380px;padding:24px}
+[data-theme="dark"]{--bg:#0f172a;--card:#1e293b;--border:#2d3748;--text:#f1f5f9;--muted:#94a3b8}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f172a;--card:#1e293b;--border:#2d3748;--text:#f1f5f9;--muted:#94a3b8}}
+[data-theme="dark"] pre{background:#020617}
+[data-theme="dark"] input[type=text],[data-theme="dark"] input[type=password]{background:#0f172a;color:var(--text);border-color:var(--border)}
+[data-theme="dark"] .warn-box{background:#451a03;border-color:#92400e;color:#fde68a}
+[data-theme="dark"] .table tr:hover td{background:#1e293b}
+[data-theme="dark"] .btn:hover,[data-theme="dark"] button:hover{background:#2d3748;border-color:#475569}
 @media(max-width:768px){
 .sidebar{transform:translateX(-100%)}
 .sidebar.open{transform:translateX(0);box-shadow:4px 0 24px rgba(0,0,0,.2)}
@@ -1452,32 +1465,33 @@ page_start() {
 </div>
 <nav class="sb-nav">
 <div class="sb-sec">概览</div>
-<a class="nav-link" data-act="status" href="?action=status">Dashboard</a>
+<a class="nav-link" data-act="status" href="?action=status">&#x1F4CA; Dashboard</a>
 <div class="sb-sec">代理</div>
-<a class="nav-link" data-act="proxy-info" href="?action=proxy-info">连接信息</a>
-<a class="nav-link" data-act="group-page" href="?action=group-page">Group 管理</a>
-<a class="nav-link" data-act="sub-status" href="?action=sub-status">订阅状态</a>
-<a class="nav-link" data-act="sub-set" href="?action=sub-set">设置订阅</a>
-<a class="nav-link" data-act="account-password" href="?action=account-password">账号密码</a>
+<a class="nav-link" data-act="proxy-info" href="?action=proxy-info">&#x1F517; 连接信息</a>
+<a class="nav-link" data-act="group-page" href="?action=group-page">&#x1F4E6; Group 管理</a>
+<a class="nav-link" data-act="sub-status" href="?action=sub-status">&#x1F4CB; 订阅状态</a>
+<a class="nav-link" data-act="sub-set" href="?action=sub-set">&#x1F517; 设置订阅</a>
+<a class="nav-link" data-act="account-password" href="?action=account-password">&#x1F511; 账号密码</a>
 <div class="sb-sec">网络</div>
-<a class="nav-link" data-act="gateway-status" href="?action=gateway-status">网关 / NAT</a>
-<a class="nav-link" data-act="tproxy-health" href="?action=tproxy-health">TProxy</a>
-<a class="nav-link" data-act="wifi-page" href="?action=wifi-page">WiFi 管理</a>
+<a class="nav-link" data-act="gateway-status" href="?action=gateway-status">&#x1F309; 网关 / NAT</a>
+<a class="nav-link" data-act="tproxy-health" href="?action=tproxy-health">&#x1F9E9; TProxy</a>
+<a class="nav-link" data-act="wifi-page" href="?action=wifi-page">&#x1F4F6; WiFi</a>
 <div class="sb-sec">系统</div>
-<a class="nav-link" data-act="doctor" href="?action=doctor">系统诊断</a>
-<a class="nav-link" data-act="logs" href="?action=logs&amp;lines=100">查看日志</a>
-<a class="nav-link" data-act="config" href="?action=config">查看配置</a>
-<a class="nav-link" data-act="backups" href="?action=backups">备份</a>
-<a class="nav-link" data-act="version" href="?action=version">版本</a>
+<a class="nav-link" data-act="doctor" href="?action=doctor">&#x1F50D; 诊断</a>
+<a class="nav-link" data-act="logs" href="?action=logs&amp;lines=100">&#x1F4C4; 日志</a>
+<a class="nav-link" data-act="config" href="?action=config">&#x2699;&#xFE0F; 配置</a>
+<a class="nav-link" data-act="backups" href="?action=backups">&#x1F4BE; 备份</a>
+<a class="nav-link" data-act="version" href="?action=version">&#x2139;&#xFE0F; 版本</a>
 <div class="sb-sec">管理</div>
-<a class="nav-link" data-act="token" href="?action=token">Web Token</a>
-<a class="nav-link nl-danger" href="?action=logout">退出登录</a>
+<a class="nav-link" data-act="token" href="?action=token">&#x1F512; 密码</a>
+<a class="nav-link nl-danger" href="?action=logout">&#x1F6AA; 退出</a>
 </nav>
 </aside>
 <div class="main">
 <header class="topbar">
 <button class="menu-btn" onclick="document.getElementById('sidebar').classList.toggle('open')">&#9776;</button>
 <span class="pg-title">$title</span>
+<button class="theme-btn" id="theme-toggle" title="切换主题">🌙</button>
 <div class="tb-actions">
 <a class="btn btn-sm primary" href="?action=start">启动</a>
 <a class="btn btn-sm" href="?action=confirm&amp;target=restart">重启</a>
@@ -1501,11 +1515,31 @@ page_end() {
 </div></div>
 <script>
 (function(){
-var m=location.search.match(/[?&]action=([^&]*)/);
+var qs=location.search;
+var m=qs.match(/[?&]action=([^&]*)/);
+var s=qs.match(/[?&]src=([^&]*)/);
 var a=m?m[1]:'status';
+if(a==='job'&&s&&s[1])a=s[1];
 document.querySelectorAll('.nav-link[data-act]').forEach(function(el){
 if(el.dataset.act===a)el.classList.add('active');
 });
+})();
+(function(){
+var h=document.documentElement;
+var saved=localStorage.getItem('mgate-theme');
+var dark=saved?saved==='dark':window.matchMedia('(prefers-color-scheme:dark)').matches;
+if(saved){h.setAttribute('data-theme',saved);}
+var btn=document.getElementById('theme-toggle');
+if(btn){
+btn.textContent=dark?'☀️':'🌙';
+btn.onclick=function(){
+var cur=h.getAttribute('data-theme')||(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+var nxt=cur==='dark'?'light':'dark';
+h.setAttribute('data-theme',nxt);
+localStorage.setItem('mgate-theme',nxt);
+btn.textContent=nxt==='dark'?'☀️':'🌙';
+};
+}
 })();
 </script>
 </body></html>
@@ -1515,24 +1549,39 @@ EOF
 login_page() {
     msg="$1"
     header
-    page_start "mgate Login"
     cat <<EOF
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录 — mgate</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=$FAVICON_VER">
+<link rel="stylesheet" href="/static/style.css?v=$FAVICON_VER">
+</head>
+<body class="auth-body">
+<div class="auth-wrap">
 <div class="card">
-<h2>登录</h2>
-<p class="muted">请输入 Web 管理 Token。</p>
+<div style="text-align:center;margin:0 0 20px">
+<div class="sb-mark" style="margin:0 auto 10px;width:48px;height:48px;font-size:22px">M</div>
+<div style="font-size:22px;font-weight:700;color:var(--text)">mgate</div>
+<div style="font-size:13px;color:var(--muted);margin-top:4px">管理后台</div>
+</div>
+<p class="muted">请输入管理员密码登录。</p>
 EOF
     if [ -n "$msg" ]; then
-        printf '<p class="danger">%s</p>\n' "$(printf '%s' "$msg" | html_escape)"
+        printf '<p style="color:var(--danger);font-size:13px">%s</p>\n' "$(printf '%s' "$msg" | html_escape)"
     fi
     cat <<'EOF'
 <form method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="login">
-<div class="row"><input type="password" name="token" autocomplete="current-password"></div>
-<div class="row"><button class="primary" type="submit">登录</button></div>
+<div class="row"><input type="password" name="token" autocomplete="current-password" style="width:100%"></div>
+<div class="row"><button class="primary" type="submit" style="width:100%">登录</button></div>
 </form>
 </div>
+</div>
+</body></html>
 EOF
-    page_end
 }
 
 run_output_page() {
@@ -1653,7 +1702,7 @@ EOF
             printf 'failed\n' > "$base.status"
         fi
     ) </dev/null > "$base.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
-    _CGI_LOCATION="/cgi-bin/mgate.cgi?action=job&id=$id"
+    _CGI_LOCATION="/cgi-bin/mgate.cgi?action=job&id=$id&src=$action"
 }
 
 run_job_page() {
@@ -1922,15 +1971,31 @@ EOF
     printf '</pre></div>\n'
     page_end
 }
+_state_zh() {
+    case "$1" in
+        yes|running) printf '运行中' ;;
+        no|stopped) printf '已停止' ;;
+        active) printf '已激活' ;;
+        inactive) printf '未激活' ;;
+        enabled) printf '已启用' ;;
+        disabled) printf '未启用' ;;
+        healthy) printf '正常' ;;
+        degraded) printf '降级' ;;
+        broken) printf '故障' ;;
+        *) printf '未知' ;;
+    esac
+}
+
 _sc() {
     # _sc label value class [sub]
-    _sc_cls="sc-unknown"; case "$3" in good) _sc_cls="sc-good";; warn) _sc_cls="sc-warn";; danger) _sc_cls="sc-danger";; esac
-    _sc_bdg="sb-unknown"; case "$3" in good) _sc_bdg="sb-good";; warn) _sc_bdg="sb-warn";; danger) _sc_bdg="sb-danger";; esac
+    _sc_cls="sc-unknown"; case "$3" in good) _sc_cls="sc-good";; warn) _sc_cls="sc-warn";; danger) _sc_cls="sc-danger";; neutral) _sc_cls="sc-neutral";; esac
+    _sc_bdg="sb-unknown"; case "$3" in good) _sc_bdg="sb-good";; warn) _sc_bdg="sb-warn";; danger) _sc_bdg="sb-danger";; neutral) _sc_bdg="sb-neutral";; esac
+    _sc_zh="$(_state_zh "$2")"
     printf '<div class="stat-card %s"><div class="stat-label">%s</div><div class="stat-val"><span class="stat-badge %s">%s</span></div>%s</div>\n' \
         "$_sc_cls" \
         "$(printf '%s' "$1" | html_escape)" \
         "$_sc_bdg" \
-        "$(printf '%s' "$2" | html_escape)" \
+        "$(printf '%s' "$_sc_zh" | html_escape)" \
         "$([ -n "${4:-}" ] && printf '<div class="stat-sub">%s</div>' "$(printf '%s' "$4" | html_escape)")"
 }
 
@@ -1958,7 +2023,7 @@ status_page() {
 $(_sc "Mihomo" "$svc_val" "$svc_cls" "混合端口 $DEFAULT_MIXED_PORT")
 $(_sc "AP 热点" "$WEB_AP_STATE" "$(web_class_for_state "$WEB_AP_STATE")" "${WEB_AP_IP:-—}")
 $(_sc "网关 / NAT" "$WEB_NAT_FALLBACK" "$(web_class_for_state "$WEB_NAT_FALLBACK")" "$WEB_GATEWAY_MODE")
-$(_sc "TProxy" "$WEB_TPROXY_ENABLED" "$(web_class_for_state "$WEB_TPROXY_ENABLED")" "端口 $TPROXY_PORT")
+$(_sc "TProxy" "$WEB_TPROXY_ENABLED" "$(case "$WEB_TPROXY_ENABLED" in disabled) printf 'neutral';; *) web_class_for_state "$WEB_TPROXY_ENABLED";; esac)" "端口 $TPROXY_PORT")
 $(_sc "整体健康" "$WEB_FINAL_HEALTH" "$health_cls" "")
 </div>
 EOF
@@ -2020,14 +2085,14 @@ EOF
 token_page() {
     tok="$(expected_token)"
     header
-    page_start "Token"
+    page_start "管理员密码"
     nav
     cat <<EOF
 <div class="card">
-<h2>Web Token</h2>
-<p class="muted">Token 保存在：<span class="code">$TOKEN_FILE</span></p>
-<details><summary>显示当前 Token</summary><p><span class="code">$(printf '%s' "$tok" | html_escape)</span></p></details>
-<p><a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=token-reset">重置 Token</a></p>
+<h2>管理员密码</h2>
+<p class="muted">密码保存在：<span class="code">$TOKEN_FILE</span></p>
+<details><summary>显示当前密码</summary><p><span class="code">$(printf '%s' "$tok" | html_escape)</span></p></details>
+<p><a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=token-reset">重置密码</a></p>
 </div>
 EOF
     page_end
