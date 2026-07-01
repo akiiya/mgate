@@ -8147,10 +8147,22 @@ cmd_migrate() {
         printf 'proxies: []\n' > "$CUSTOM_PROVIDER_FILE" 2>/dev/null && \
             ok "migrate: 已初始化 $CUSTOM_PROVIDER_FILE" || true
     fi
-    # 已有 sub.yaml 且无 active 记录 → 迁移为 default group
-    if [ -f "$SUB_PROVIDER_FILE" ] && [ ! -f "$ACTIVE_GROUP_FILE" ]; then
-        printf 'default\n' > "$ACTIVE_GROUP_FILE" 2>/dev/null && \
-            ok "migrate: 已设置当前 group 为 default" || true
+    # 迁移现有订阅到 group-default.yaml 缓存
+    _mig_def_cache="$(group_provider_file 'default')"
+    if [ -f "$SUB_PROVIDER_FILE" ] && [ ! -f "$_mig_def_cache" ]; then
+        cp "$SUB_PROVIDER_FILE" "$_mig_def_cache" 2>/dev/null && \
+            ok "migrate: 已将现有 sub.yaml 迁移为 group 'default' 缓存" || true
+    fi
+    # 迁移现有时间戳
+    if [ -f "$SUB_LAST_UPDATE_FILE" ] && [ ! -f "$GROUPS_DIR/default.updated" ]; then
+        cp "$SUB_LAST_UPDATE_FILE" "$GROUPS_DIR/default.updated" 2>/dev/null || true
+    fi
+    # 设置激活 group
+    if [ ! -f "$ACTIVE_GROUP_FILE" ]; then
+        if [ -s "$SUB_URL_FILE" ]; then
+            printf 'default\n' > "$ACTIVE_GROUP_FILE" 2>/dev/null && \
+                ok "migrate: 已设置当前 group 为 default" || true
+        fi
     fi
 
     migrate_patch_config
@@ -8822,9 +8834,8 @@ group_active() {
 
 group_provider_file() {
     case "$1" in
-        custom)  printf '%s\n' "$CUSTOM_PROVIDER_FILE" ;;
-        default) printf '%s\n' "$SUB_PROVIDER_FILE" ;;
-        *)       printf '%s\n' "$SUB_PROVIDER_DIR/group-${1}.yaml" ;;
+        custom) printf '%s\n' "$CUSTOM_PROVIDER_FILE" ;;
+        *)      printf '%s\n' "$SUB_PROVIDER_DIR/group-${1}.yaml" ;;
     esac
 }
 
@@ -8876,6 +8887,10 @@ group_apply_from_cache() {
     chmod 600 "$CONFIG_FILE" "$SUB_ACCOUNTS_FILE" 2>/dev/null || true
     mkdir -p "$GROUPS_DIR"
     printf '%s\n' "$_gap_name" > "$ACTIVE_GROUP_FILE"
+    _gap_ts="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)"
+    [ -n "$_gap_ts" ] && printf '%s\n' "$_gap_ts" > "$GROUPS_DIR/${_gap_name}.updated" || true
+    # 同步到 SUB_LAST_UPDATE_FILE，保持向后兼容
+    [ -n "$_gap_ts" ] && printf '%s\n' "$_gap_ts" > "$SUB_LAST_UPDATE_FILE" || true
     rm -rf "$_gap_work"
     info "节点数量：$_gap_nc"
     ok "已切换到 group '$_gap_name'"
@@ -8894,7 +8909,11 @@ sub_download_to_group() {
     validate_sub_file "$_gdl_work/sub.yaml" || { rm -rf "$_gdl_work"; return 1; }
     mkdir -p "$SUB_PROVIDER_DIR" "$GROUPS_DIR"
     cp "$_gdl_work/sub.yaml" "$_gdl_file"
-    date '+%Y-%m-%d %H:%M:%S' 2>/dev/null > "$GROUPS_DIR/${_gdl_name}.updated" || true
+    _gdl_ts="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)"
+    [ -n "$_gdl_ts" ] && printf '%s\n' "$_gdl_ts" > "$GROUPS_DIR/${_gdl_name}.updated" || true
+    # default group 同步到 SUB_LAST_UPDATE_FILE（向后兼容）
+    [ "$_gdl_name" = "default" ] && [ -n "$_gdl_ts" ] && \
+        printf '%s\n' "$_gdl_ts" > "$SUB_LAST_UPDATE_FILE" || true
     ok "Group '$_gdl_name' 缓存已更新"
     rm -rf "$_gdl_work"
 }
@@ -8908,7 +8927,8 @@ cmd_group() {
         step "代理来源 Group（当前：$_grp_active）"
         _grp_mark=""; [ "$_grp_active" = "default" ] && _grp_mark=" *"
         if [ -s "$SUB_URL_FILE" ]; then
-            _grp_upd="$(cat "$SUB_LAST_UPDATE_FILE" 2>/dev/null || printf '从未更新')"
+            _grp_upd="$(cat "$GROUPS_DIR/default.updated" 2>/dev/null || \
+                        cat "$SUB_LAST_UPDATE_FILE" 2>/dev/null || printf '从未更新')"
             info "  default${_grp_mark}  [订阅] 上次更新：$_grp_upd"
         else
             info "  default${_grp_mark}  [订阅] 未配置"
@@ -8958,10 +8978,10 @@ cmd_group() {
             if [ -f "$_grp_gf" ]; then
                 group_apply_from_cache "default"
             else
+                # 无缓存，需拉取；拉取后同步到 group-default.yaml
                 _grp_url="$(cat "$SUB_URL_FILE" 2>/dev/null)"
-                sub_update_from_url "$_grp_url"
-                mkdir -p "$GROUPS_DIR"
-                printf '%s\n' "default" > "$ACTIVE_GROUP_FILE"
+                sub_download_to_group "default" "$_grp_url" || return 1
+                group_apply_from_cache "default"
             fi
             ;;
         *)
@@ -9025,6 +9045,8 @@ cmd_sub_set() {
     # sub-set 更新 default 订阅并激活
     sub_update_from_url "$url"
     mkdir -p "$GROUPS_DIR"
+    # 同步到 group-default.yaml 缓存，支持多 group 切换后切回 default
+    cp "$SUB_PROVIDER_FILE" "$(group_provider_file 'default')" 2>/dev/null || true
     printf '%s\n' "default" > "$ACTIVE_GROUP_FILE"
 }
 
