@@ -1290,7 +1290,7 @@ generate_web_style() {
     cat > "$WEB_CSS_FILE" <<'EOF_WEB_CSS'
 :root{--sb:#1e293b;--sb-txt:#94a3b8;--sb-act:#3b82f6;--sb-act-bg:rgba(59,130,246,.15);--sb-sec:#475569;--sb-w:220px;--accent:#3b82f6;--accent-h:#2563eb;--danger:#ef4444;--warn-c:#f59e0b;--good-c:#22c55e;--bg:#f1f5f9;--card:#fff;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--r:10px;--sh:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06)}
 *,*::before,*::after{box-sizing:border-box}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);font-size:15px;line-height:1.55}
 .layout{display:flex;min-height:100vh}
 .sidebar{width:var(--sb-w);background:var(--sb);color:var(--sb-txt);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:100;transition:transform .2s ease}
 .sb-logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
@@ -1298,7 +1298,7 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans
 .sb-name{font-size:17px;font-weight:700;color:#f1f5f9;letter-spacing:-.3px}
 .sb-nav{padding:10px 0;flex:1}
 .sb-sec{padding:14px 16px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--sb-sec)}
-.nav-link{display:flex;align-items:center;gap:8px;padding:8px 12px;margin:1px 8px;border-radius:7px;text-decoration:none;color:var(--sb-txt);font-size:13px;transition:background .12s,color .12s}
+.nav-link{display:flex;align-items:center;gap:8px;padding:8px 12px;margin:1px 8px;border-radius:7px;text-decoration:none;color:var(--sb-txt);font-size:14px;transition:background .12s,color .12s}
 .nav-link:hover{background:rgba(255,255,255,.07);color:#e2e8f0}
 .nav-link.active{background:var(--sb-act-bg);color:#93c5fd;font-weight:600}
 .nav-link.nl-danger{color:#fca5a5}
@@ -1312,8 +1312,8 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans
 .content{padding:24px;flex:1;max-width:1200px;width:100%}
 .pg-footer{padding:14px 24px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;background:var(--card)}
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin:0 0 16px;box-shadow:var(--sh)}
-h2{font-size:14px;font-weight:700;margin:0 0 16px;color:var(--text);text-transform:uppercase;letter-spacing:.04em}
-h3{font-size:13px;font-weight:600;margin:0 0 8px}
+h2{font-size:13px;font-weight:700;margin:0 0 16px;color:var(--text);text-transform:uppercase;letter-spacing:.04em}
+h3{font-size:15px;font-weight:600;margin:0 0 8px}
 .card-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 16px}
 .card-title h2{margin:0}
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:0 0 20px}
@@ -1325,33 +1325,33 @@ h3{font-size:13px;font-weight:600;margin:0 0 8px}
 .stat-card.sc-unknown::after{background:#94a3b8}
 .stat-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
 .stat-val{font-size:20px;font-weight:700;color:var(--text);margin:0 0 6px;word-break:break-word}
-.stat-sub{font-size:12px;color:var(--muted)}
-.stat-badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;margin:4px 0}
+.stat-sub{font-size:13px;color:var(--muted)}
+.stat-badge{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;padding:3px 9px;border-radius:999px;margin:4px 0}
 .stat-badge::before{content:'';width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .sb-good{background:#dcfce7;color:#15803d}.sb-good::before{background:var(--good-c)}
 .sb-warn{background:#fef3c7;color:#92400e}.sb-warn::before{background:var(--warn-c)}
 .sb-danger{background:#fee2e2;color:#991b1b}.sb-danger::before{background:var(--danger)}
 .sb-unknown{background:#f1f5f9;color:#475569}.sb-unknown::before{background:#94a3b8}
-.btn,button{display:inline-flex;align-items:center;justify-content:center;padding:7px 14px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-weight:500;text-decoration:none;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s;white-space:nowrap;font-family:inherit}
+.btn,button{display:inline-flex;align-items:center;justify-content:center;padding:7px 16px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px;font-weight:500;text-decoration:none;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s;white-space:nowrap;font-family:inherit}
 .btn:hover,button:hover{background:#f8fafc;border-color:#cbd5e1;box-shadow:0 1px 2px rgba(0,0,0,.06)}
 .primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .primary:hover,.btn.primary:hover{background:var(--accent-h);border-color:var(--accent-h)}
 .danger,.btn.danger{color:var(--danger);border-color:#fecaca}
 .danger:hover,.btn.danger:hover{background:#fee2e2}
-.btn-sm{padding:5px 10px;font-size:12px;border-radius:6px}
+.btn-sm{padding:5px 12px;font-size:13px;border-radius:6px}
 .btn-group{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .row{margin:12px 0}
 input[type=text],input[type=password],select{padding:8px 12px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);font-size:13px;min-width:220px;max-width:100%;outline:none;transition:border-color .12s,box-shadow .12s;font-family:inherit}
 input[type=text]:focus,input[type=password]:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
 select{-webkit-appearance:none;appearance:none;padding-right:32px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Cpath fill='%2394a3b8' d='m7 10 5 5 5-5z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;cursor:pointer}
-.table{width:100%;border-collapse:collapse;font-size:13px}
-.table th{text-align:left;padding:8px 12px;font-weight:700;color:var(--muted);border-bottom:2px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.table{width:100%;border-collapse:collapse;font-size:14px}
+.table th{text-align:left;padding:9px 12px;font-weight:700;color:var(--muted);border-bottom:2px solid var(--border);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
 .table td{padding:10px 12px;border-bottom:1px solid #f8fafc;vertical-align:top}
 .table tr:last-child td{border-bottom:none}
 .table tr:hover td{background:#fafcff}
-.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#f1f5f9;border-radius:5px;padding:2px 6px;font-size:12px;word-break:break-all}
+.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#f1f5f9;border-radius:5px;padding:2px 7px;font-size:13px;word-break:break-all}
 pre{background:#0f172a;color:#e2e8f0;padding:16px;border-radius:8px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;margin:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
-.muted{color:var(--muted);font-size:13px}
+.muted{color:var(--muted);font-size:14px}
 .pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;background:#f1f5f9;color:var(--muted);border:1px solid var(--border)}
 .pill.good{background:#dcfce7;color:#15803d;border-color:#86efac}
 .pill.warn{background:#fef3c7;color:#92400e;border-color:#fcd34d}
@@ -1437,9 +1437,9 @@ body.auth-body{align-items:center;justify-content:center;display:flex;min-height
 .modal-body{padding:24px}
 .modal-foot{padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
 .form-row{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
-.form-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.form-label{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .form-row input,.form-row select,.form-row textarea{width:100%}
-.form-row .hint{font-size:11px;color:var(--muted)}
+.form-row .hint{font-size:12px;color:var(--muted)}
 .group-table .ops{display:flex;gap:6px;flex-wrap:wrap}
 .badge-active{background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;white-space:nowrap}
 .badge-manual{background:rgba(168,85,247,.12);color:#a855f7;border:1px solid rgba(168,85,247,.3);border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600}
@@ -2235,6 +2235,9 @@ confirm_page() {
         token-reset) label="重置 Web 管理 Token" ;;
         sub-update) label="更新订阅并重建配置" ;;
         sub-clear) label="清除订阅设置和缓存" ;;
+        tproxy-stop) label="停止透明代理（将退回 NAT fallback，热点仍可上网）" ;;
+        ap-stop) label="停止 AP 热点（ap0 将被删除）" ;;
+        ap-restart) label="重启 AP 热点（先停止再启动，已连接设备需重新连接）" ;;
     esac
     header
     page_start "Confirm"
@@ -2831,9 +2834,11 @@ tproxy_page() {
     # 当前节点
     _tp_nodes_out="$($MGATE tproxy-nodes 2>/dev/null)"
     _tp_now="$(printf '%s\n' "$_tp_nodes_out" | sed -n 's/.*当前选中：//p' | head -1)"
+    # cmd_tproxy_nodes format: "[INFO] N) * NodeName" or "[INFO] N)   NodeName"
     _tp_nodes="$(printf '%s\n' "$_tp_nodes_out" | grep '^\[INFO\] [0-9]' | \
-        sed 's/^\[INFO\] [0-9]*\.\*[[:space:]]*//' | sed 's/^\[INFO\] [0-9]*\.[[:space:]]*//' | \
-        sed 's/（当前）//' | grep -v '^$')"
+        sed 's/^\[INFO\] [0-9]*)[[:space:]]*\*[[:space:]]*//' | \
+        sed 's/^\[INFO\] [0-9]*)[[:space:]]*//' | \
+        grep -v '^$')"
 
     # 状态概览
     printf '<div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:20px">\n'
@@ -3457,17 +3462,17 @@ else
             ;;
         restore-confirm)
             bk_id="$(param_get "${QUERY_STRING:-}" id)"
-            run_job_page "恢复备份 $bk_id" restore "$bk_id"
+            run_job_page "恢复备份 $bk_id" restore "$bk_id" --yes
             ;;
         restore-do)
             bk_id="$(url_decode "$(param_get "$post_body" backup_id)")"
-            run_job_page "恢复备份 $bk_id" restore "$bk_id"
+            run_job_page "恢复备份 $bk_id" restore "$bk_id" --yes
             ;;
         backup) run_job_page "创建备份" backup web ;;
         token) token_page ;;
         confirm)
             case "$target" in
-                stop|restart|self-update|web-disable|token-reset|sub-update|sub-clear) confirm_page "$target" ;;
+                stop|restart|self-update|web-disable|token-reset|sub-update|sub-clear|tproxy-stop|ap-stop|ap-restart) confirm_page "$target" ;;
                 *) status_page ;;
             esac
             ;;
@@ -3478,6 +3483,9 @@ else
                 self-update) run_job_page "自更新 mgate" self-update ;;
                 sub-update) run_job_page "更新订阅" sub-update ;;
                 sub-clear) run_job_page "清除订阅" sub-clear ;;
+                tproxy-stop) run_job_page "停止透明代理" tproxy-stop ;;
+                ap-stop) run_job_page "停止热点" ap-stop ;;
+                ap-restart) run_job_page "重启热点" ap-restart ;;
                 token-reset)
                     header "Set-Cookie: mgate_token=deleted; Path=/; Max-Age=0"
                     page_start "Token 已重置"
@@ -4566,6 +4574,14 @@ cmd_ap_stop() {
         info "$AP_IF does not exist"
     fi
     rm -f "$AP_OWNER_FILE" 2>/dev/null || true
+}
+
+cmd_ap_restart() {
+    need_root
+    step "重启热点（先停止，再启动）..."
+    cmd_ap_stop
+    sleep 1
+    cmd_ap_start
 }
 
 # -----------------------------
@@ -10761,8 +10777,9 @@ menu_ap() {
         say "   4.  查看状态"
         say "   5.  启动 AP"
         say "   6.  停止 AP"
-        say "   7.  修改 SSID / 密码"
-        say "   8.  JSON 状态"
+        say "   7.  重启 AP"
+        say "   8.  修改 SSID / 密码"
+        say "   9.  JSON 状态"
         say ""
         say "   0.  返回  ( Enter 也可 )"
         say ""
@@ -10787,6 +10804,12 @@ menu_ap() {
                 pause_enter
                 ;;
             7)
+                if tui_confirm "将先停止 AP，等待 1 秒后重新启动，已连接设备需重新连接，继续吗？"; then
+                    cmd_ap_restart
+                fi
+                pause_enter
+                ;;
+            8)
                 say ""
                 ap_load_config 2>/dev/null || true
                 printf 'SSID（当前：%s，留空=不修改）：' "${AP_SSID:-mgate}"
@@ -10804,7 +10827,7 @@ menu_ap() {
                 fi
                 pause_enter
                 ;;
-            8) cmd_ap_json; pause_enter ;;
+            9) cmd_ap_json; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
@@ -11301,6 +11324,7 @@ main() {
         ap-edit) cmd_ap_edit "$@" ;;
         ap-start) cmd_ap_start "$@" ;;
         ap-stop) cmd_ap_stop "$@" ;;
+        ap-restart) cmd_ap_restart "$@" ;;
         gateway-check|nat-check) cmd_gateway_check "$@" ;;
         gateway-start|nat-start) cmd_gateway_start "$@" ;;
         gateway-stop|nat-stop) cmd_gateway_stop "$@" ;;
