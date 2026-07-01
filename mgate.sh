@@ -1288,7 +1288,87 @@ EOF_WEB_INDEX
 
 generate_web_style() {
     cat > "$WEB_CSS_FILE" <<'EOF_WEB_CSS'
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;margin:0;background:#f6f7f9;color:#222}.wrap{max-width:1080px;margin:0 auto;padding:20px}.card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}h1{font-size:24px;margin:0 0 8px}h2{font-size:18px;margin:0 0 12px}h3{font-size:15px;margin:0 0 6px}.muted{color:#666;font-size:13px}.nav{display:flex;flex-wrap:wrap;gap:8px}.btn,button{display:inline-block;border:1px solid #bbb;border-radius:8px;background:#fff;color:#222;padding:8px 12px;text-decoration:none;font-size:14px;cursor:pointer}.btn:hover,button:hover{background:#f0f0f0}.danger{border-color:#c33;color:#a00}.primary{border-color:#2673d9;color:#0756b1}.good{border-color:#16a34a}.warn{border-color:#d97706}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.mini{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px}.mini strong{display:block;font-size:16px;margin-top:4px;word-break:break-word}.mini span{color:#666;font-size:12px}.table{width:100%;border-collapse:collapse}.table th,.table td{border-bottom:1px solid #eee;padding:8px;text-align:left;vertical-align:top;font-size:13px}.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#f2f2f2;border-radius:6px;padding:2px 5px;word-break:break-all}pre{background:#111;color:#eee;padding:12px;border-radius:8px;overflow:auto;white-space:pre-wrap;word-break:break-word}.row{margin:8px 0}input[type=password],input[type=text]{padding:8px;border:1px solid #bbb;border-radius:6px;min-width:260px}.footer{margin-top:20px;color:#777;font-size:12px}.split{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.pill{display:inline-block;border:1px solid #ddd;border-radius:999px;padding:3px 8px;font-size:12px;color:#555;background:#fafafa}details{margin:8px 0}summary{cursor:pointer;color:#0756b1}
+:root{--sb:#1e293b;--sb-txt:#94a3b8;--sb-act:#3b82f6;--sb-act-bg:rgba(59,130,246,.15);--sb-sec:#475569;--sb-w:220px;--accent:#3b82f6;--accent-h:#2563eb;--danger:#ef4444;--warn-c:#f59e0b;--good-c:#22c55e;--bg:#f1f5f9;--card:#fff;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--r:10px;--sh:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06)}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+.layout{display:flex;min-height:100vh}
+.sidebar{width:var(--sb-w);background:var(--sb);color:var(--sb-txt);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:100;transition:transform .2s ease}
+.sb-logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
+.sb-mark{width:32px;height:32px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:900;color:#fff;flex-shrink:0}
+.sb-name{font-size:17px;font-weight:700;color:#f1f5f9;letter-spacing:-.3px}
+.sb-nav{padding:10px 0;flex:1}
+.sb-sec{padding:14px 16px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--sb-sec)}
+.nav-link{display:flex;align-items:center;gap:8px;padding:8px 12px;margin:1px 8px;border-radius:7px;text-decoration:none;color:var(--sb-txt);font-size:13px;transition:background .12s,color .12s}
+.nav-link:hover{background:rgba(255,255,255,.07);color:#e2e8f0}
+.nav-link.active{background:var(--sb-act-bg);color:#93c5fd;font-weight:600}
+.nav-link.nl-danger{color:#fca5a5}
+.nav-link.nl-danger:hover{background:rgba(239,68,68,.08)}
+.main{flex:1;margin-left:var(--sb-w);display:flex;flex-direction:column;min-height:100vh}
+.topbar{height:54px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 24px;position:sticky;top:0;z-index:50;box-shadow:0 1px 0 var(--border)}
+.menu-btn{display:none;padding:6px;border:none;background:none;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;border-radius:6px}
+.menu-btn:hover{background:var(--bg)}
+.pg-title{font-size:15px;font-weight:600;margin:0;flex:1;color:var(--text)}
+.tb-actions{display:flex;gap:8px}
+.content{padding:24px;flex:1;max-width:1200px;width:100%}
+.pg-footer{padding:14px 24px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;background:var(--card)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin:0 0 16px;box-shadow:var(--sh)}
+h2{font-size:14px;font-weight:700;margin:0 0 16px;color:var(--text);text-transform:uppercase;letter-spacing:.04em}
+h3{font-size:13px;font-weight:600;margin:0 0 8px}
+.card-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 16px}
+.card-title h2{margin:0}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:0 0 20px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:20px;box-shadow:var(--sh);position:relative;overflow:hidden}
+.stat-card::after{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.stat-card.sc-good::after{background:var(--good-c)}
+.stat-card.sc-warn::after{background:var(--warn-c)}
+.stat-card.sc-danger::after{background:var(--danger)}
+.stat-card.sc-unknown::after{background:#94a3b8}
+.stat-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+.stat-val{font-size:20px;font-weight:700;color:var(--text);margin:0 0 6px;word-break:break-word}
+.stat-sub{font-size:12px;color:var(--muted)}
+.stat-badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;margin:4px 0}
+.stat-badge::before{content:'';width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.sb-good{background:#dcfce7;color:#15803d}.sb-good::before{background:var(--good-c)}
+.sb-warn{background:#fef3c7;color:#92400e}.sb-warn::before{background:var(--warn-c)}
+.sb-danger{background:#fee2e2;color:#991b1b}.sb-danger::before{background:var(--danger)}
+.sb-unknown{background:#f1f5f9;color:#475569}.sb-unknown::before{background:#94a3b8}
+.btn,button{display:inline-flex;align-items:center;justify-content:center;padding:7px 14px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-weight:500;text-decoration:none;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s;white-space:nowrap;font-family:inherit}
+.btn:hover,button:hover{background:#f8fafc;border-color:#cbd5e1;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.primary:hover,.btn.primary:hover{background:var(--accent-h);border-color:var(--accent-h)}
+.danger,.btn.danger{color:var(--danger);border-color:#fecaca}
+.danger:hover,.btn.danger:hover{background:#fee2e2}
+.btn-sm{padding:5px 10px;font-size:12px;border-radius:6px}
+.btn-group{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+.row{margin:12px 0}
+input[type=text],input[type=password]{padding:8px 12px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--text);font-size:13px;min-width:280px;max-width:100%;outline:none;transition:border-color .12s,box-shadow .12s;font-family:inherit}
+input[type=text]:focus,input[type=password]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+.table{width:100%;border-collapse:collapse;font-size:13px}
+.table th{text-align:left;padding:8px 12px;font-weight:700;color:var(--muted);border-bottom:2px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.table td{padding:10px 12px;border-bottom:1px solid #f8fafc;vertical-align:top}
+.table tr:last-child td{border-bottom:none}
+.table tr:hover td{background:#fafcff}
+.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#f1f5f9;border-radius:5px;padding:2px 6px;font-size:12px;word-break:break-all}
+pre{background:#0f172a;color:#e2e8f0;padding:16px;border-radius:8px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;margin:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.muted{color:var(--muted);font-size:13px}
+.pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;background:#f1f5f9;color:var(--muted);border:1px solid var(--border)}
+.pill.good{background:#dcfce7;color:#15803d;border-color:#86efac}
+.pill.warn{background:#fef3c7;color:#92400e;border-color:#fcd34d}
+.pill.danger{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.warn-box{background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:12px 16px;font-size:13px;color:#92400e;margin:8px 0}
+details{margin:8px 0}
+summary{cursor:pointer;color:var(--accent);font-size:13px}
+@media(max-width:768px){
+.sidebar{transform:translateX(-100%)}
+.sidebar.open{transform:translateX(0);box-shadow:4px 0 24px rgba(0,0,0,.2)}
+.main{margin-left:0}
+.menu-btn{display:flex}
+.content{padding:16px}
+.stat-grid{grid-template-columns:1fr 1fr}
+.topbar{padding:0 16px}
+.grid2{grid-template-columns:1fr}
+}
 EOF_WEB_CSS
 }
 generate_mgate_cgi() {
@@ -1355,59 +1435,80 @@ page_start() {
     title="$1"
     cat <<EOF
 <!doctype html>
-<html>
+<html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>$title</title>
+<title>$title — mgate</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=$FAVICON_VER">
 <link rel="stylesheet" href="/static/style.css?v=$FAVICON_VER">
 </head>
-<body><div class="wrap">
-<h1>mgate Web</h1>
-<div class="muted">轻量级 Mihomo 网关管理</div>
+<body>
+<div class="layout">
+<aside class="sidebar" id="sidebar">
+<div class="sb-logo">
+<div class="sb-mark">M</div>
+<span class="sb-name">mgate</span>
+</div>
+<nav class="sb-nav">
+<div class="sb-sec">概览</div>
+<a class="nav-link" data-act="status" href="?action=status">Dashboard</a>
+<div class="sb-sec">代理</div>
+<a class="nav-link" data-act="proxy-info" href="?action=proxy-info">连接信息</a>
+<a class="nav-link" data-act="group-page" href="?action=group-page">Group 管理</a>
+<a class="nav-link" data-act="sub-status" href="?action=sub-status">订阅状态</a>
+<a class="nav-link" data-act="sub-set" href="?action=sub-set">设置订阅</a>
+<a class="nav-link" data-act="account-password" href="?action=account-password">账号密码</a>
+<div class="sb-sec">网络</div>
+<a class="nav-link" data-act="gateway-status" href="?action=gateway-status">网关 / NAT</a>
+<a class="nav-link" data-act="tproxy-health" href="?action=tproxy-health">TProxy</a>
+<a class="nav-link" data-act="wifi-page" href="?action=wifi-page">WiFi 管理</a>
+<div class="sb-sec">系统</div>
+<a class="nav-link" data-act="doctor" href="?action=doctor">系统诊断</a>
+<a class="nav-link" data-act="logs" href="?action=logs&amp;lines=100">查看日志</a>
+<a class="nav-link" data-act="config" href="?action=config">查看配置</a>
+<a class="nav-link" data-act="backups" href="?action=backups">备份</a>
+<a class="nav-link" data-act="version" href="?action=version">版本</a>
+<div class="sb-sec">管理</div>
+<a class="nav-link" data-act="token" href="?action=token">Web Token</a>
+<a class="nav-link nl-danger" href="?action=logout">退出登录</a>
+</nav>
+</aside>
+<div class="main">
+<header class="topbar">
+<button class="menu-btn" onclick="document.getElementById('sidebar').classList.toggle('open')">&#9776;</button>
+<span class="pg-title">$title</span>
+<div class="tb-actions">
+<a class="btn btn-sm primary" href="?action=start">启动</a>
+<a class="btn btn-sm" href="?action=confirm&amp;target=restart">重启</a>
+<a class="btn btn-sm danger" href="?action=confirm&amp;target=stop">停止</a>
+</div>
+</header>
+<div class="content">
 EOF
 }
 
-nav() {
-    cat <<'EOF'
-<div class="card"><div class="nav">
-<a class="btn" href="/cgi-bin/mgate.cgi?action=status">首页</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=version">版本</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=doctor">诊断</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=proxy-info">连接信息</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-status">网关状态</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=account-password">账号密码</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=group-page">Group 管理</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=sub-status">订阅状态</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=wifi-page">WiFi 管理</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=sub-set">设置订阅</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-update">更新订阅</a>
-<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-clear">清除订阅</a>
-<a class="btn primary" href="/cgi-bin/mgate.cgi?action=start">启动服务</a>
-<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=stop">停止服务</a>
-<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=restart">重启服务</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=test">测试配置</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=logs&lines=100">查看日志</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=config">查看配置</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=backups">备份</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=backup">创建备份</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=token">Token</a>
-<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=self-update">自更新</a>
-<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=web-disable">关闭 Web 管理</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=logout">退出登录</a>
-</div></div>
-EOF
-}
+nav() { :; }
+
 page_end() {
     host_display="${HTTP_HOST:-0.0.0.0:$WEB_PORT}"
     cat <<EOF
-<div class="footer">
-  <div>访问地址：<span class="code">http://$(printf '%s' "$host_display" | html_escape)</span></div>
-  <div>mgate Web 仅建议在局域网内使用，请不要暴露到公网。</div>
 </div>
-</div></body></html>
+<footer class="pg-footer">
+<span>mgate Web &middot; 仅建议在局域网内使用</span>
+<span class="code">http://$(printf '%s' "$host_display" | html_escape)</span>
+</footer>
+</div></div>
+<script>
+(function(){
+var m=location.search.match(/[?&]action=([^&]*)/);
+var a=m?m[1]:'status';
+document.querySelectorAll('.nav-link[data-act]').forEach(function(el){
+if(el.dataset.act===a)el.classList.add('active');
+});
+})();
+</script>
+</body></html>
 EOF
 }
 
@@ -1821,65 +1922,65 @@ EOF
     printf '</pre></div>\n'
     page_end
 }
+_sc() {
+    # _sc label value class [sub]
+    _sc_cls="sc-unknown"; case "$3" in good) _sc_cls="sc-good";; warn) _sc_cls="sc-warn";; danger) _sc_cls="sc-danger";; esac
+    _sc_bdg="sb-unknown"; case "$3" in good) _sc_bdg="sb-good";; warn) _sc_bdg="sb-warn";; danger) _sc_bdg="sb-danger";; esac
+    printf '<div class="stat-card %s"><div class="stat-label">%s</div><div class="stat-val"><span class="stat-badge %s">%s</span></div>%s</div>\n' \
+        "$_sc_cls" \
+        "$(printf '%s' "$1" | html_escape)" \
+        "$_sc_bdg" \
+        "$(printf '%s' "$2" | html_escape)" \
+        "$([ -n "${4:-}" ] && printf '<div class="stat-sub">%s</div>' "$(printf '%s' "$4" | html_escape)")"
+}
+
 status_page() {
     header
-    page_start "状态"
+    page_start "Dashboard"
     nav
     status_out="$($MGATE status 2>&1)"
     version_out="$($MGATE version 2>&1)"
     web_collect_gateway_state "$status_out"
 
-    svc_line="$(printf '%s\n' "$status_out" | grep '服务状态' | head -n 1)"
-    [ -n "$svc_line" ] || svc_line="$(printf '%s\n' "$status_out" | grep '运行中\|服务未运行' | head -n 1)"
-    [ -n "$svc_line" ] || svc_line="未知"
-    case "$svc_line" in *'active'*|*'running'*|*'运行中'*) svc_class="good" ;; *) svc_class="warn" ;; esac
+    # Mihomo service state
+    case "$WEB_MIHOMO_RUNNING" in
+        yes|true) svc_val="running"; svc_cls="good" ;;
+        *) svc_val="stopped"; svc_cls="warn" ;;
+    esac
 
-    core_line="$(printf '%s\n' "$status_out" | grep '内核版本\|Mihomo 内核未安装' | head -n 1)"
-    [ -n "$core_line" ] || core_line="未知"
-    case "$core_line" in *未安装*) core_class="warn" ;; *) core_class="good" ;; esac
+    # Overall health
+    case "$WEB_FINAL_HEALTH" in
+        healthy) health_cls="good" ;; degraded|broken) health_cls="danger" ;; *) health_cls="warn" ;;
+    esac
 
-    boot_line="$(printf '%s\n' "$status_out" | grep '开机自启' | head -n 1)"
-    [ -n "$boot_line" ] || boot_line="未知"
-    case "$boot_line" in *enabled*|*启用*) boot_class="good" ;; *) boot_class="warn" ;; esac
-
-    if [ -f "$CONFIG_FILE" ]; then
-        cfg_line="已存在"
-        cfg_class="good"
-    else
-        cfg_line="不存在"
-        cfg_class="warn"
-    fi
-
-    cat <<'EOF'
-<div class="card"><h2>状态概览</h2><div class="grid">
-EOF
-    summary_card "mgate 服务" "$svc_line" "$svc_class"
-    summary_card "Mihomo 内核" "$core_line" "$core_class"
-    summary_card "开机自启" "$boot_line" "$boot_class"
-    summary_card "配置文件" "$cfg_line" "$cfg_class"
-    summary_card "Mixed 代理" "$DEFAULT_MIXED_PORT" ""
-    summary_card "支持协议" "HTTP / SOCKS5" ""
-    summary_card "AP" "$WEB_AP_STATE" "$(web_class_for_state "$WEB_AP_STATE")"
-    summary_card "网关模式" "$WEB_GATEWAY_MODE" "$(web_class_for_state "$WEB_GATEWAY_MODE")"
-    summary_card "NAT fallback" "$WEB_NAT_FALLBACK" "$(web_class_for_state "$WEB_NAT_FALLBACK")"
-    summary_card "TProxy" "$WEB_TPROXY_ENABLED" "$(web_class_for_state "$WEB_TPROXY_ENABLED")"
-    summary_card "健康状态" "$WEB_FINAL_HEALTH" "$(web_class_for_state "$WEB_FINAL_HEALTH")"
-    cat <<'EOF'
-</div></div>
-EOF
-    cat <<'EOF'
-<div class="card"><h2>网关状态</h2>
-<p><span class="pill">只读</span></p>
-<p><a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-status">网关状态</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-doctor">网关诊断</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-doctor">TProxy 诊断</a></p>
+    cat <<EOF
+<div class="stat-grid">
+$(_sc "Mihomo" "$svc_val" "$svc_cls" "混合端口 $DEFAULT_MIXED_PORT")
+$(_sc "AP 热点" "$WEB_AP_STATE" "$(web_class_for_state "$WEB_AP_STATE")" "${WEB_AP_IP:-—}")
+$(_sc "网关 / NAT" "$WEB_NAT_FALLBACK" "$(web_class_for_state "$WEB_NAT_FALLBACK")" "$WEB_GATEWAY_MODE")
+$(_sc "TProxy" "$WEB_TPROXY_ENABLED" "$(web_class_for_state "$WEB_TPROXY_ENABLED")" "端口 $TPROXY_PORT")
+$(_sc "整体健康" "$WEB_FINAL_HEALTH" "$health_cls" "")
 </div>
 EOF
 
-    printf '<div class="card"><h2>详细状态</h2><pre>'
-    printf '%s\n' "$status_out" | html_escape
-    printf '</pre></div>\n'
+    # Quick actions
+    cat <<'EOF'
+<div class="card">
+<div class="card-title"><h2>快捷操作</h2></div>
+<div class="btn-group">
+<a class="btn primary" href="?action=start">启动 Mihomo</a>
+<a class="btn" href="?action=confirm&target=restart">重启</a>
+<a class="btn danger" href="?action=confirm&target=stop">停止</a>
+<a class="btn" href="?action=test">测试配置</a>
+<a class="btn" href="?action=logs&lines=100">查看日志</a>
+<a class="btn" href="?action=gateway-status">网关详情</a>
+<a class="btn" href="?action=tproxy-health">TProxy 健康</a>
+<a class="btn" href="?action=doctor">系统诊断</a>
+</div>
+</div>
+EOF
+
+    # Version
     printf '<div class="card"><h2>版本信息</h2><pre>'
     printf '%s\n' "$version_out" | html_escape
     printf '</pre></div>\n'
