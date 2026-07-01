@@ -124,6 +124,9 @@ SUB_LAST_LOG_FILE="$LOG_DIR/sub-update.last.log"
 SUB_LAST_TMP_FILE="$DATA_DIR/sub.last_tmp"
 SUB_NODES_FILE="$DATA_DIR/sub.nodes"
 SUB_UNMATCHED_FILE="$DATA_DIR/sub.unmatched"
+GROUPS_DIR="$DATA_DIR/groups"
+ACTIVE_GROUP_FILE="$GROUPS_DIR/.active"
+CUSTOM_PROVIDER_FILE="$SUB_PROVIDER_DIR/custom.yaml"
 
 # Keep output plain ASCII for embedded routers and SSH terminals.
 # No emoji, no ANSI color, no terminal control sequences.
@@ -8138,6 +8141,18 @@ cmd_migrate() {
     ensure_dirs
     MIGRATE_CONFIG_CHANGED=0
 
+    # 初始化 group 目录和 custom.yaml
+    mkdir -p "$GROUPS_DIR" "$SUB_PROVIDER_DIR" 2>/dev/null || true
+    if [ ! -f "$CUSTOM_PROVIDER_FILE" ]; then
+        printf 'proxies: []\n' > "$CUSTOM_PROVIDER_FILE" 2>/dev/null && \
+            ok "migrate: 已初始化 $CUSTOM_PROVIDER_FILE" || true
+    fi
+    # 已有 sub.yaml 且无 active 记录 → 迁移为 default group
+    if [ -f "$SUB_PROVIDER_FILE" ] && [ ! -f "$ACTIVE_GROUP_FILE" ]; then
+        printf 'default\n' > "$ACTIVE_GROUP_FILE" 2>/dev/null && \
+            ok "migrate: 已设置当前 group 为 default" || true
+    fi
+
     migrate_patch_config
 
     step "刷新 Web 管理文件"
@@ -8797,6 +8812,208 @@ cmd_account_password() {
     esac
 }
 
+# -----------------------------
+# Group / 多订阅管理
+# -----------------------------
+group_active() {
+    [ -f "$ACTIVE_GROUP_FILE" ] && \
+        tr -d '[:space:]' < "$ACTIVE_GROUP_FILE" 2>/dev/null | head -1 || printf 'default\n'
+}
+
+group_provider_file() {
+    case "$1" in
+        custom)  printf '%s\n' "$CUSTOM_PROVIDER_FILE" ;;
+        default) printf '%s\n' "$SUB_PROVIDER_FILE" ;;
+        *)       printf '%s\n' "$SUB_PROVIDER_DIR/group-${1}.yaml" ;;
+    esac
+}
+
+group_url_file() {
+    case "$1" in
+        custom)  printf '\n' ;;
+        default) printf '%s\n' "$SUB_URL_FILE" ;;
+        *)       printf '%s\n' "$GROUPS_DIR/${1}.url" ;;
+    esac
+}
+
+group_apply_from_cache() {
+    # 从缓存 provider 文件重建配置（不需要网络），切换激活 group
+    _gap_name="$1"
+    _gap_file="$(group_provider_file "$_gap_name")"
+    [ -f "$_gap_file" ] || {
+        err "Group '$_gap_name' 无缓存，请先执行：mgate sub-update $_gap_name"
+        return 1
+    }
+    ensure_sub_dirs
+    _gap_work="$TMP_DIR/group-apply.$$"
+    mkdir -p "$_gap_work" "$_gap_work/test-config/providers" || return 1
+
+    step "从缓存切换到 group '$_gap_name'"
+    extract_sub_names "$_gap_file" "$_gap_work/names.txt"
+    _gap_nc="$(wc -l < "$_gap_work/names.txt" 2>/dev/null | awk '{print $1}')"
+    [ "${_gap_nc:-0}" -gt 0 ] 2>/dev/null || {
+        err "缓存文件中未提取到节点"; rm -rf "$_gap_work"; return 1
+    }
+    sub_detect_countries "$_gap_work/names.txt" "$_gap_work/countries.txt" "$_gap_work/counts.txt"
+    sub_generate_node_observability "$_gap_work/names.txt" "$_gap_work/nodes.txt" "$_gap_work/unmatched.txt"
+    generate_accounts_file "$_gap_work/countries.txt" "$SUB_ACCOUNTS_FILE" "$_gap_work/accounts.txt"
+    cp "$_gap_file" "$_gap_work/test-config/providers/sub.yaml"
+    generate_sub_config_file "$_gap_work/test-config/config.yaml" "./providers/sub.yaml" \
+        "$_gap_work/accounts.txt" "$_gap_work/countries.txt"
+    if ! "$CORE_BIN" -t -d "$_gap_work/test-config" -f "$_gap_work/test-config/config.yaml" \
+            >/dev/null 2>&1; then
+        err "Group '$_gap_name' 配置测试失败"; rm -rf "$_gap_work"; return 1
+    fi
+    generate_sub_config_file "$_gap_work/config-final.yaml" "./providers/sub.yaml" \
+        "$_gap_work/accounts.txt" "$_gap_work/countries.txt"
+    cp "$_gap_file"              "$SUB_PROVIDER_FILE"
+    cp "$_gap_work/accounts.txt"  "$SUB_ACCOUNTS_FILE"
+    cp "$_gap_work/countries.txt" "$SUB_COUNTRIES_FILE"
+    cp "$_gap_work/counts.txt"    "$SUB_STATUS_FILE"
+    cp "$_gap_work/nodes.txt"     "$SUB_NODES_FILE"
+    cp "$_gap_work/unmatched.txt" "$SUB_UNMATCHED_FILE"
+    cp "$_gap_work/config-final.yaml" "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE" "$SUB_ACCOUNTS_FILE" 2>/dev/null || true
+    mkdir -p "$GROUPS_DIR"
+    printf '%s\n' "$_gap_name" > "$ACTIVE_GROUP_FILE"
+    rm -rf "$_gap_work"
+    info "节点数量：$_gap_nc"
+    ok "已切换到 group '$_gap_name'"
+    service_restart
+}
+
+sub_download_to_group() {
+    # 下载订阅并缓存到 group 文件（不立即应用）
+    _gdl_name="$1"; _gdl_url="$2"
+    _gdl_file="$(group_provider_file "$_gdl_name")"
+    _gdl_work="$TMP_DIR/group-dl.$$"
+    mkdir -p "$_gdl_work" || return 1
+    sub_fetch_to_file "$_gdl_url" "$_gdl_work/sub.yaml" || {
+        err "Group '$_gdl_name' 下载失败"; rm -rf "$_gdl_work"; return 1
+    }
+    validate_sub_file "$_gdl_work/sub.yaml" || { rm -rf "$_gdl_work"; return 1; }
+    mkdir -p "$SUB_PROVIDER_DIR" "$GROUPS_DIR"
+    cp "$_gdl_work/sub.yaml" "$_gdl_file"
+    date '+%Y-%m-%d %H:%M:%S' 2>/dev/null > "$GROUPS_DIR/${_gdl_name}.updated" || true
+    ok "Group '$_gdl_name' 缓存已更新"
+    rm -rf "$_gdl_work"
+}
+
+cmd_group() {
+    _grp_target="${1:-}"
+    _grp_active="$(group_active)"
+
+    if [ -z "$_grp_target" ]; then
+        # 列出所有 group
+        step "代理来源 Group（当前：$_grp_active）"
+        _grp_mark=""; [ "$_grp_active" = "default" ] && _grp_mark=" *"
+        if [ -s "$SUB_URL_FILE" ]; then
+            _grp_upd="$(cat "$SUB_LAST_UPDATE_FILE" 2>/dev/null || printf '从未更新')"
+            info "  default${_grp_mark}  [订阅] 上次更新：$_grp_upd"
+        else
+            info "  default${_grp_mark}  [订阅] 未配置"
+        fi
+        if [ -d "$GROUPS_DIR" ]; then
+            for _grp_uf in "$GROUPS_DIR"/*.url; do
+                [ -f "$_grp_uf" ] || continue
+                _grp_n="${_grp_uf##*/}"; _grp_n="${_grp_n%.url}"
+                _grp_upd="$(cat "$GROUPS_DIR/${_grp_n}.updated" 2>/dev/null || printf '从未更新')"
+                _grp_mark=""; [ "$_grp_active" = "$_grp_n" ] && _grp_mark=" *"
+                info "  ${_grp_n}${_grp_mark}  [订阅] 上次更新：$_grp_upd"
+            done
+        fi
+        _grp_mark=""; [ "$_grp_active" = "custom" ] && _grp_mark=" *"
+        if [ -f "$CUSTOM_PROVIDER_FILE" ]; then
+            info "  custom${_grp_mark}  [自定义] 文件：$CUSTOM_PROVIDER_FILE"
+        else
+            info "  custom${_grp_mark}  [自定义] 未初始化"
+        fi
+        say ""
+        hint "切换：mgate group <名称>  添加订阅：mgate sub-add <名称> <url>"
+        return 0
+    fi
+
+    [ "$_grp_target" = "$_grp_active" ] && { info "当前已是 group '$_grp_target'"; return 0; }
+    need_root
+
+    case "$_grp_target" in
+        custom)
+            if [ ! -f "$CUSTOM_PROVIDER_FILE" ]; then
+                mkdir -p "$SUB_PROVIDER_DIR"
+                printf 'proxies: []\n' > "$CUSTOM_PROVIDER_FILE"
+                warn "custom.yaml 尚为空，请编辑后再切换：$CUSTOM_PROVIDER_FILE"
+                return 1
+            fi
+            step "切换到自定义节点组"
+            cp "$CUSTOM_PROVIDER_FILE" "$SUB_PROVIDER_FILE"
+            mkdir -p "$GROUPS_DIR"
+            printf '%s\n' "custom" > "$ACTIVE_GROUP_FILE"
+            service_restart
+            ok "已切换到 custom 组"
+            hint "编辑节点：$CUSTOM_PROVIDER_FILE  然后重新切换：mgate group custom"
+            ;;
+        default)
+            [ -s "$SUB_URL_FILE" ] || { err "default 订阅未配置，请先执行：mgate sub-set <url>"; return 1; }
+            _grp_gf="$(group_provider_file "default")"
+            if [ -f "$_grp_gf" ]; then
+                group_apply_from_cache "default"
+            else
+                _grp_url="$(cat "$SUB_URL_FILE" 2>/dev/null)"
+                sub_update_from_url "$_grp_url"
+                mkdir -p "$GROUPS_DIR"
+                printf '%s\n' "default" > "$ACTIVE_GROUP_FILE"
+            fi
+            ;;
+        *)
+            _grp_uf="$GROUPS_DIR/${_grp_target}.url"
+            [ -f "$_grp_uf" ] || { err "Group '$_grp_target' 不存在"; hint "查看：mgate group"; return 1; }
+            _grp_gf="$(group_provider_file "$_grp_target")"
+            if [ -f "$_grp_gf" ]; then
+                group_apply_from_cache "$_grp_target"
+            else
+                _grp_url="$(cat "$_grp_uf" 2>/dev/null)"
+                step "首次切换到 '$_grp_target'，需要拉取订阅"
+                sub_download_to_group "$_grp_target" "$_grp_url" || return 1
+                group_apply_from_cache "$_grp_target"
+            fi
+            ;;
+    esac
+}
+
+cmd_sub_add() {
+    need_root
+    _sadd_name="${1:-}"; _sadd_url="${2:-}"
+    [ -n "$_sadd_name" ] && [ -n "$_sadd_url" ] || {
+        err "用法：mgate sub-add <名称> <url>"; return 1
+    }
+    case "$_sadd_name" in
+        custom|default|.*) err "保留名称，不可用：$_sadd_name"; return 1 ;;
+    esac
+    mkdir -p "$GROUPS_DIR"
+    printf '%s\n' "$_sadd_url" > "$GROUPS_DIR/${_sadd_name}.url"
+    ok "已添加订阅 group：$_sadd_name"
+    hint "立即拉取：mgate sub-update $_sadd_name"
+    hint "切换激活：mgate group $_sadd_name"
+}
+
+cmd_sub_del() {
+    need_root
+    _sdel_name="${1:-}"
+    [ -n "$_sdel_name" ] || { err "用法：mgate sub-del <名称>"; return 1; }
+    case "$_sdel_name" in
+        custom|default) err "保留 group，不可删除：$_sdel_name"; return 1 ;;
+    esac
+    _sdel_uf="$GROUPS_DIR/${_sdel_name}.url"
+    [ -f "$_sdel_uf" ] || { err "Group '$_sdel_name' 不存在"; return 1; }
+    _sdel_active="$(group_active)"
+    [ "$_sdel_active" = "$_sdel_name" ] && \
+        warn "正在删除当前激活的 group，删除后请手动切换：mgate group <名称>"
+    tui_confirm "确认删除 group '$_sdel_name'？" || return 1
+    rm -f "$_sdel_uf" "$GROUPS_DIR/${_sdel_name}.updated" \
+        "$(group_provider_file "$_sdel_name")" 2>/dev/null || true
+    ok "已删除 group '$_sdel_name'"
+}
+
 cmd_sub_set() {
     need_root
     url="${1:-}"
@@ -8805,14 +9022,74 @@ cmd_sub_set() {
         read -r url
     fi
     [ -n "$url" ] || die "订阅链接为空"
+    # sub-set 更新 default 订阅并激活
     sub_update_from_url "$url"
+    mkdir -p "$GROUPS_DIR"
+    printf '%s\n' "default" > "$ACTIVE_GROUP_FILE"
 }
 
 cmd_sub_update() {
     need_root
-    [ -s "$SUB_URL_FILE" ] || die "未设置订阅链接，请先执行：mgate sub-set <url>"
-    url="$(cat "$SUB_URL_FILE" 2>/dev/null)"
-    sub_update_from_url "$url"
+    _supd_target="${1:-}"
+
+    # --all：更新所有订阅 group
+    if [ "$_supd_target" = "--all" ]; then
+        _supd_active="$(group_active)"
+        step "更新所有订阅 group"
+        # default
+        if [ -s "$SUB_URL_FILE" ]; then
+            step "更新 default"
+            _supd_url="$(cat "$SUB_URL_FILE" 2>/dev/null)"
+            if sub_download_to_group "default" "$_supd_url"; then
+                [ "$_supd_active" = "default" ] && group_apply_from_cache "default" || true
+            else
+                warn "default 更新失败"
+            fi
+        fi
+        # 命名 group
+        [ -d "$GROUPS_DIR" ] && for _supd_uf in "$GROUPS_DIR"/*.url; do
+            [ -f "$_supd_uf" ] || continue
+            _supd_gn="${_supd_uf##*/}"; _supd_gn="${_supd_gn%.url}"
+            _supd_url="$(cat "$_supd_uf" 2>/dev/null)"
+            step "更新 group '$_supd_gn'"
+            if sub_download_to_group "$_supd_gn" "$_supd_url"; then
+                [ "$_supd_active" = "$_supd_gn" ] && group_apply_from_cache "$_supd_gn" || true
+            else
+                warn "group '$_supd_gn' 更新失败"
+            fi
+        done
+        ok "全部订阅更新完毕"
+        return 0
+    fi
+
+    # 指定 group 名：只更新该 group 的缓存，如果是激活状态则同时应用
+    if [ -n "$_supd_target" ] && [ "$_supd_target" != "default" ]; then
+        _supd_uf="$GROUPS_DIR/${_supd_target}.url"
+        [ -f "$_supd_uf" ] || { err "Group '$_supd_target' 不存在"; return 1; }
+        _supd_url="$(cat "$_supd_uf" 2>/dev/null)"
+        sub_download_to_group "$_supd_target" "$_supd_url" || return 1
+        _supd_active="$(group_active)"
+        [ "$_supd_active" = "$_supd_target" ] && group_apply_from_cache "$_supd_target"
+        return 0
+    fi
+
+    # 无参数：更新当前激活的 group
+    _supd_active="$(group_active)"
+    case "$_supd_active" in
+        custom)
+            warn "custom 组无订阅 URL，直接编辑节点文件：$CUSTOM_PROVIDER_FILE"; return 1 ;;
+        default|"")
+            [ -s "$SUB_URL_FILE" ] || die "未设置订阅链接，请先执行：mgate sub-set <url>"
+            _supd_url="$(cat "$SUB_URL_FILE" 2>/dev/null)"
+            sub_download_to_group "default" "$_supd_url" || return 1
+            group_apply_from_cache "default" ;;
+        *)
+            _supd_uf="$GROUPS_DIR/${_supd_active}.url"
+            [ -f "$_supd_uf" ] || { err "当前 group '$_supd_active' 没有 URL"; return 1; }
+            _supd_url="$(cat "$_supd_uf" 2>/dev/null)"
+            sub_download_to_group "$_supd_active" "$_supd_url" || return 1
+            group_apply_from_cache "$_supd_active" ;;
+    esac
 }
 
 cmd_sub_debug() {
@@ -9039,9 +9316,15 @@ Agent 接口（只读，JSON，schema_version=1）：
   mgate backups             查看备份列表
   mgate restore [id|latest] 恢复备份
 
-订阅管理：
-  mgate sub-set <url>       设置/替换订阅并立即更新配置
-  mgate sub-update          拉取已保存订阅并更新配置
+代理来源 Group：
+  mgate group                         查看所有 group 及当前激活状态
+  mgate group <名称>                   切换到指定 group（subscription/custom）
+  mgate sub-add <名称> <url>          添加命名订阅 group
+  mgate sub-del <名称>                删除命名订阅 group
+  mgate sub-update [名称|--all]       更新订阅（默认当前激活）
+
+订阅管理（操作当前激活 group）：
+  mgate sub-set <url>       设置默认订阅（等同于 sub-add default + group default）
   mgate sub-status          查看订阅状态和账号
   mgate sub-nodes           查看节点国家/地区识别结果
   mgate sub-unmatched       查看未识别到国家/地区的节点
@@ -9373,17 +9656,19 @@ menu_sub() {
     while :; do
         tui_header "订阅 / 账号"
         say ""
-        say "   1.  设置订阅"
-        say "   2.  更新订阅"
-        say "   3.  查看订阅状态"
-        say "   4.  查看节点识别结果"
-        say "   5.  查看未识别节点"
-        say "   6.  调试信息"
-        say "   7.  清除订阅"
+        say "   1.  查看 / 切换 Group"
+        say "   2.  添加命名订阅"
+        say "   3.  删除命名订阅"
+        say "   4.  更新订阅（当前激活）"
+        say "   5.  更新所有订阅"
+        say "   6.  设置默认订阅"
+        say "   7.  查看订阅状态"
+        say "   8.  查看节点识别结果"
+        say "   9.  清除订阅"
         say ""
-        say "   8.  查看代理连接信息"
-        say "   9.  查看账号默认密码"
-        say "  10.  修改账号默认密码"
+        say "  10.  查看代理连接信息"
+        say "  11.  查看账号默认密码"
+        say "  12.  修改账号默认密码"
         say ""
         say "   0.  返回  ( Enter 也可 )"
         say ""
@@ -9392,25 +9677,45 @@ menu_sub() {
         case "$choice" in
             ""|0) return 0 ;;
             1)
+                cmd_group; pause_enter
+                printf 'Group 名称（留空不切换）: '
+                read -r _grp || _grp=""
+                [ -n "$_grp" ] && cmd_group "$_grp"
+                pause_enter
+                ;;
+            2)
+                printf '名称: '
+                read -r _gname || _gname=""
+                printf '订阅 URL: '
+                read -r _url || _url=""
+                [ -n "$_gname" ] && [ -n "$_url" ] && cmd_sub_add "$_gname" "$_url" || warn "未输入"
+                pause_enter
+                ;;
+            3)
+                printf 'Group 名称: '
+                read -r _gdel || _gdel=""
+                [ -n "$_gdel" ] && cmd_sub_del "$_gdel" || warn "未输入"
+                pause_enter
+                ;;
+            4) cmd_sub_update; pause_enter ;;
+            5) cmd_sub_update --all; pause_enter ;;
+            6)
                 printf '订阅 URL: '
                 read -r _url || _url=""
                 [ -n "$_url" ] && cmd_sub_set "$_url" || warn "未输入 URL"
                 pause_enter
                 ;;
-            2) cmd_sub_update; pause_enter ;;
-            3) cmd_sub_status; pause_enter ;;
-            4) cmd_sub_nodes; pause_enter ;;
-            5) cmd_sub_unmatched; pause_enter ;;
-            6) cmd_sub_debug; pause_enter ;;
-            7)
+            7) cmd_sub_status; pause_enter ;;
+            8) cmd_sub_nodes; pause_enter ;;
+            9)
                 if tui_confirm "将清除订阅链接和缓存，继续吗？"; then
                     cmd_sub_clear
                 fi
                 pause_enter
                 ;;
-            8) cmd_proxy_info; pause_enter ;;
-            9) cmd_account_password; pause_enter ;;
-            10) cmd_account_password set; pause_enter ;;
+            10) cmd_proxy_info; pause_enter ;;
+            11) cmd_account_password; pause_enter ;;
+            12) cmd_account_password set; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
@@ -9689,6 +9994,9 @@ main() {
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         restore) cmd_restore "$@" ;;
+        group) cmd_group "$@" ;;
+        sub-add) cmd_sub_add "$@" ;;
+        sub-del) cmd_sub_del "$@" ;;
         sub-set) cmd_sub_set "$@" ;;
         sub-update) cmd_sub_update "$@" ;;
         sub-status) cmd_sub_status "$@" ;;
