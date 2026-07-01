@@ -1379,6 +1379,7 @@ nav() {
 <a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-status">网关状态</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=account-password">账号密码</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=group-page">Group 管理</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=sub-status">订阅状态</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=wifi-page">WiFi 管理</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=sub-set">设置订阅</a>
@@ -2137,18 +2138,78 @@ sub_status_page() {
     header
     page_start "订阅状态"
     nav
-    out="$($MGATE sub-status 2>&1)"
+    grp_out="$($MGATE group 2>&1)"
+    sub_out="$($MGATE sub-status 2>&1)"
     cat <<'EOF'
 <div class="card">
-<h2>订阅状态</h2>
+<h2>代理来源 Group</h2>
 <pre>
 EOF
-    printf '%s\n' "$out" | html_escape
+    printf '%s\n' "$grp_out" | html_escape
     cat <<'EOF'
 </pre>
-<p><a class="btn primary" href="/cgi-bin/mgate.cgi?action=sub-set">设置/替换订阅</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-update">更新订阅</a>
+<p><a class="btn" href="/cgi-bin/mgate.cgi?action=group-page">管理 Group</a>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-update">更新当前订阅</a></p>
+</div>
+<div class="card">
+<h2>订阅详情</h2>
+<pre>
+EOF
+    printf '%s\n' "$sub_out" | html_escape
+    cat <<'EOF'
+</pre>
+<p><a class="btn primary" href="/cgi-bin/mgate.cgi?action=sub-set">设置默认订阅</a>
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=sub-clear">清除订阅</a></p>
+</div>
+EOF
+    page_end
+}
+
+group_page() {
+    header
+    page_start "Group 管理"
+    nav
+    grp_out="$($MGATE group 2>&1)"
+    cat <<'EOF'
+<div class="card">
+<h2>当前代理来源</h2>
+<pre>
+EOF
+    printf '%s\n' "$grp_out" | html_escape
+    cat <<'EOF'
+</pre>
+</div>
+<div class="card">
+<h2>切换 Group</h2>
+<p class="muted">切换后将重新加载 mihomo，AP 客户端可能短暂断线。有本地缓存时无需重新下载订阅。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="group-switch-do">
+<div class="row"><input type="text" name="group_name" placeholder="Group 名称（default / work / custom 等）" required autocomplete="off"></div>
+<div class="row"><button class="primary" type="submit">切换</button></div>
+</form>
+</div>
+<div class="card">
+<h2>添加命名订阅</h2>
+<p class="muted">添加后可通过"切换 Group"激活，不影响当前使用的订阅。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="sub-add-do">
+<div class="row"><input type="text" name="sub_name" placeholder="名称（如 work、backup）" required autocomplete="off"></div>
+<div class="row"><input type="text" name="sub_url" placeholder="订阅 URL" required autocomplete="off"></div>
+<div class="row"><button class="primary" type="submit">添加并拉取</button></div>
+</form>
+</div>
+<div class="card">
+<h2>删除命名订阅</h2>
+<p class="muted">只能删除非当前激活的命名订阅（default / custom 不可删除）。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="sub-del-do">
+<div class="row"><input type="text" name="sub_name" placeholder="要删除的 Group 名称" required autocomplete="off"></div>
+<div class="row"><button class="btn danger" type="submit">删除</button></div>
+</form>
+</div>
+<div class="card">
+<h2>批量更新</h2>
+<p><a class="btn" href="/cgi-bin/mgate.cgi?action=sub-update-all-do">更新所有订阅缓存</a></p>
 </div>
 EOF
     page_end
@@ -2259,6 +2320,21 @@ else
         tproxy-doctor) run_job_page "TProxy 诊断" tproxy-doctor ;;
         account-password) account_password_page ;;
         sub-status) sub_status_page ;;
+        group-page) group_page ;;
+        group-switch-do)
+            gname="$(url_decode "$(param_get "$post_body" group_name)")"
+            run_job_page "切换 Group $gname" group "$gname"
+            ;;
+        sub-add-do)
+            sname="$(url_decode "$(param_get "$post_body" sub_name)")"
+            surl="$(url_decode "$(param_get "$post_body" sub_url)")"
+            run_job_page "添加订阅 $sname" sub-add "$sname" "$surl"
+            ;;
+        sub-del-do)
+            sname="$(url_decode "$(param_get "$post_body" sub_name)")"
+            run_job_page "删除订阅 $sname" sub-del "$sname" --yes
+            ;;
+        sub-update-all-do) run_job_page "更新所有订阅" sub-update --all ;;
         wifi-page) wifi_page ;;
         wifi-add-do)
             wifi_ssid="$(url_decode "$(param_get "$post_body" wifi_ssid)")"
@@ -6017,6 +6093,10 @@ cmd_status_json() {
     printf '    "state": '; json_string "$JSON_TPROXY_STATE"; printf ',\n'
     printf '    "final_health": '; json_string "$JSON_TPROXY_FINAL_HEALTH"; printf '\n'
     printf '  },\n'
+    printf '  "subscription": {\n'
+    printf '    "active_group": "%s",\n' "$(group_active 2>/dev/null || printf 'default')"
+    printf '    "url_configured": %s\n' "$([ -s "$SUB_URL_FILE" ] && printf 'true' || printf 'false')"
+    printf '  },\n'
     printf '  "summary": {\n'
     printf '    "final_health": '; json_string "$JSON_STATUS_FINAL_HEALTH"; printf '\n'
     printf '  }\n'
@@ -6733,6 +6813,7 @@ cmd_agent_snapshot() {
     fi
 
     # Subscription (file checks only)
+    _sub_active="$(group_active 2>/dev/null || printf 'default')"
     _sub_url="false"
     [ -f "$SUB_URL_FILE" ] && [ -s "$SUB_URL_FILE" ] && _sub_url="true"
     _sub_last=""
@@ -6742,6 +6823,14 @@ cmd_agent_snapshot() {
     _sub_status="false"; [ -f "$SUB_STATUS_FILE" ] && _sub_status="true"
     _sub_nodes="false";  [ -f "$SUB_NODES_FILE" ]  && _sub_nodes="true"
     _sub_accounts="false"; [ -f "$SUB_ACCOUNTS_FILE" ] && _sub_accounts="true"
+    # Collect group list
+    _sub_groups="[\"default\""
+    [ -d "$GROUPS_DIR" ] && for _snap_guf in "$GROUPS_DIR"/*.url; do
+        [ -f "$_snap_guf" ] || continue
+        _snap_gn="${_snap_guf##*/}"; _snap_gn="${_snap_gn%.url}"
+        _sub_groups="${_sub_groups},\"${_snap_gn}\""
+    done
+    _sub_groups="${_sub_groups},\"custom\"]"
 
     # Mihomo
     _mihomo_bin="false"
@@ -6817,6 +6906,8 @@ cmd_agent_snapshot() {
     printf '    "token_exists": %s\n' "$_web_token"
     printf '  },\n'
     printf '  "subscription": {\n'
+    printf '    "active_group": "%s",\n' "$_sub_active"
+    printf '    "groups": %s,\n' "$_sub_groups"
     printf '    "url_configured": %s,\n' "$_sub_url"
     if [ -n "$_sub_last" ]; then
         printf '    "last_update": "%s",\n' "$_sub_last"
@@ -6898,15 +6989,15 @@ cmd_capabilities_json() {
     printf '      "gateway-status","gateway-check","gateway-doctor","gateway-json",\n'
     printf '      "tproxy-status","tproxy-check","tproxy-health","tproxy-doctor","tproxy-json",\n'
     printf '      "sub-status","sub-nodes","sub-unmatched",\n'
-    printf '      "proxy-info","version","doctor","preflight",\n'
-    printf '      "agent status","agent doctor"\n'
+    printf '      "group","proxy-info","version","doctor","preflight",\n'
+    printf '      "agent status","agent doctor","agent enroll-status"\n'
     printf '    ],\n'
     printf '    "dangerous": [\n'
     printf '      "wifi-connect","wifi-disconnect","wifi-reconnect","wifi-delete",\n'
     printf '      "ap-start","ap-stop","gateway-start","gateway-stop",\n'
     printf '      "tproxy-start","tproxy-stop","self-update","update",\n'
-    printf '      "install-core","migrate","sub-update","web-disable","uninstall",\n'
-    printf '      "agent install","agent update","agent start","agent stop","agent restart","agent uninstall"\n'
+    printf '      "install-core","migrate","sub-update","sub-add","sub-del","web-disable","uninstall",\n'
+    printf '      "group <name>","agent install","agent update","agent start","agent stop","agent restart","agent uninstall"\n'
     printf '    ],\n'
     printf '    "interactive": [\n'
     printf '      "tui","ap-install-deps","edit"\n'
@@ -9018,8 +9109,14 @@ cmd_sub_add() {
 
 cmd_sub_del() {
     need_root
-    _sdel_name="${1:-}"
-    [ -n "$_sdel_name" ] || { err "用法：mgate sub-del <名称>"; return 1; }
+    _sdel_yes=0; _sdel_name=""
+    for _a in "$@"; do
+        case "$_a" in
+            --yes|-y) _sdel_yes=1 ;;
+            *) _sdel_name="$_a" ;;
+        esac
+    done
+    [ -n "$_sdel_name" ] || { err "用法：mgate sub-del <名称> [--yes]"; return 1; }
     case "$_sdel_name" in
         custom|default) err "保留 group，不可删除：$_sdel_name"; return 1 ;;
     esac
@@ -9028,7 +9125,7 @@ cmd_sub_del() {
     _sdel_active="$(group_active)"
     [ "$_sdel_active" = "$_sdel_name" ] && \
         warn "正在删除当前激活的 group，删除后请手动切换：mgate group <名称>"
-    tui_confirm "确认删除 group '$_sdel_name'？" || return 1
+    [ "$_sdel_yes" = "1" ] || { tui_confirm "确认删除 group '$_sdel_name'？" || return 1; }
     rm -f "$_sdel_uf" "$GROUPS_DIR/${_sdel_name}.updated" \
         "$(group_provider_file "$_sdel_name")" 2>/dev/null || true
     ok "已删除 group '$_sdel_name'"
