@@ -1789,7 +1789,11 @@ EOF
             printf 'failed\n' > "$base.status"
         fi
     ) </dev/null > "$base.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
-    _CGI_LOCATION="/cgi-bin/mgate.cgi?action=job&id=$id&src=$action"
+    # Use caller-supplied src (page to return to), else fall back to status page.
+    _job_src="$(param_get "${QUERY_STRING:-}" src)"
+    [ -n "$_job_src" ] || _job_src="$(param_get "${post_body:-}" src 2>/dev/null)"
+    [ -n "$_job_src" ] || _job_src="status"
+    _CGI_LOCATION="/cgi-bin/mgate.cgi?action=job&id=$id&src=$_job_src"
 }
 
 run_job_page() {
@@ -2591,7 +2595,7 @@ function doWifiScan(){
       }
     })
     .catch(function(){hint.textContent='扫描失败，请手动输入 SSID';})
-    .finally(function(){btn.textContent='&#x1F50D; 重新扫描';btn.disabled=false;});
+    .finally(function(){btn.innerHTML='🔍 重新扫描';btn.disabled=false;});
 }
 </script>
 EOF
@@ -2614,42 +2618,45 @@ service_page() {
     fi
     printf '</div>\n'
 
-    cat <<'EOF'
-<div class="card">
-<h2>服务控制</h2>
-<div class="warn-box" style="margin-bottom:16px">
-<strong>⚠️ 重要提示：</strong><br>
-以下操作会直接影响所有设备的代理连接。操作前请确认已告知使用该设备的用户。<br>
-• <strong>停止</strong>：所有设备的代理将立即中断，恢复直连<br>
-• <strong>重启</strong>：代理短暂中断（约 3-5 秒），自动恢复<br>
-• <strong>启动</strong>：从停止状态重新启动代理服务
-</div>
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
-<div class="card" style="border-color:#86efac;text-align:center;padding:20px">
-<div style="font-size:24px">&#x25B6;&#xFE0F;</div>
-<div style="font-weight:700;margin:8px 0 4px">启动</div>
-<div class="muted" style="font-size:11px;margin-bottom:12px">从停止状态启动 Mihomo</div>
-<a class="btn primary" href="?action=start" style="display:block">启动服务</a>
+    printf '<div class="card">\n'
+    printf '<h2>服务控制</h2>\n'
+    printf '<div class="warn-box" style="margin-bottom:16px">以下操作会直接影响所有设备的代理连接，操作前请确认已告知使用该设备的用户。</div>\n'
+    if [ "$_svc_running" = "yes" ]; then
+        cat <<'EOF'
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div class="card" style="border-color:#fca5a5;text-align:center;padding:20px">
+<div style="font-size:28px">&#x23F9;&#xFE0F;</div>
+<div style="font-weight:700;margin:10px 0 6px">停止服务</div>
+<div class="muted" style="font-size:11px;margin-bottom:14px">停止后所有代理立即中断，设备恢复直连</div>
+<a class="btn danger" href="?action=confirm&target=stop" style="display:block">停止 Mihomo</a>
 </div>
 <div class="card" style="border-color:#fcd34d;text-align:center;padding:20px">
-<div style="font-size:24px">&#x1F504;</div>
-<div style="font-weight:700;margin:8px 0 4px">重启</div>
-<div class="muted" style="font-size:11px;margin-bottom:12px">代理短暂中断后自动恢复</div>
-<a class="btn" href="?action=confirm&target=restart" style="display:block">重启服务</a>
-</div>
-<div class="card" style="border-color:#fca5a5;text-align:center;padding:20px">
-<div style="font-size:24px">&#x23F9;&#xFE0F;</div>
-<div style="font-weight:700;margin:8px 0 4px">停止</div>
-<div class="muted" style="font-size:11px;margin-bottom:12px">停止后所有代理立即失效</div>
-<a class="btn danger" href="?action=confirm&target=stop" style="display:block">停止服务</a>
+<div style="font-size:28px">&#x1F504;</div>
+<div style="font-weight:700;margin:10px 0 6px">重启服务</div>
+<div class="muted" style="font-size:11px;margin-bottom:14px">代理短暂中断（约 3-5 秒）后自动恢复</div>
+<a class="btn" href="?action=confirm&target=restart" style="display:block">重启 Mihomo</a>
 </div>
 </div>
+EOF
+    else
+        cat <<'EOF'
+<div style="display:grid;grid-template-columns:1fr;max-width:300px;gap:12px">
+<div class="card" style="border-color:#86efac;text-align:center;padding:20px">
+<div style="font-size:28px">&#x25B6;&#xFE0F;</div>
+<div style="font-weight:700;margin:10px 0 6px">启动服务</div>
+<div class="muted" style="font-size:11px;margin-bottom:14px">Mihomo 当前已停止，点击重新启动代理</div>
+<a class="btn primary" href="?action=start&src=service-page" style="display:block">启动 Mihomo</a>
 </div>
+</div>
+EOF
+    fi
+    printf '</div>\n'
+    cat <<'EOF'
 <div class="card">
 <h2>其他操作</h2>
 <div class="btn-group">
 <a class="btn" href="?action=test">测试配置</a>
-<a class="btn" href="?action=doctor">系统诊断</a>
+<a class="btn" href="?action=doctor&src=service-page">系统诊断</a>
 <a class="btn" href="?action=logs&lines=100">查看日志</a>
 <a class="btn" href="?action=version">版本信息</a>
 </div>
@@ -2694,10 +2701,11 @@ EOF
         cat <<'EOF'
 <a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=ap-stop">关闭热点</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=ap-restart">重启热点</a>
+<input type="hidden" name="src" value="hotspot-page">
 EOF
     else
         cat <<'EOF'
-<a class="btn primary" href="/cgi-bin/mgate.cgi?action=ap-start-do">开启热点</a>
+<a class="btn primary" href="/cgi-bin/mgate.cgi?action=ap-start-do&src=hotspot-page">开启热点</a>
 EOF
     fi
     cat <<'EOF'
@@ -2712,7 +2720,12 @@ EOF
     _hs_pass="$(printf '%s' "$_ap_json" | sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
     [ -z "$_hs_pass" ] && _hs_pass="mgate12345678"
     _kv2 "SSID（名称）" "$_hs_ssid"
-    _kv2 "密码" "${_hs_pass:+••••••••}"
+    # Password row with inline visibility toggle
+    printf '<tr><td style="color:var(--muted);font-size:12px;width:120px">密码</td><td>'
+    printf '<strong><span id="ap-pwd-mask">••••••••</span>'
+    printf '<span id="ap-pwd-plain" style="display:none;font-family:ui-monospace,monospace">%s</span></strong>' "$(printf '%s' "$_hs_pass" | html_escape)"
+    printf '<button type="button" onclick="var m=document.getElementById('"'"'ap-pwd-mask'"'"'),p=document.getElementById('"'"'ap-pwd-plain'"'"');if(p.style.display==='"'"'none'"'"'){m.style.display='"'"'none'"'"';p.style.display='"'"''"'"';}else{m.style.display='"'"''"'"';p.style.display='"'"'none'"'"';}" style="border:none;background:none;cursor:pointer;padding:2px 6px;color:var(--muted)" title="查看/隐藏密码">👁</button>'
+    printf '</td></tr>\n'
     _kv2 "频段" "2.4GHz"
     _kv2 "热点 IP" "$_hs_ip"
     _kv2 "DHCP 范围" "10.88.0.100 – 10.88.0.200"
@@ -2843,10 +2856,10 @@ tproxy_page() {
 EOF
     if [ "$_tp_enabled" = "true" ]; then
         printf '<a class="btn danger" href="?action=confirm&amp;target=tproxy-stop">停止透明代理</a>\n'
-        printf '<a class="btn" href="?action=tproxy-health-do">健康检查</a>\n'
+        printf '<a class="btn" href="?action=tproxy-health-do&amp;src=tproxy-page">健康检查</a>\n'
     else
-        printf '<a class="btn primary" href="?action=tproxy-start-do">启用透明代理</a>\n'
-        printf '<a class="btn" href="?action=tproxy-check-do">检查环境</a>\n'
+        printf '<a class="btn primary" href="?action=tproxy-start-do&amp;src=tproxy-page">启用透明代理</a>\n'
+        printf '<a class="btn" href="?action=tproxy-check-do&amp;src=tproxy-page">检查环境</a>\n'
     fi
     cat <<'EOF'
 </div>
@@ -3363,15 +3376,17 @@ else
             ;;
         wifi-scan-json)
             _CGI_CONTENT_TYPE="application/json"
-            _saved="$($MGATE wifi-list 2>/dev/null | grep '^\[INFO\]' | sed 's/^\[INFO\][[:space:]]*//' | sed 's/^[* ]*//' | sed 's/（.*//')"
-            _scan="$($MGATE wifi-scan 2>/dev/null)"
+            # Already-saved SSIDs (strip markers and annotations)
+            _saved="$($MGATE wifi-list 2>/dev/null | grep '^\[INFO\]' | sed 's/^\[INFO\][[:space:]]*//' | sed 's/^[* ]*//' | sed 's/（.*//' | grep -v '^$')"
+            # nmcli -t -f SSID gives one clean SSID per line, no column alignment issues
+            _ssids="$(nmcli -t -f SSID dev wifi list ifname "$WIFI_IF" 2>/dev/null | grep -v '^$' | sort -u)"
             printf '{"ok":true,"networks":['
-            _first=1
-            printf '%s\n' "$_scan" | grep -v '^\[' | awk 'NR>1{print $3}' | while IFS= read -r _ssid; do
+            _wfirst=1
+            printf '%s\n' "$_ssids" | while IFS= read -r _ssid; do
                 [ -n "$_ssid" ] || continue
-                printf '%s\n' "$_saved" | grep -q "^$_ssid$" && continue
-                [ "$_first" = "1" ] && _first=0 || printf ','
-                printf '"%s"' "$(printf '%s' "$_ssid" | sed 's/"/\\"/g')"
+                printf '%s\n' "$_saved" | grep -qF "$_ssid" && continue
+                [ "$_wfirst" = "1" ] && _wfirst=0 || printf ','
+                printf '"%s"' "$(printf '%s' "$_ssid" | sed 's/\\/\\\\/g;s/"/\\"/g')"
             done
             printf ']}'
             ;;
@@ -8911,11 +8926,34 @@ cmd_backups() {
 }
 
 choose_backup_interactive() {
-    cmd_backups
-    printf '请输入要恢复的备份 ID，或输入 latest 使用最新备份: '
-    read -r chosen
-    [ -n "$chosen" ] || return 1
-    printf '%s\n' "$chosen"
+    _cbi_ids=""
+    _cbi_n=0
+    for _cbi_d in $(ls -1dt "$BACKUP_DIR"/* 2>/dev/null); do
+        [ -d "$_cbi_d" ] || continue
+        [ -f "$_cbi_d/manifest.txt" ] || continue
+        _cbi_n=$((_cbi_n + 1))
+        _cbi_id="$(basename "$_cbi_d")"
+        _cbi_lbl="$(sed -n 's/^label=//p' "$_cbi_d/manifest.txt" 2>/dev/null | head -1)"
+        _cbi_t="$(sed -n 's/^time=//p' "$_cbi_d/manifest.txt" 2>/dev/null | head -1)"
+        printf '  %3d.  %-30s  %s  [%s]\n' "$_cbi_n" "$_cbi_id" "${_cbi_t:-?}" "${_cbi_lbl:-manual}"
+        _cbi_ids="$_cbi_ids:$_cbi_id"
+    done
+    [ "$_cbi_n" -gt 0 ] || { warn "暂无备份"; return 1; }
+    printf '请输入编号 (1-%d) 或备份 ID (latest=最新): ' "$_cbi_n"
+    read -r _cbi_chosen || return 1
+    [ -n "$_cbi_chosen" ] || return 1
+    case "$_cbi_chosen" in
+        latest) printf 'latest\n'; return 0 ;;
+        ''|*[!0-9]*)
+            # Input is an ID string; strip any trailing metadata
+            printf '%s\n' "$_cbi_chosen" | awk '{print $1}'
+            ;;
+        *)
+            _cbi_sel="$(printf '%s\n' "$_cbi_ids" | tr ':' '\n' | grep -v '^$' | sed -n "${_cbi_chosen}p")"
+            [ -n "$_cbi_sel" ] || { warn "编号无效"; return 1; }
+            printf '%s\n' "$_cbi_sel"
+            ;;
+    esac
 }
 
 confirm_restore() {
@@ -8946,7 +8984,8 @@ cmd_restore() {
         id="$(latest_backup_id || true)"
         [ -n "$id" ] || die "没有可恢复的备份"
     else
-        id="$req"
+        # Accept only the first word — backup IDs never contain spaces
+        id="$(printf '%s' "$req" | awk '{print $1}')"
     fi
 
     backup_exists "$id" || die "备份不存在：$id"
@@ -10722,7 +10761,8 @@ menu_ap() {
         say "   4.  查看状态"
         say "   5.  启动 AP"
         say "   6.  停止 AP"
-        say "   7.  JSON 状态"
+        say "   7.  修改 SSID / 密码"
+        say "   8.  JSON 状态"
         say ""
         say "   0.  返回  ( Enter 也可 )"
         say ""
@@ -10746,7 +10786,25 @@ menu_ap() {
                 fi
                 pause_enter
                 ;;
-            7) cmd_ap_json; pause_enter ;;
+            7)
+                say ""
+                ap_load_config 2>/dev/null || true
+                printf 'SSID（当前：%s，留空=不修改）：' "${AP_SSID:-mgate}"
+                read -r _new_ssid || _new_ssid=""
+                printf '密码（当前：%s，留空=不修改）：' "${AP_PASSWORD:-mgate12345678}"
+                read -r _new_pass || _new_pass=""
+                if [ -z "$_new_ssid" ] && [ -z "$_new_pass" ]; then
+                    warn "未输入任何修改"
+                elif [ -n "$_new_ssid" ] && [ -n "$_new_pass" ]; then
+                    cmd_ap_edit --ssid "$_new_ssid" --password "$_new_pass" --yes
+                elif [ -n "$_new_ssid" ]; then
+                    cmd_ap_edit --ssid "$_new_ssid" --yes
+                else
+                    cmd_ap_edit --password "$_new_pass" --yes
+                fi
+                pause_enter
+                ;;
+            8) cmd_ap_json; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
