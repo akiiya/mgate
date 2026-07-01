@@ -2138,9 +2138,9 @@ EOF
             ;;
         url-test)
             cat <<'EOF'
-<tr><td>节点选择</td><td>自动测速</td></tr>
+<tr><td>节点选择</td><td>自动测速（旧版配置）</td></tr>
 </tbody></table>
-<p class="muted">TPROXY-OUT 当前为 url-test 自动测速模式（非默认配置）。如需手动指定节点，请执行 <span class="code">mgate sub-update</span> 重新生成配置（默认已改为 select 类型），然后使用 <span class="code">mgate tproxy-select</span> 切换。</p>
+<div class="warn-box">当前配置为旧版 url-test 自动测速模式。执行以下命令一键迁移到 select 手动选节点模式：<br><code>mgate migrate</code><br>迁移后无需重新下载订阅，即时生效。</div>
 EOF
             ;;
         *)
@@ -8326,6 +8326,26 @@ migrate_patch_config() {
     else
         ok "migrate: IN-TYPE,TPROXY 规则已存在"
     fi
+
+    # 将 TPROXY-OUT 从 url-test 迁移为 select（新默认值，立即生效无需重新拉取订阅）
+    _mig_tp_tmp="$TMP_DIR/tproxy-migrate.$$.yaml"
+    awk '
+        BEGIN { in_groups=0; in_g=0; changed=0 }
+        /^proxy-groups:[[:space:]]*$/ { in_groups=1 }
+        /^rules:[[:space:]]*$/ { in_g=0; in_groups=0 }
+        in_groups && /^[[:space:]]*-[[:space:]]*name:/ {
+            in_g = ($0 ~ /TPROXY-OUT/) ? 1 : 0
+        }
+        in_g && /^[[:space:]]*type:[[:space:]]*url-test/ {
+            sub(/url-test/, "select"); changed=1
+        }
+        { print }
+        END { exit (changed ? 0 : 1) }
+    ' "$CONFIG_FILE" > "$_mig_tp_tmp" 2>/dev/null && {
+        mv "$_mig_tp_tmp" "$CONFIG_FILE"
+        MIGRATE_CONFIG_CHANGED=1
+        ok "migrate: TPROXY-OUT 已从 url-test 更新为 select 类型"
+    } || { rm -f "$_mig_tp_tmp" 2>/dev/null; ok "migrate: TPROXY-OUT 类型无需变更"; }
 }
 
 cmd_migrate() {
