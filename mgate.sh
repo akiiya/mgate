@@ -1402,7 +1402,48 @@ body.auth-body{align-items:center;justify-content:center;display:flex;min-height
 .stat-grid{grid-template-columns:1fr 1fr}
 .topbar{padding:0 16px}
 .grid2{grid-template-columns:1fr}
+.hero-grid{grid-template-columns:1fr 1fr}
+.action-grid{grid-template-columns:1fr 1fr}
 }
+.hero-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:24px}
+.hero-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px 28px;box-shadow:var(--sh);position:relative;overflow:hidden;display:flex;flex-direction:column;gap:6px;text-decoration:none;color:var(--text);transition:box-shadow .15s}
+.hero-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.12)}
+.hero-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px;border-radius:14px 14px 0 0}
+.hero-card.hc-good::before{background:linear-gradient(90deg,#22c55e,#16a34a)}
+.hero-card.hc-warn::before{background:linear-gradient(90deg,#f59e0b,#d97706)}
+.hero-card.hc-danger::before{background:linear-gradient(90deg,#ef4444,#dc2626)}
+.hero-card.hc-neutral::before{background:linear-gradient(90deg,#94a3b8,#64748b)}
+.hero-icon{font-size:26px;margin-bottom:6px}
+.hero-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.hero-value{font-size:26px;font-weight:800;line-height:1.1}
+.hero-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.action-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-top:4px}
+.action-card{display:flex;flex-direction:column;gap:5px;padding:18px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);text-decoration:none;color:var(--text);transition:background .12s,box-shadow .12s;cursor:pointer}
+.action-card:hover{background:#f8fafc;box-shadow:var(--sh)}
+[data-theme="dark"] .action-card:hover{background:#243347}
+.ac-icon{font-size:20px}
+.ac-title{font-size:13px;font-weight:600}
+.ac-desc{font-size:11px;color:var(--muted)}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:1000;padding:16px}
+.modal-overlay.open{display:flex}
+.modal-box{background:var(--card);border-radius:14px;width:100%;max-width:500px;box-shadow:0 20px 60px rgba(0,0,0,.3);animation:mslide .2s ease}
+@keyframes mslide{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--border)}
+.modal-head h3{margin:0;font-size:15px;font-weight:700}
+.modal-close{border:none;background:none;cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:4px 8px;border-radius:6px}
+.modal-close:hover{background:var(--bg)}
+.modal-body{padding:24px}
+.modal-foot{padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
+.form-row{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
+.form-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.form-row input,.form-row select,.form-row textarea{width:100%}
+.form-row .hint{font-size:11px;color:var(--muted)}
+.group-table .ops{display:flex;gap:6px;flex-wrap:wrap}
+.badge-active{background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;white-space:nowrap}
+.badge-manual{background:rgba(168,85,247,.12);color:#a855f7;border:1px solid rgba(168,85,247,.3);border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600}
+.badge-url{background:#f1f5f9;color:#475569;border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600}
+.radio-group{display:flex;gap:16px}
+.radio-group label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
 EOF_WEB_CSS
 }
 generate_mgate_cgi() {
@@ -1541,23 +1582,35 @@ document.querySelectorAll('.nav-link[data-act]').forEach(function(el){
 if(el.dataset.act===a)el.classList.add('active');
 });
 })();
+// 主题：system/light/dark 三模式
 (function(){
+var ICONS={'system':'💻','light':'☀️','dark':'🌙'};
+var LABELS={'system':'跟随系统','light':'浅色','dark':'深色'};
 var h=document.documentElement;
-var saved=localStorage.getItem('mgate-theme');
-var dark=saved?saved==='dark':window.matchMedia('(prefers-color-scheme:dark)').matches;
-if(saved){h.setAttribute('data-theme',saved);}
 var btn=document.getElementById('theme-toggle');
+function applyTheme(t){
+  if(t==='dark'){h.setAttribute('data-theme','dark');}
+  else if(t==='light'){h.setAttribute('data-theme','light');}
+  else{h.removeAttribute('data-theme');}
+  if(btn){btn.textContent=ICONS[t];btn.title=LABELS[t];}
+}
+var saved=localStorage.getItem('mgate-theme')||'system';
+applyTheme(saved);
 if(btn){
-btn.textContent=dark?'☀️':'🌙';
-btn.onclick=function(){
-var cur=h.getAttribute('data-theme')||(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
-var nxt=cur==='dark'?'light':'dark';
-h.setAttribute('data-theme',nxt);
-localStorage.setItem('mgate-theme',nxt);
-btn.textContent=nxt==='dark'?'☀️':'🌙';
-};
+  btn.onclick=function(){
+    var themes=['system','light','dark'];
+    var cur=localStorage.getItem('mgate-theme')||'system';
+    var nxt=themes[(themes.indexOf(cur)+1)%3];
+    localStorage.setItem('mgate-theme',nxt);
+    applyTheme(nxt);
+  };
 }
 })();
+// Modal 系统
+function openModal(id){var m=document.getElementById(id);if(m){m.classList.add('open');document.body.style.overflow='hidden';}}
+function closeModal(id){var m=document.getElementById(id);if(m){m.classList.remove('open');document.body.style.overflow='';}}
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.querySelectorAll('.modal-overlay.open').forEach(function(m){m.classList.remove('open');});document.body.style.overflow='';}});
+document.querySelectorAll('.modal-overlay').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m){closeModal(m.id);}});});
 </script>
 </body></html>
 EOF
@@ -2076,25 +2129,74 @@ status_page() {
     _proxy_val="未启动"; _proxy_cls="warn"
     case "$_svc_running" in yes) _proxy_val="运行中"; _proxy_cls="good" ;; esac
 
+    _dev_cnt="$(arp -n 2>/dev/null | grep -c '10\.88\.' || printf '0')"
+    _ap_ssid_disp="${AP_SSID:-mgate}"
+    _tproxy_cls="neutral"
+    case "$WEB_TPROXY_ENABLED" in enabled) _tproxy_cls="good";; disabled|unknown) _tproxy_cls="neutral";; esac
+
     cat <<EOF
-<div class="stat-grid">
-$(_sc "上网状态" "$_inet_val" "$_inet_cls" "$([ "$_ap_cls" = "good" ] && printf '%s 台设备已连接' "$(arp -n 2>/dev/null | grep -c '10\.88\.0\.' || echo 0)" || printf '热点未启动')")
-$(_sc "热点" "$([ "$_ap_cls" = "good" ] && printf '已开启' || printf '已关闭')" "$_ap_cls" "$_ap_ssid")
-$(_sc "代理" "$_proxy_val" "$_proxy_cls" "混合端口 $DEFAULT_MIXED_PORT")
-$(_sc "透明代理" "$WEB_TPROXY_ENABLED" "$(case "$WEB_TPROXY_ENABLED" in disabled|unknown) printf 'neutral';; *) web_class_for_state "$WEB_TPROXY_ENABLED";; esac)" "端口 $TPROXY_PORT")
+<div class="hero-grid">
+<div class="hero-card hc-${_inet_cls}">
+<div class="hero-icon">&#x1F4E1;</div>
+<div class="hero-label">上网状态</div>
+<div class="hero-value" style="color:$([ "$_inet_cls" = "good" ] && printf '#22c55e' || printf '#f59e0b')">$(_state_zh "$_inet_val")</div>
+<div class="hero-sub">$([ "$_ap_cls" = "good" ] && printf '热点中有 %s 台设备' "$_dev_cnt" || printf '热点尚未启动')</div>
+</div>
+<div class="hero-card hc-${ap_cls}">
+<div class="hero-icon">&#x1F4F6;</div>
+<div class="hero-label">热点</div>
+<div class="hero-value" style="color:$([ "$_ap_cls" = "good" ] && printf '#22c55e' || printf '#94a3b8')">$([ "$_ap_cls" = "good" ] && printf '已开启' || printf '已关闭')</div>
+<div class="hero-sub">SSID：$(printf '%s' "$_ap_ssid_disp" | html_escape)</div>
+</div>
+<div class="hero-card hc-${svc_cls}">
+<div class="hero-icon">&#x1F504;</div>
+<div class="hero-label">代理服务</div>
+<div class="hero-value" style="color:$([ "$svc_cls" = "good" ] && printf '#22c55e' || printf '#f59e0b')">$([ "$_svc_running" = "yes" ] && printf '运行中' || printf '未启动')</div>
+<div class="hero-sub">HTTP/SOCKS5 端口 $DEFAULT_MIXED_PORT</div>
+</div>
+<div class="hero-card hc-${_tproxy_cls}">
+<div class="hero-icon">&#x1F6E1;</div>
+<div class="hero-label">透明代理</div>
+<div class="hero-value" style="color:$([ "$_tproxy_cls" = "good" ] && printf '#22c55e' || printf '#94a3b8')">$([ "$WEB_TPROXY_ENABLED" = "enabled" ] && printf '已启用' || printf '未启用')</div>
+<div class="hero-sub">端口 $TPROXY_PORT</div>
+</div>
 </div>
 EOF
 
     cat <<'EOF'
 <div class="card">
 <div class="card-title"><h2>快捷操作</h2></div>
-<div class="btn-group">
-<a class="btn primary" href="?action=hotspot-page">热点设置</a>
-<a class="btn" href="?action=devices-page">查看连接设备</a>
-<a class="btn" href="?action=subscription">切换代理订阅</a>
-<a class="btn" href="?action=proxy-info">查看代理信息</a>
-<a class="btn" href="?action=confirm&target=restart">重启 Mihomo</a>
-<a class="btn" href="?action=doctor">网络诊断</a>
+<div class="action-grid">
+<a class="action-card" href="?action=hotspot-page">
+<div class="ac-icon">&#x1F4E1;</div>
+<div class="ac-title">热点设置</div>
+<div class="ac-desc">查看和管理 WiFi 热点</div>
+</a>
+<a class="action-card" href="?action=devices-page">
+<div class="ac-icon">&#x1F4F1;</div>
+<div class="ac-title">已连接设备</div>
+<div class="ac-desc">查看接入热点的设备列表</div>
+</a>
+<a class="action-card" href="?action=subscription">
+<div class="ac-icon">&#x1F504;</div>
+<div class="ac-title">代理管理</div>
+<div class="ac-desc">切换节点和订阅组</div>
+</a>
+<a class="action-card" href="?action=tproxy-page">
+<div class="ac-icon">&#x1F6E1;</div>
+<div class="ac-title">透明代理</div>
+<div class="ac-desc">开启 / 关闭 / 切换节点</div>
+</a>
+<a class="action-card" href="?action=wifi-page">
+<div class="ac-icon">&#x1F4F6;</div>
+<div class="ac-title">WiFi 上游</div>
+<div class="ac-desc">管理上级 WiFi 连接</div>
+</a>
+<a class="action-card" href="?action=doctor">
+<div class="ac-icon">&#x1F50D;</div>
+<div class="ac-title">网络诊断</div>
+<div class="ac-desc">检测连接问题</div>
+</a>
 </div>
 </div>
 EOF
@@ -2781,56 +2883,88 @@ sub_set_page() {
 
 subscription_page() {
     header
-    page_start "订阅管理"
+    page_start "代理管理"
     nav
     grp_out="$($MGATE group 2>&1)"
     _active_grp="$(printf '%s\n' "$grp_out" | grep '\*' | sed 's/^\[INFO\][[:space:]]*//' | sed 's/[[:space:]].*//' | head -1)"
     [ -z "$_active_grp" ] && _active_grp="default"
-
-    _grp_names="$(printf '%s\n' "$grp_out" | \
-        grep '^\[INFO\]' | \
-        sed 's/^\[INFO\][[:space:]]*//' | \
-        sed 's/[[:space:]].*//' | \
-        grep -v '^$')"
-    _sub_names="$(printf '%s\n' "$_grp_names" | grep -v '^default$' | grep -v '^custom$' | grep -v '^$')"
-
-    # Current active group card
-    printf '<div class="card">\n'
-    printf '<div class="card-title"><h2>当前订阅组</h2></div>\n'
-    if [ "$_active_grp" = "custom" ]; then
-        printf '<div style="display:flex;align-items:center;gap:10px;padding:12px 0">'
-        printf '<span style="background:rgba(168,85,247,.12);color:#a855f7;border:1px solid rgba(168,85,247,.3);border-radius:999px;padding:4px 12px;font-size:13px;font-weight:600">&#x2728; 自定义组</span>'
-        printf '<span class="muted">当前使用手动管理的自定义节点</span></div>\n'
-    else
-        printf '<div style="display:flex;align-items:center;gap:10px;padding:12px 0">'
-        printf '<span class="stat-badge sb-good">%s</span>' "$(printf '%s' "$_active_grp" | html_escape)"
-        printf '<span class="muted">%s</span>' "$(printf '%s\n' "$grp_out" | grep "^\[INFO\].*$_active_grp" | sed 's/.*上次更新：/上次更新：/' | head -1 | html_escape)"
-        printf '</div>\n'
-    fi
-    printf '<div class="btn-group">'
-    printf '<a class="btn" href="?action=confirm&amp;target=sub-update">更新当前订阅</a>'
-    printf '<a class="btn" href="?action=sub-status">查看订阅详情</a>'
-    printf '</div>\n</div>\n'
-
-    # 代理接入方式（原 proxy-info 内容，合并于此）
+    _grp_names="$(printf '%s\n' "$grp_out" | grep '^\[INFO\]' | sed 's/^\[INFO\][[:space:]]*//' | sed 's/[[:space:]].*//' | grep -v '^$')"
+    _def_url="$(cat "$SUB_URL_FILE" 2>/dev/null | head -1)"
     _sub_host="$(request_proxy_host)"
     _sub_port="$(listener_port mixed-users "$DEFAULT_MIXED_PORT")"
-    cat <<EOF
-<details style="margin:0 0 16px">
-<summary style="cursor:pointer;font-weight:600;padding:14px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);list-style:none;display:flex;align-items:center;justify-content:space-between">
-<span>&#x1F4F2; 手动接入代理（给其他设备设置代理时查看）</span>
-<span style="font-size:12px;color:var(--muted);font-weight:400">点击展开</span>
-</summary>
-<div class="card" style="border-top-left-radius:0;border-top-right-radius:0;border-top:none;margin-top:0">
-<p class="muted">将以下地址填入设备的「WiFi 代理」或「HTTP/SOCKS5 代理」设置中，即可让设备通过本机上网。</p>
-<table class="table"><thead><tr><th>账号</th><th>HTTP 代理</th><th>SOCKS5 代理</th></tr></thead><tbody>
-EOF
+    _custom_yaml="$(cat "$CUSTOM_PROVIDER_FILE" 2>/dev/null)"
+
+    # ── 订阅组列表 ──
+    printf '<div class="card">\n'
+    printf '<div class="card-title"><h2>订阅组</h2>'
+    printf '<button type="button" onclick="openModal('"'"'modal-add'"'"')" class="btn btn-sm primary">&#x2795; 添加订阅组</button></div>\n'
+    printf '<table class="table group-table"><thead><tr><th>组名</th><th>类型</th><th>状态</th><th>最近更新</th><th>操作</th></tr></thead><tbody>\n'
+
+    # default 组
+    _def_upd="$(cat "$GROUPS_DIR/default.updated" 2>/dev/null || cat "$SUB_LAST_UPDATE_FILE" 2>/dev/null || printf '未更新')"
+    printf '<tr><td><strong>default</strong></td><td><span class="badge-url">URL 订阅</span></td>'
+    if [ "$_active_grp" = "default" ]; then
+        printf '<td><span class="badge-active">&#x2713; 激活中</span></td>'
+    else
+        printf '<td><span style="color:var(--muted)">-</span></td>'
+    fi
+    printf '<td style="font-size:12px;color:var(--muted)">%s</td>' "$(printf '%s' "$_def_upd" | html_escape)"
+    printf '<td><div class="ops">'
+    [ "$_active_grp" != "default" ] && printf '<button type="button" onclick="activateGroup('"'"'default'"'"')" class="btn btn-sm">激活</button>'
+    printf '<button type="button" onclick="editGroup('"'"'default'"'"','"'"'%s'"'"')" class="btn btn-sm">修改</button>' "$(printf '%s' "$_def_url" | html_escape)"
+    printf '<button type="button" onclick="updateGroup('"'"'default'"'"')" class="btn btn-sm">更新</button>'
+    printf '</div></td></tr>\n'
+
+    # 命名订阅组 + custom
+    printf '%s\n' "$_grp_names" | while IFS= read -r _gn; do
+        [ -n "$_gn" ] || continue
+        [ "$_gn" = "default" ] && continue
+        if [ "$_gn" = "custom" ]; then
+            printf '<tr><td><strong>custom</strong></td><td><span class="badge-manual">&#x2728; 手动管理</span></td>'
+            if [ "$_active_grp" = "custom" ]; then
+                printf '<td><span class="badge-active">&#x2713; 激活中</span></td>'
+            else
+                printf '<td><span style="color:var(--muted)">-</span></td>'
+            fi
+            printf '<td style="font-size:12px;color:var(--muted)">手动管理</td>'
+            printf '<td><div class="ops">'
+            [ "$_active_grp" != "custom" ] && printf '<button type="button" onclick="activateGroup('"'"'custom'"'"')" class="btn btn-sm">激活</button>'
+            printf '<button type="button" onclick="manageNodes()" class="btn btn-sm">节点管理</button>'
+            printf '</div></td></tr>\n'
+        else
+            _gn_url="$(cat "$GROUPS_DIR/${_gn}.url" 2>/dev/null | head -1)"
+            _gn_upd="$(cat "$GROUPS_DIR/${_gn}.updated" 2>/dev/null || printf '未更新')"
+            printf '<tr><td><strong>%s</strong></td><td><span class="badge-url">URL 订阅</span></td>' "$(printf '%s' "$_gn" | html_escape)"
+            if [ "$_active_grp" = "$_gn" ]; then
+                printf '<td><span class="badge-active">&#x2713; 激活中</span></td>'
+            else
+                printf '<td><span style="color:var(--muted)">-</span></td>'
+            fi
+            printf '<td style="font-size:12px;color:var(--muted)">%s</td>' "$(printf '%s' "$_gn_upd" | html_escape)"
+            _gn_esc="$(printf '%s' "$_gn" | html_escape)"
+            _gn_url_esc="$(printf '%s' "$_gn_url" | html_escape)"
+            printf '<td><div class="ops">'
+            [ "$_active_grp" != "$_gn" ] && printf '<button type="button" onclick="activateGroup('"'"'%s'"'"')" class="btn btn-sm">激活</button>' "$_gn_esc"
+            printf '<button type="button" onclick="editGroup('"'"'%s'"'"','"'"'%s'"'"')" class="btn btn-sm">修改</button>' "$_gn_esc" "$_gn_url_esc"
+            printf '<button type="button" onclick="updateGroup('"'"'%s'"'"')" class="btn btn-sm">更新</button>' "$_gn_esc"
+            printf '<button type="button" onclick="deleteGroup('"'"'%s'"'"')" class="btn btn-sm danger">删除</button>' "$_gn_esc"
+            printf '</div></td></tr>\n'
+        fi
+    done
+    printf '</tbody></table>\n</div>\n'
+
+    # ── 手动接入（折叠）──
+    printf '<details style="margin:0 0 16px">\n'
+    printf '<summary style="cursor:pointer;font-weight:600;padding:14px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);list-style:none;display:flex;align-items:center;justify-content:space-between"><span>&#x1F4F2; 手动接入代理（其他设备使用 HTTP/SOCKS5 代理时查看）</span><span style="font-size:12px;color:var(--muted)">点击展开</span></summary>\n'
+    printf '<div class="card" style="border-top-left-radius:0;border-top-right-radius:0;border-top:none;margin-top:0">\n'
+    printf '<p class="muted">将以下地址填入设备的代理设置，即可让该设备通过本机上网。</p>\n'
+    printf '<table class="table"><thead><tr><th>账号</th><th>HTTP 代理</th><th>SOCKS5 代理</th></tr></thead><tbody>\n'
     if [ -f "$CONFIG_FILE" ]; then
         awk '/^authentication:/{on=1;next} /^[A-Za-z0-9_-]+:/{if(on)exit} on&&/^[[:space:]]*-[[:space:]]*"/{line=$0;sub(/^[^"]*"/,"",line);sub(/"[[:space:]]*$/,"",line);print line}' \
             "$CONFIG_FILE" | while IFS= read -r entry; do
             [ -n "$entry" ] || continue
             user="${entry%%:*}"; pass="${entry#*:}"
-            printf '<tr><td><strong>%s</strong></td><td><span class="code">http://%s:%s@%s:%s</span></td><td><span class="code">socks5://%s:%s@%s:%s</span></td></tr>\n' \
+            printf '<tr><td><strong>%s</strong></td><td><span class="code" style="font-size:11px">http://%s:%s@%s:%s</span></td><td><span class="code" style="font-size:11px">socks5://%s:%s@%s:%s</span></td></tr>\n' \
                 "$(printf '%s' "$user" | html_escape)" \
                 "$(printf '%s' "$user" | html_escape)" "$(printf '%s' "$pass" | html_escape)" \
                 "$(printf '%s' "$_sub_host" | html_escape)" "$_sub_port" \
@@ -2838,121 +2972,86 @@ EOF
                 "$(printf '%s' "$_sub_host" | html_escape)" "$_sub_port"
         done
     fi
-    cat <<'EOF'
-</tbody></table>
-<p class="muted" style="margin-top:10px">端口 <strong>统一</strong>，HTTP 和 SOCKS5 <strong>同一端口</strong>，按客户端支持的协议填写即可。</p>
-</div>
-</details>
-EOF
+    printf '</tbody></table>\n</div>\n</details>\n'
 
-    # Switch group
-    cat <<'EOF'
-<div class="card">
-<h2>切换订阅组</h2>
-<p class="muted">切换后重新加载 mihomo，有本地缓存时无需重新下载。切换到"自定义组"后可手动管理节点。</p>
-<form method="POST" action="/cgi-bin/mgate.cgi">
-<input type="hidden" name="action" value="group-switch-do">
-<div class="row">
-<select name="group_name" required>
-<option value="">-- 选择目标订阅组 --</option>
-EOF
-    printf '%s\n' "$_grp_names" | while IFS= read -r _gn; do
-        [ -n "$_gn" ] || continue
-        if [ "$_gn" = "custom" ]; then
-            printf '<option value="custom">✨ 自定义组（手动管理节点）</option>\n'
-        elif [ "$_gn" = "$_active_grp" ]; then
-            printf '<option value="%s" selected>%s（当前）</option>\n' \
-                "$(printf '%s' "$_gn" | html_escape)" "$(printf '%s' "$_gn" | html_escape)"
-        else
-            printf '<option value="%s">%s</option>\n' \
-                "$(printf '%s' "$_gn" | html_escape)" "$(printf '%s' "$_gn" | html_escape)"
-        fi
-    done
-    cat <<'EOF'
-</select>
-</div>
-<div class="row"><button class="primary" type="submit">切换</button></div>
-</form>
-</div>
-<div class="card">
-<h2>添加 / 修改订阅</h2>
-<p class="muted">输入名称和 URL 即可添加新订阅组；已存在同名时会更新 URL。</p>
+    # ── Modals ──
+    cat <<'MODEOF'
+<div id="modal-add" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>添加订阅组</h3><button class="modal-close" type="button" onclick="closeModal('modal-add')">&#x2715;</button></div>
 <form method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="sub-add-do">
-<div class="row"><input type="text" name="sub_name" placeholder="订阅名称（如 work、backup）" required autocomplete="off"></div>
-<div class="row"><input type="text" name="sub_url" placeholder="订阅 URL（Clash/Mihomo YAML）" required autocomplete="off"></div>
-<div class="row"><button class="primary" type="submit">保存并拉取</button></div>
-</form>
+<div class="modal-body">
+<div class="form-row"><div class="form-label">组名称</div><input type="text" name="sub_name" placeholder="如：work、backup" required autocomplete="off"></div>
+<div class="form-row"><div class="form-label">订阅 URL</div><input type="text" name="sub_url" placeholder="https://example.com/sub.yaml" required autocomplete="off"><div class="hint">Clash / Mihomo YAML 格式</div></div>
 </div>
-EOF
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-add')">取消</button><button type="submit" class="btn primary">保存并拉取</button></div>
+</form></div></div>
 
-    # Set default subscription URL
-    _def_url="$(cat "$SUB_URL_FILE" 2>/dev/null | head -1)"
-    cat <<EOF
-<div class="card">
-<h2>默认订阅（default）</h2>
-<p class="muted">default 组的订阅地址。</p>
+<div id="modal-edit" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>修改订阅</h3><button class="modal-close" type="button" onclick="closeModal('modal-edit')">&#x2715;</button></div>
 <form method="POST" action="/cgi-bin/mgate.cgi">
-<input type="hidden" name="action" value="sub-set-do">
-<div class="row"><input type="text" name="sub_url" value="$(printf '%s' "$_def_url" | html_escape)" placeholder="https://example.com/clash.yaml" autocomplete="off"></div>
-<div class="row"><button class="primary" type="submit">保存并立即更新</button></div>
-</form>
+<input type="hidden" name="action" value="sub-add-do">
+<div class="modal-body">
+<div class="form-row"><div class="form-label">组名称</div><input type="text" id="edit-name" name="sub_name" readonly style="background:var(--bg);opacity:.7"></div>
+<div class="form-row"><div class="form-label">订阅 URL</div><input type="text" id="edit-url" name="sub_url" required autocomplete="off"></div>
 </div>
-EOF
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-edit')">取消</button><button type="submit" class="btn primary">保存</button></div>
+</form></div></div>
 
-    # Delete named subscription
-    if [ -n "$_sub_names" ]; then
-        cat <<'EOF'
-<div class="card">
-<h2>删除命名订阅</h2>
-<p class="muted">只能删除非当前激活的命名订阅（default / custom 不可删除）。</p>
-<form method="POST" action="/cgi-bin/mgate.cgi">
+<div id="modal-del" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>删除订阅组</h3><button class="modal-close" type="button" onclick="closeModal('modal-del')">&#x2715;</button></div>
+<div class="modal-body"><p>确定要删除 <strong id="del-name-show"></strong> 吗？此操作不可恢复。</p></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-del')">取消</button>
+<form id="del-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
 <input type="hidden" name="action" value="sub-del-do">
-<div class="row">
-<select name="sub_name" required>
-<option value="">-- 选择要删除的订阅 --</option>
-EOF
-        printf '%s\n' "$_sub_names" | while IFS= read -r _sn; do
-            [ -n "$_sn" ] || continue
-            printf '<option value="%s">%s</option>\n' \
-                "$(printf '%s' "$_sn" | html_escape)" "$(printf '%s' "$_sn" | html_escape)"
-        done
-        cat <<'EOF'
-</select>
-</div>
-<div class="row"><button class="btn danger" type="submit">删除</button></div>
-</form>
-</div>
-EOF
-    fi
+<input type="hidden" id="del-name-input" name="sub_name" value="">
+<button type="submit" class="btn danger">确认删除</button>
+</form></div></div>
 
-    # Custom group: show editor only when active
-    if [ "$_active_grp" = "custom" ]; then
-        _custom_yaml="$(cat "$CUSTOM_PROVIDER_FILE" 2>/dev/null)"
-        cat <<'EOF'
-<div style="border:2px solid rgba(168,85,247,.4);border-radius:var(--r);padding:20px;margin:0 0 16px;background:rgba(168,85,247,.04)">
-<h2 style="color:#a855f7">✨ 自定义节点管理</h2>
-<p class="muted">当前使用自定义节点。直接编辑下方 YAML 内容（标准 Mihomo proxies 格式），保存后自动重载。</p>
-<form method="POST" action="/cgi-bin/mgate.cgi">
-<input type="hidden" name="action" value="custom-nodes-save">
-<div class="row">
-EOF
-        printf '<textarea name="custom_yaml" rows="16" style="width:100%%;font-family:ui-monospace,monospace;font-size:12px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:12px;resize:vertical">%s</textarea>\n' \
-            "$(printf '%s' "$_custom_yaml" | html_escape)"
-        cat <<'EOF'
-</div>
-<div class="row"><button class="primary" type="submit">保存并重载</button></div>
-</form>
-</div>
-EOF
-    fi
+<div id="modal-update" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>更新订阅</h3><button class="modal-close" type="button" onclick="closeModal('modal-update')">&#x2715;</button></div>
+<div class="modal-body"><p>确认重新拉取 <strong id="upd-name-show"></strong> 的订阅内容？</p></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-update')">取消</button>
+<form id="upd-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
+<input type="hidden" name="action" value="sub-update-named-do">
+<input type="hidden" id="upd-name-input" name="group_name" value="">
+<button type="submit" class="btn primary">确认更新</button>
+</form></div></div>
 
-    cat <<'EOF'
-<div class="card">
-<h2>批量更新</h2>
-<p><a class="btn" href="/cgi-bin/mgate.cgi?action=sub-update-all-do">更新所有订阅缓存</a></p>
-</div>
-EOF
+<div id="modal-activate" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>切换订阅组</h3><button class="modal-close" type="button" onclick="closeModal('modal-activate')">&#x2715;</button></div>
+<div class="modal-body"><p>切换到订阅组 <strong id="act-name-show"></strong>？</p><p class="muted">切换后将重载 mihomo，有本地缓存时无需重新下载。</p></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-activate')">取消</button>
+<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
+<input type="hidden" name="action" value="group-switch-do">
+<input type="hidden" id="act-name-input" name="group_name" value="">
+<button type="submit" class="btn primary">确认切换</button>
+</form></div></div>
+MODEOF
+
+    # 节点管理 modal（带实际 YAML 内容）
+    printf '<div id="modal-nodes" class="modal-overlay"><div class="modal-box" style="max-width:600px">\n'
+    printf '<div class="modal-head"><h3>&#x2728; 自定义节点管理</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-nodes'"'"')">&#x2715;</button></div>\n'
+    printf '<form method="POST" action="/cgi-bin/mgate.cgi"><input type="hidden" name="action" value="custom-nodes-save">\n'
+    printf '<div class="modal-body"><p class="muted">编辑标准 Mihomo proxies YAML 节点列表：</p>\n'
+    printf '<textarea name="custom_yaml" rows="14" style="width:100%%;font-family:ui-monospace,monospace;font-size:12px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:12px;resize:vertical">%s</textarea>\n' \
+        "$(printf '%s' "$_custom_yaml" | html_escape)"
+    printf '</div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-nodes'"'"')">取消</button><button type="submit" class="btn primary">保存并重载</button></div></form></div></div>\n'
+
+    cat <<'JSEOF'
+<script>
+function activateGroup(n){document.getElementById('act-name-show').textContent=n;document.getElementById('act-name-input').value=n;openModal('modal-activate');}
+function editGroup(n,u){document.getElementById('edit-name').value=n;document.getElementById('edit-url').value=u;openModal('modal-edit');}
+function deleteGroup(n){document.getElementById('del-name-show').textContent=n;document.getElementById('del-name-input').value=n;openModal('modal-del');}
+function updateGroup(n){document.getElementById('upd-name-show').textContent=n;document.getElementById('upd-name-input').value=n;openModal('modal-update');}
+function manageNodes(){openModal('modal-nodes');}
+</script>
+JSEOF
     page_end
 }
 
@@ -3061,6 +3160,10 @@ else
             run_job_page "删除订阅 $sname" sub-del "$sname" --yes
             ;;
         sub-update-all-do) run_job_page "更新所有订阅" sub-update --all ;;
+        sub-update-named-do)
+            _upd_grp="$(url_decode "$(param_get "$post_body" group_name)")"
+            run_job_page "更新订阅 $_upd_grp" sub-update "$_upd_grp"
+            ;;
         wifi-page) wifi_page ;;
         wifi-add-do)
             wifi_ssid="$(url_decode "$(param_get "$post_body" wifi_ssid)")"
@@ -10542,21 +10645,19 @@ menu_web() {
 
 menu_sub() {
     while :; do
-        tui_header "订阅 / 账号"
+        tui_header "代理管理"
         say ""
-        say "   1.  查看 / 切换 Group"
-        say "   2.  添加命名订阅"
-        say "   3.  删除命名订阅"
-        say "   4.  更新订阅（当前激活）"
-        say "   5.  更新所有订阅"
-        say "   6.  设置默认订阅"
-        say "   7.  查看订阅状态"
-        say "   8.  查看节点识别结果"
-        say "   9.  清除订阅"
+        say "   1.  查看订阅组列表"
+        say "   2.  激活订阅组"
+        say "   3.  添加订阅组"
+        say "   4.  修改订阅 URL"
+        say "   5.  删除订阅组"
+        say "   6.  更新当前订阅"
+        say "   7.  管理自定义节点（custom 组）"
         say ""
-        say "  10.  查看代理连接信息"
-        say "  11.  查看账号默认密码"
-        say "  12.  修改账号默认密码"
+        say "   8.  查看代理连接信息"
+        say "   9.  查看账号密码"
+        say "  10.  修改账号密码"
         say ""
         say "   0.  返回  ( Enter 也可 )"
         say ""
@@ -10564,46 +10665,53 @@ menu_sub() {
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
-            1)
+            1) cmd_group; pause_enter ;;
+            2)
                 cmd_group; pause_enter
-                printf 'Group 名称（留空不切换）: '
+                printf '输入要激活的组名: '
                 read -r _grp || _grp=""
-                [ -n "$_grp" ] && cmd_group "$_grp"
+                [ -n "$_grp" ] && cmd_group "$_grp" || warn "未输入"
                 pause_enter
                 ;;
-            2)
-                printf '名称: '
+            3)
+                printf '组名称: '
                 read -r _gname || _gname=""
                 printf '订阅 URL: '
                 read -r _url || _url=""
                 [ -n "$_gname" ] && [ -n "$_url" ] && cmd_sub_add "$_gname" "$_url" || warn "未输入"
                 pause_enter
                 ;;
-            3)
-                printf 'Group 名称: '
+            4)
+                cmd_group; pause_enter
+                printf '要修改的组名: '
+                read -r _gmod || _gmod=""
+                printf '新的订阅 URL: '
+                read -r _url || _url=""
+                [ -n "$_gmod" ] && [ -n "$_url" ] && cmd_sub_add "$_gmod" "$_url" || warn "未输入"
+                pause_enter
+                ;;
+            5)
+                cmd_group; pause_enter
+                printf '要删除的组名: '
                 read -r _gdel || _gdel=""
                 [ -n "$_gdel" ] && cmd_sub_del "$_gdel" || warn "未输入"
                 pause_enter
                 ;;
-            4) cmd_sub_update; pause_enter ;;
-            5) cmd_sub_update --all; pause_enter ;;
-            6)
-                printf '订阅 URL: '
-                read -r _url || _url=""
-                [ -n "$_url" ] && cmd_sub_set "$_url" || warn "未输入 URL"
-                pause_enter
-                ;;
-            7) cmd_sub_status; pause_enter ;;
-            8) cmd_sub_nodes; pause_enter ;;
-            9)
-                if tui_confirm "将清除订阅链接和缓存，继续吗？"; then
-                    cmd_sub_clear
+            6) cmd_sub_update; pause_enter ;;
+            7)
+                if have "${EDITOR:-vi}"; then
+                    "${EDITOR:-vi}" "$CUSTOM_PROVIDER_FILE"
+                    # Apply if custom is active
+                    _ag="$(group_active)"
+                    [ "$_ag" = "custom" ] && cmd_group custom
+                else
+                    warn "未找到文本编辑器，请直接编辑：$CUSTOM_PROVIDER_FILE"
                 fi
                 pause_enter
                 ;;
-            10) cmd_proxy_info; pause_enter ;;
-            11) cmd_account_password; pause_enter ;;
-            12) cmd_account_password set; pause_enter ;;
+            8) cmd_proxy_info; pause_enter ;;
+            9) cmd_account_password; pause_enter ;;
+            10) cmd_account_password set; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
