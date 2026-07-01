@@ -1341,8 +1341,9 @@ h3{font-size:13px;font-weight:600;margin:0 0 8px}
 .btn-sm{padding:5px 10px;font-size:12px;border-radius:6px}
 .btn-group{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .row{margin:12px 0}
-input[type=text],input[type=password]{padding:8px 12px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--text);font-size:13px;min-width:280px;max-width:100%;outline:none;transition:border-color .12s,box-shadow .12s;font-family:inherit}
-input[type=text]:focus,input[type=password]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+input[type=text],input[type=password],select{padding:8px 12px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);font-size:13px;min-width:220px;max-width:100%;outline:none;transition:border-color .12s,box-shadow .12s;font-family:inherit}
+input[type=text]:focus,input[type=password]:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+select{-webkit-appearance:none;appearance:none;padding-right:32px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Cpath fill='%2394a3b8' d='m7 10 5 5 5-5z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;cursor:pointer}
 .table{width:100%;border-collapse:collapse;font-size:13px}
 .table th{text-align:left;padding:8px 12px;font-weight:700;color:var(--muted);border-bottom:2px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
 .table td{padding:10px 12px;border-bottom:1px solid #f8fafc;vertical-align:top}
@@ -1488,9 +1489,8 @@ page_start() {
 <a class="nav-link" data-act="status" href="?action=status">&#x1F4CA; Dashboard</a>
 <div class="sb-sec">代理</div>
 <a class="nav-link" data-act="proxy-info" href="?action=proxy-info">&#x1F517; 连接信息</a>
-<a class="nav-link" data-act="group-page" href="?action=group-page">&#x1F4E6; Group 管理</a>
+<a class="nav-link" data-act="subscription" href="?action=subscription">&#x1F4E6; 订阅管理</a>
 <a class="nav-link" data-act="sub-status" href="?action=sub-status">&#x1F4CB; 订阅状态</a>
-<a class="nav-link" data-act="sub-set" href="?action=sub-set">&#x1F517; 设置订阅</a>
 <a class="nav-link" data-act="account-password" href="?action=account-password">&#x1F511; 账号密码</a>
 <div class="sb-sec">网络</div>
 <a class="nav-link" data-act="gateway-status" href="?action=gateway-status">&#x1F309; 网关 / NAT</a>
@@ -1985,10 +1985,10 @@ gateway_status_page() {
 </div>
 EOF
 
-    printf '<div class="card"><h2>gateway-status</h2><pre>'
+    printf '<div class="card"><h2>网关状态详情</h2><pre>'
     printf '%s\n' "$WEB_GATEWAY_STATUS_OUT" | html_escape
     printf '</pre></div>\n'
-    printf '<div class="card"><h2>tproxy-status</h2><pre>'
+    printf '<div class="card"><h2>透明代理状态</h2><pre>'
     printf '%s\n' "$WEB_TPROXY_STATUS_OUT" | html_escape
     printf '</pre></div>\n'
     page_end
@@ -2029,14 +2029,17 @@ status_page() {
     version_out="$($MGATE version 2>&1)"
     web_collect_gateway_state "$status_out"
 
-    # Mihomo: check multiple sources
-    _svc_running="${WEB_MIHOMO_RUNNING:-unknown}"
-    # If still unknown, try text-based check
-    if [ "$_svc_running" = "unknown" ]; then
-        _tp_chk="$($MGATE tproxy-status 2>/dev/null | grep 'mihomo running' | head -1)"
-        case "$_tp_chk" in *yes*|*true*) _svc_running="yes";; *no*|*false*) _svc_running="no";; esac
-    fi
-    case "$_svc_running" in yes|true) svc_cls="good";; no|false) svc_cls="warn";; *) svc_cls="warn";; esac
+    # Mihomo: parse service state directly from status output (most reliable)
+    case "$status_out" in
+        *"active (running)"*|*"运行中"*) _svc_running="yes"; svc_cls="good" ;;
+        *"inactive"*|*"dead"*|*"已停止"*|*"未运行"*) _svc_running="no"; svc_cls="warn" ;;
+        *) # fallback to web-collected variable
+           case "${WEB_MIHOMO_RUNNING:-unknown}" in
+               yes|true) _svc_running="yes"; svc_cls="good" ;;
+               no|false) _svc_running="no"; svc_cls="warn" ;;
+               *) _svc_running="unknown"; svc_cls="warn" ;;
+           esac ;;
+    esac
 
     # AP: use healthy state (more accurate than just running)
     _ap_state="${WEB_AP_HEALTHY:-${WEB_AP_STATE:-unknown}}"
@@ -2391,7 +2394,7 @@ group_page() {
     _grp_names="$(printf '%s\n' "$grp_out" | \
         grep '^\[INFO\]' | \
         sed 's/^\[INFO\][[:space:]]*//' | \
-        sed 's/[[:space:]]*.*//' | \
+        sed 's/[[:space:]].*//' | \
         grep -v '^$')"
     # Named subscriptions only (exclude default, custom)
     _sub_names="$(printf '%s\n' "$_grp_names" | grep -v '^default$' | grep -v '^custom$' | grep -v '^$')"
@@ -2473,24 +2476,149 @@ EOF
 
 sub_set_page() {
     header
-    page_start "设置订阅"
+    _CGI_LOCATION="/cgi-bin/mgate.cgi?action=subscription"
+}
+
+subscription_page() {
+    header
+    page_start "订阅管理"
     nav
-    out="$($MGATE sub-status 2>&1)"
+    grp_out="$($MGATE group 2>&1)"
+    _active_grp="$(printf '%s\n' "$grp_out" | grep '\*' | sed 's/^\[INFO\][[:space:]]*//' | sed 's/[[:space:]].*//' | head -1)"
+    [ -z "$_active_grp" ] && _active_grp="default"
+
+    _grp_names="$(printf '%s\n' "$grp_out" | \
+        grep '^\[INFO\]' | \
+        sed 's/^\[INFO\][[:space:]]*//' | \
+        sed 's/[[:space:]].*//' | \
+        grep -v '^$')"
+    _sub_names="$(printf '%s\n' "$_grp_names" | grep -v '^default$' | grep -v '^custom$' | grep -v '^$')"
+
+    # Current active group card
+    printf '<div class="card">\n'
+    printf '<div class="card-title"><h2>当前订阅组</h2></div>\n'
+    if [ "$_active_grp" = "custom" ]; then
+        printf '<div style="display:flex;align-items:center;gap:10px;padding:12px 0">'
+        printf '<span style="background:rgba(168,85,247,.12);color:#a855f7;border:1px solid rgba(168,85,247,.3);border-radius:999px;padding:4px 12px;font-size:13px;font-weight:600">&#x2728; 自定义组</span>'
+        printf '<span class="muted">当前使用手动管理的自定义节点</span></div>\n'
+    else
+        printf '<div style="display:flex;align-items:center;gap:10px;padding:12px 0">'
+        printf '<span class="stat-badge sb-good">%s</span>' "$(printf '%s' "$_active_grp" | html_escape)"
+        printf '<span class="muted">%s</span>' "$(printf '%s\n' "$grp_out" | grep "^\[INFO\].*$_active_grp" | sed 's/.*上次更新：/上次更新：/' | head -1 | html_escape)"
+        printf '</div>\n'
+    fi
+    printf '<div class="btn-group">'
+    printf '<a class="btn" href="?action=confirm&amp;target=sub-update">更新当前订阅</a>'
+    printf '<a class="btn" href="?action=sub-status">查看订阅详情</a>'
+    printf '</div>\n</div>\n'
+
+    # Switch group
     cat <<'EOF'
 <div class="card">
-<h2>设置/替换订阅链接</h2>
-<p class="muted">仅支持 Clash / Mihomo YAML 订阅。提交后会立即拉取订阅、识别国家/地区、生成账号和配置。</p>
+<h2>切换订阅组</h2>
+<p class="muted">切换后重新加载 mihomo，有本地缓存时无需重新下载。切换到"自定义组"后可手动管理节点。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="group-switch-do">
+<div class="row">
+<select name="group_name" required>
+<option value="">-- 选择目标订阅组 --</option>
+EOF
+    printf '%s\n' "$_grp_names" | while IFS= read -r _gn; do
+        [ -n "$_gn" ] || continue
+        if [ "$_gn" = "custom" ]; then
+            printf '<option value="custom">✨ 自定义组（手动管理节点）</option>\n'
+        elif [ "$_gn" = "$_active_grp" ]; then
+            printf '<option value="%s" selected>%s（当前）</option>\n' \
+                "$(printf '%s' "$_gn" | html_escape)" "$(printf '%s' "$_gn" | html_escape)"
+        else
+            printf '<option value="%s">%s</option>\n' \
+                "$(printf '%s' "$_gn" | html_escape)" "$(printf '%s' "$_gn" | html_escape)"
+        fi
+    done
+    cat <<'EOF'
+</select>
+</div>
+<div class="row"><button class="primary" type="submit">切换</button></div>
+</form>
+</div>
+<div class="card">
+<h2>添加 / 修改订阅</h2>
+<p class="muted">输入名称和 URL 即可添加新订阅组；已存在同名时会更新 URL。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="sub-add-do">
+<div class="row"><input type="text" name="sub_name" placeholder="订阅名称（如 work、backup）" required autocomplete="off"></div>
+<div class="row"><input type="text" name="sub_url" placeholder="订阅 URL（Clash/Mihomo YAML）" required autocomplete="off"></div>
+<div class="row"><button class="primary" type="submit">保存并拉取</button></div>
+</form>
+</div>
+EOF
+
+    # Set default subscription URL
+    _def_url="$(cat "$SUB_URL_FILE" 2>/dev/null | head -1)"
+    cat <<EOF
+<div class="card">
+<h2>默认订阅（default）</h2>
+<p class="muted">default 组的订阅地址。</p>
 <form method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="sub-set-do">
-<div class="row"><input type="text" name="sub_url" placeholder="https://example.com/clash.yaml" autocomplete="off"></div>
+<div class="row"><input type="text" name="sub_url" value="$(printf '%s' "$_def_url" | html_escape)" placeholder="https://example.com/clash.yaml" autocomplete="off"></div>
 <div class="row"><button class="primary" type="submit">保存并立即更新</button></div>
 </form>
 </div>
-<div class="card"><h2>当前订阅状态</h2><pre>
 EOF
-    printf '%s\n' "$out" | html_escape
+
+    # Delete named subscription
+    if [ -n "$_sub_names" ]; then
+        cat <<'EOF'
+<div class="card">
+<h2>删除命名订阅</h2>
+<p class="muted">只能删除非当前激活的命名订阅（default / custom 不可删除）。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="sub-del-do">
+<div class="row">
+<select name="sub_name" required>
+<option value="">-- 选择要删除的订阅 --</option>
+EOF
+        printf '%s\n' "$_sub_names" | while IFS= read -r _sn; do
+            [ -n "$_sn" ] || continue
+            printf '<option value="%s">%s</option>\n' \
+                "$(printf '%s' "$_sn" | html_escape)" "$(printf '%s' "$_sn" | html_escape)"
+        done
+        cat <<'EOF'
+</select>
+</div>
+<div class="row"><button class="btn danger" type="submit">删除</button></div>
+</form>
+</div>
+EOF
+    fi
+
+    # Custom group: show editor only when active
+    if [ "$_active_grp" = "custom" ]; then
+        _custom_yaml="$(cat "$CUSTOM_PROVIDER_FILE" 2>/dev/null)"
+        cat <<'EOF'
+<div style="border:2px solid rgba(168,85,247,.4);border-radius:var(--r);padding:20px;margin:0 0 16px;background:rgba(168,85,247,.04)">
+<h2 style="color:#a855f7">✨ 自定义节点管理</h2>
+<p class="muted">当前使用自定义节点。直接编辑下方 YAML 内容（标准 Mihomo proxies 格式），保存后自动重载。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="custom-nodes-save">
+<div class="row">
+EOF
+        printf '<textarea name="custom_yaml" rows="16" style="width:100%%;font-family:ui-monospace,monospace;font-size:12px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:12px;resize:vertical">%s</textarea>\n' \
+            "$(printf '%s' "$_custom_yaml" | html_escape)"
+        cat <<'EOF'
+</div>
+<div class="row"><button class="primary" type="submit">保存并重载</button></div>
+</form>
+</div>
+EOF
+    fi
+
     cat <<'EOF'
-</pre></div>
+<div class="card">
+<h2>批量更新</h2>
+<p><a class="btn" href="/cgi-bin/mgate.cgi?action=sub-update-all-do">更新所有订阅缓存</a></p>
+</div>
 EOF
     page_end
 }
@@ -2545,22 +2673,13 @@ if [ "$action" = "login" ]; then
     exp="$(expected_token)"
     if [ -n "$exp" ] && [ "$token" = "$exp" ]; then
         header "Set-Cookie: mgate_token=$exp; Path=/; HttpOnly; SameSite=Lax"
-        page_start "登录成功"
-        nav
-        cat <<'EOF'
-<div class="card"><h2>登录成功</h2><p><a class="btn primary" href="/cgi-bin/mgate.cgi?action=status">进入首页</a></p></div>
-EOF
-        page_end
+        _CGI_LOCATION="/cgi-bin/mgate.cgi?action=status"
     else
-        login_page "Token 错误"
+        login_page "密码错误，请重试"
     fi
 elif [ "$action" = "logout" ]; then
     header "Set-Cookie: mgate_token=deleted; Path=/; Max-Age=0"
-    page_start "退出登录"
-    cat <<'EOF'
-<div class="card"><h2>已退出</h2><p><a class="btn" href="/cgi-bin/mgate.cgi">重新登录</a></p></div>
-EOF
-    page_end
+    _CGI_LOCATION="/cgi-bin/mgate.cgi"
 elif ! is_logged_in; then
     login_page ""
 else
@@ -2576,7 +2695,13 @@ else
         tproxy-doctor) run_job_page "TProxy 诊断" tproxy-doctor ;;
         account-password) account_password_page ;;
         sub-status) sub_status_page ;;
-        group-page) group_page ;;
+        subscription) subscription_page ;;
+        group-page) subscription_page ;;
+        custom-nodes-save)
+            custom_yaml="$(url_decode "$(param_get "$post_body" custom_yaml)")"
+            printf '%s\n' "$custom_yaml" > "$CUSTOM_PROVIDER_FILE" 2>/dev/null
+            run_job_page "保存自定义节点并重载" group custom
+            ;;
         group-switch-do)
             gname="$(url_decode "$(param_get "$post_body" group_name)")"
             run_job_page "切换 Group $gname" group "$gname"
