@@ -1362,8 +1362,10 @@ details{margin:8px 0}
 summary{cursor:pointer;color:var(--accent);font-size:13px}
 .sb-neutral{background:#f1f5f9;color:#475569}.sb-neutral::before{background:#94a3b8}
 .stat-card.sc-neutral::after{background:#94a3b8}
-.theme-btn{border:none;background:none;cursor:pointer;font-size:18px;padding:4px 8px;border-radius:6px;color:var(--muted);transition:background .12s}
-.theme-btn:hover{background:var(--bg)}
+.theme-tabs{display:flex;gap:2px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:3px}
+.tt-btn{border:none;background:none;cursor:pointer;font-size:16px;padding:4px 8px;border-radius:6px;transition:background .12s;line-height:1}
+.tt-btn:hover{background:var(--card)}
+.tt-btn.active{background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 body.auth-body{align-items:center;justify-content:center;display:flex;min-height:100vh}
 .auth-wrap{width:100%;max-width:380px;padding:24px}
 [data-theme="dark"]{--bg:#0f172a;--card:#1e293b;--border:#2d3748;--text:#f1f5f9;--muted:#94a3b8}
@@ -1535,6 +1537,7 @@ page_start() {
 <nav class="sb-nav">
 <div class="sb-sec">主页</div>
 <a class="nav-link" data-act="status" href="?action=status">&#x1F3E0; 总览</a>
+<a class="nav-link" data-act="service-page" href="?action=service-page">&#x2699;&#xFE0F; Mihomo 控制</a>
 <div class="sb-sec">上网</div>
 <a class="nav-link" data-act="wifi-page" href="?action=wifi-page">&#x1F4F6; WiFi 上游</a>
 <a class="nav-link" data-act="subscription" href="?action=subscription">&#x1F504; 代理管理</a>
@@ -1556,11 +1559,10 @@ page_start() {
 <header class="topbar">
 <button class="menu-btn" onclick="document.getElementById('sidebar').classList.toggle('open')">&#9776;</button>
 <span class="pg-title">$title</span>
-<button class="theme-btn" id="theme-toggle" title="切换主题">🌙</button>
-<div class="tb-actions">
-<a class="btn btn-sm primary" href="?action=start">启动</a>
-<a class="btn btn-sm" href="?action=confirm&amp;target=restart">重启</a>
-<a class="btn btn-sm danger" href="?action=confirm&amp;target=stop">停止</a>
+<div class="theme-tabs" id="theme-tabs">
+<button class="tt-btn" data-t="system" title="跟随系统">💻</button>
+<button class="tt-btn" data-t="light" title="浅色">☀️</button>
+<button class="tt-btn" data-t="dark" title="深色">🌙</button>
 </div>
 </header>
 <div class="content">
@@ -1589,29 +1591,26 @@ document.querySelectorAll('.nav-link[data-act]').forEach(function(el){
 if(el.dataset.act===a)el.classList.add('active');
 });
 })();
-// 主题：system/light/dark 三模式
+// 主题：system/light/dark 三联按钮
 (function(){
-var ICONS={'system':'💻','light':'☀️','dark':'🌙'};
-var LABELS={'system':'跟随系统','light':'浅色','dark':'深色'};
 var h=document.documentElement;
-var btn=document.getElementById('theme-toggle');
 function applyTheme(t){
   if(t==='dark'){h.setAttribute('data-theme','dark');}
   else if(t==='light'){h.setAttribute('data-theme','light');}
   else{h.removeAttribute('data-theme');}
-  if(btn){btn.textContent=ICONS[t];btn.title=LABELS[t];}
+  document.querySelectorAll('.tt-btn').forEach(function(b){
+    b.classList.toggle('active', b.dataset.t===t);
+  });
 }
 var saved=localStorage.getItem('mgate-theme')||'system';
 applyTheme(saved);
-if(btn){
-  btn.onclick=function(){
-    var themes=['system','light','dark'];
-    var cur=localStorage.getItem('mgate-theme')||'system';
-    var nxt=themes[(themes.indexOf(cur)+1)%3];
-    localStorage.setItem('mgate-theme',nxt);
-    applyTheme(nxt);
-  };
-}
+document.querySelectorAll('.tt-btn').forEach(function(b){
+  b.addEventListener('click',function(){
+    var t=b.dataset.t;
+    localStorage.setItem('mgate-theme',t);
+    applyTheme(t);
+  });
+});
 })();
 // Modal 系统
 function openModal(id){var m=document.getElementById(id);if(m){m.classList.add('open');document.body.style.overflow='hidden';}}
@@ -2473,7 +2472,11 @@ wifi_page() {
         _wn_esc="$(printf '%s' "$_wname" | html_escape)"
         printf '<td><div class="ops">'
         [ "$_is_cur" = "false" ] && printf '<button type="button" onclick="connectWifi('"'"'%s'"'"')" class="btn btn-sm">连接</button>' "$_wn_esc"
-        printf '<button type="button" onclick="deleteWifi('"'"'%s'"'"')" class="btn btn-sm danger">删除</button>' "$_wn_esc"
+        if [ "$_is_cur" = "true" ]; then
+            printf '<button type="button" class="btn btn-sm" disabled title="当前连接，无法删除" style="opacity:.4;cursor:not-allowed">删除</button>'
+        else
+            printf '<button type="button" onclick="deleteWifi('"'"'%s'"'"')" class="btn btn-sm danger">删除</button>' "$_wn_esc"
+        fi
         printf '</div></td></tr>\n'
     done
     printf '</tbody></table>\n</div>\n'
@@ -2505,9 +2508,14 @@ EOF
 <input type="hidden" name="action" value="wifi-add-do">
 <div class="modal-body">
 <div class="form-row">
-<div class="form-label">WiFi 名称（SSID）<a class="btn btn-sm" href="?action=wifi-page&scan=1" style="float:right;font-size:11px">&#x1F50D; 扫描</a></div>
-<input type="text" name="wifi_ssid" placeholder="路由器的 WiFi 名称" required autocomplete="off">
-<div class="hint">如不确定可点击"扫描"查看附近 WiFi，然后手动填写</div>
+<div class="form-label">WiFi 名称（SSID）
+<button type="button" id="scan-btn" onclick="doWifiScan()" class="btn btn-sm" style="float:right;font-size:11px">&#x1F50D; 扫描附近</button>
+</div>
+<select id="ssid-select" style="display:none;margin-bottom:6px" onchange="if(this.value){document.getElementById('ssid-input').value=this.value;}">
+<option value="">-- 扫描结果（选择后自动填入） --</option>
+</select>
+<input type="text" id="ssid-input" name="wifi_ssid" placeholder="手动输入或点击上方扫描后选择" required autocomplete="off">
+<div class="hint" id="scan-hint">点击"扫描附近"可自动列出周边可用 WiFi，也支持手动输入添加未在范围内的 WiFi（如提前添加公司 WiFi）</div>
 </div>
 <div class="form-row"><div class="form-label">密码</div><input type="password" name="wifi_password" placeholder="WiFi 密码（留空=开放网络）" autocomplete="off"></div>
 <div class="form-row">
@@ -2561,7 +2569,91 @@ EOF
 <script>
 function deleteWifi(n){document.getElementById('wdel-name').textContent=n;document.getElementById('wdel-input').value=n;openModal('modal-wifi-del');}
 function connectWifi(n){document.getElementById('wconn-name').textContent=n;document.getElementById('wconn-input').value=n;openModal('modal-wifi-conn');}
+function doWifiScan(){
+  var btn=document.getElementById('scan-btn');
+  var sel=document.getElementById('ssid-select');
+  var hint=document.getElementById('scan-hint');
+  btn.textContent='扫描中...';btn.disabled=true;
+  fetch('/cgi-bin/mgate.cgi?action=wifi-scan-json')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      sel.innerHTML='<option value="">-- 选择扫描到的 WiFi --</option>';
+      var nets=d.networks||[];
+      if(nets.length===0){hint.textContent='未扫描到新的 WiFi，请手动输入';}
+      else{
+        nets.forEach(function(n){
+          var o=document.createElement('option');
+          o.value=n;o.textContent=n;
+          sel.appendChild(o);
+        });
+        sel.style.display='block';
+        hint.textContent='从下拉列表选择，或手动输入 SSID';
+      }
+    })
+    .catch(function(){hint.textContent='扫描失败，请手动输入 SSID';})
+    .finally(function(){btn.textContent='&#x1F50D; 重新扫描';btn.disabled=false;});
+}
 </script>
+EOF
+    page_end
+}
+
+service_page() {
+    header
+    page_start "Mihomo 控制"
+    nav
+    _svc_out="$($MGATE status 2>&1)"
+    _svc_running="no"
+    case "$_svc_out" in *"active (running)"*|*"运行中"*) _svc_running="yes" ;; esac
+
+    printf '<div class="stat-grid" style="grid-template-columns:1fr;max-width:400px;margin-bottom:20px">\n'
+    if [ "$_svc_running" = "yes" ]; then
+        printf '<div class="hero-card hc-good"><div class="hero-icon">&#x1F7E2;</div><div class="hero-label">Mihomo 代理引擎</div><div class="hero-value" style="color:#22c55e">运行中</div><div class="hero-sub">混合代理端口 %s</div></div>\n' "$DEFAULT_MIXED_PORT"
+    else
+        printf '<div class="hero-card hc-warn"><div class="hero-icon">&#x1F534;</div><div class="hero-label">Mihomo 代理引擎</div><div class="hero-value" style="color:#f59e0b">已停止</div><div class="hero-sub">代理功能不可用</div></div>\n'
+    fi
+    printf '</div>\n'
+
+    cat <<'EOF'
+<div class="card">
+<h2>服务控制</h2>
+<div class="warn-box" style="margin-bottom:16px">
+<strong>⚠️ 重要提示：</strong><br>
+以下操作会直接影响所有设备的代理连接。操作前请确认已告知使用该设备的用户。<br>
+• <strong>停止</strong>：所有设备的代理将立即中断，恢复直连<br>
+• <strong>重启</strong>：代理短暂中断（约 3-5 秒），自动恢复<br>
+• <strong>启动</strong>：从停止状态重新启动代理服务
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+<div class="card" style="border-color:#86efac;text-align:center;padding:20px">
+<div style="font-size:24px">&#x25B6;&#xFE0F;</div>
+<div style="font-weight:700;margin:8px 0 4px">启动</div>
+<div class="muted" style="font-size:11px;margin-bottom:12px">从停止状态启动 Mihomo</div>
+<a class="btn primary" href="?action=start" style="display:block">启动服务</a>
+</div>
+<div class="card" style="border-color:#fcd34d;text-align:center;padding:20px">
+<div style="font-size:24px">&#x1F504;</div>
+<div style="font-weight:700;margin:8px 0 4px">重启</div>
+<div class="muted" style="font-size:11px;margin-bottom:12px">代理短暂中断后自动恢复</div>
+<a class="btn" href="?action=confirm&target=restart" style="display:block">重启服务</a>
+</div>
+<div class="card" style="border-color:#fca5a5;text-align:center;padding:20px">
+<div style="font-size:24px">&#x23F9;&#xFE0F;</div>
+<div style="font-weight:700;margin:8px 0 4px">停止</div>
+<div class="muted" style="font-size:11px;margin-bottom:12px">停止后所有代理立即失效</div>
+<a class="btn danger" href="?action=confirm&target=stop" style="display:block">停止服务</a>
+</div>
+</div>
+</div>
+<div class="card">
+<h2>其他操作</h2>
+<div class="btn-group">
+<a class="btn" href="?action=test">测试配置</a>
+<a class="btn" href="?action=doctor">系统诊断</a>
+<a class="btn" href="?action=logs&lines=100">查看日志</a>
+<a class="btn" href="?action=version">版本信息</a>
+</div>
+</div>
 EOF
     page_end
 }
@@ -2620,7 +2712,7 @@ EOF
     _hs_pass="$(printf '%s' "$_ap_json" | sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
     [ -z "$_hs_pass" ] && _hs_pass="mgate12345678"
     _kv2 "SSID（名称）" "$_hs_ssid"
-    _kv2 "密码" "$_hs_pass"
+    _kv2 "密码" "${_hs_pass:+••••••••}"
     _kv2 "频段" "2.4GHz"
     _kv2 "热点 IP" "$_hs_ip"
     _kv2 "DHCP 范围" "10.88.0.100 – 10.88.0.200"
@@ -2628,7 +2720,29 @@ EOF
     cat <<'EOF'
 </tbody>
 </table>
-<p class="muted" style="margin-top:12px">修改 SSID 或密码需要重启热点生效。如需修改，请在系统终端执行 <span class="code">mgate ap-config</span>。</p>
+<div style="margin-top:14px">
+<button type="button" onclick="openModal('modal-ap-edit')" class="btn">&#x270F;&#xFE0F; 修改 SSID / 密码</button>
+</div>
+</div>
+EOF
+    # 热点编辑 modal
+    cat <<EOF
+<div id="modal-ap-edit" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>修改热点设置</h3><button class="modal-close" type="button" onclick="closeModal('modal-ap-edit')">&#x2715;</button></div>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="ap-edit-do">
+<div class="modal-body">
+<div class="warn-box">修改后热点将自动重启，所有已连接设备需要重新连接。</div>
+<div class="form-row" style="margin-top:14px"><div class="form-label">新 SSID（热点名称）</div>
+<input type="text" name="ap_ssid" placeholder="$(printf '%s' "$_hs_ssid" | html_escape)（留空=不修改）" autocomplete="off"></div>
+<div class="form-row"><div class="form-label">新密码（8位以上）</div>
+<input type="password" name="ap_password" placeholder="留空=不修改密码" autocomplete="off">
+<div class="hint">密码至少 8 个字符</div></div>
+</div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-ap-edit')">取消</button><button type="submit" class="btn primary">保存并重启热点</button></div>
+</form>
+</div>
 </div>
 EOF
     page_end
@@ -2810,10 +2924,13 @@ EOF
     _bk_count=0
     if [ -n "$_bk_list" ] && printf '%s' "$_bk_list" | grep -q '^\[INFO\]'; then
         printf '<table class="table"><thead><tr><th>备份 ID</th><th>操作</th></tr></thead><tbody>\n'
-        printf '%s\n' "$_bk_list" | grep '^\[INFO\]' | sed 's/^\[INFO\][[:space:]]*//' | while IFS= read -r _bk; do
+        printf '%s\n' "$_bk_list" | grep '^\[INFO\]' | sed 's/^\[INFO\][[:space:]]*//' | while IFS= read -r _bk_line; do
+            [ -n "$_bk_line" ] || continue
+            # 只取第一个词作为备份ID（避免包含额外元数据）
+            _bk="$(printf '%s' "$_bk_line" | awk '{print $1}')"
             [ -n "$_bk" ] || continue
             _bk_count=$((_bk_count + 1))
-            printf '<tr><td><span class="code" style="font-size:12px">%s</span></td><td><a class="btn btn-sm" href="?action=restore-confirm&id=%s">恢复</a></td></tr>\n' \
+            printf '<tr><td><span class="code" style="font-size:12px">%s</span></td><td><button type="button" onclick="restoreBackup('"'"'%s'"'"')" class="btn btn-sm">恢复</button></td></tr>\n' \
                 "$(printf '%s' "$_bk" | html_escape)" \
                 "$(printf '%s' "$_bk" | html_escape)"
         done
@@ -2825,9 +2942,30 @@ EOF
 
     cat <<'EOF'
 <div class="card">
-<h2>恢复说明</h2>
-<p class="muted">点击「恢复」按钮后需要二次确认。恢复操作会覆盖当前配置，建议先创建一个新备份再恢复旧版本。恢复完成后需手动重启 Mihomo 服务。</p>
+<h2>说明</h2>
+<p class="muted">恢复操作会覆盖当前配置、订阅数据和账号信息，建议先创建一个新备份再恢复旧版本。恢复完成后服务会自动重启。</p>
 </div>
+
+<div id="modal-restore" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>确认恢复备份</h3><button class="modal-close" type="button" onclick="closeModal('modal-restore')">&#x2715;</button></div>
+<div class="modal-body">
+<div class="warn-box">⚠️ 此操作将覆盖当前所有配置！建议先创建一个新备份。</div>
+<p style="margin-top:12px">确定要恢复备份 <strong id="restore-bk-id"></strong> 吗？</p>
+</div>
+<div class="modal-foot">
+<button type="button" class="btn" onclick="closeModal('modal-restore')">取消</button>
+<form id="restore-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
+<input type="hidden" name="action" value="restore-do">
+<input type="hidden" id="restore-bk-input" name="backup_id" value="">
+<button type="submit" class="btn danger">确认恢复</button>
+</form>
+</div>
+</div>
+</div>
+<script>
+function restoreBackup(id){document.getElementById('restore-bk-id').textContent=id;document.getElementById('restore-bk-input').value=id;openModal('modal-restore');}
+</script>
 EOF
     page_end
 }
@@ -3172,6 +3310,7 @@ lines="$(param_get "${QUERY_STRING:-}" lines)"
 # Without Content-Length, HTTP/1.1 keep-alive causes Chrome to spin forever
 # waiting for the connection to close.
 _CGI_LOCATION=""
+_CGI_CONTENT_TYPE=""
 _CGI_BODY="/tmp/.mgate-cgi-$$"
 exec 3>&1
 exec 1>"$_CGI_BODY"
@@ -3213,7 +3352,29 @@ else
         sub-status) sub_status_page ;;
         subscription) subscription_page ;;
         group-page) subscription_page ;;
+        service-page) service_page ;;
         hotspot-page) hotspot_page ;;
+        ap-edit-do)
+            _ae_ssid="$(url_decode "$(param_get "$post_body" ap_ssid)")"
+            _ae_pass="$(url_decode "$(param_get "$post_body" ap_password)")"
+            run_job_page "修改热点设置" ap-edit \
+                ${_ae_ssid:+--ssid="$_ae_ssid"} \
+                ${_ae_pass:+--password="$_ae_pass"} --yes
+            ;;
+        wifi-scan-json)
+            _CGI_CONTENT_TYPE="application/json"
+            _saved="$($MGATE wifi-list 2>/dev/null | grep '^\[INFO\]' | sed 's/^\[INFO\][[:space:]]*//' | sed 's/^[* ]*//' | sed 's/（.*//')"
+            _scan="$($MGATE wifi-scan 2>/dev/null)"
+            printf '{"ok":true,"networks":['
+            _first=1
+            printf '%s\n' "$_scan" | grep -v '^\[' | awk 'NR>1{print $3}' | while IFS= read -r _ssid; do
+                [ -n "$_ssid" ] || continue
+                printf '%s\n' "$_saved" | grep -q "^$_ssid$" && continue
+                [ "$_first" = "1" ] && _first=0 || printf ','
+                printf '"%s"' "$(printf '%s' "$_ssid" | sed 's/"/\\"/g')"
+            done
+            printf ']}'
+            ;;
         devices-page) devices_page ;;
         ap-start-do) run_job_page "开启热点" ap-start ;;
         ap-restart) run_job_page "重启热点" ap-stop && run_job_page "重启热点" ap-start ;;
@@ -3283,6 +3444,10 @@ else
             bk_id="$(param_get "${QUERY_STRING:-}" id)"
             run_job_page "恢复备份 $bk_id" restore "$bk_id"
             ;;
+        restore-do)
+            bk_id="$(url_decode "$(param_get "$post_body" backup_id)")"
+            run_job_page "恢复备份 $bk_id" restore "$bk_id"
+            ;;
         backup) run_job_page "创建备份" backup web ;;
         token) token_page ;;
         confirm)
@@ -3327,7 +3492,8 @@ if [ -n "$_CGI_LOCATION" ]; then
     rm -f "$_CGI_BODY"
 else
     _CGI_BODY_LEN="$(wc -c < "$_CGI_BODY" 2>/dev/null || echo 0)"
-    printf 'Content-Type: text/html; charset=utf-8\r\n'
+    _ctype="${_CGI_CONTENT_TYPE:-text/html; charset=utf-8}"
+    printf 'Content-Type: %s\r\n' "$_ctype"
     printf 'Content-Length: %s\r\n' "$_CGI_BODY_LEN"
     printf 'Cache-Control: no-store\r\n'
     printf 'Connection: close\r\n'
@@ -3697,6 +3863,50 @@ ap_config_get() {
         ' "$AP_CONFIG_FILE" 2>/dev/null
     else
         printf '%s\n' "$def"
+    fi
+}
+
+ap_config_set() {
+    key="$1"; value="$2"
+    [ -n "$key" ] || return 1
+    ensure_dirs
+    # Create config file if not exists
+    [ -f "$AP_CONFIG_FILE" ] || ap_default_config > "$AP_CONFIG_FILE"
+    # Update or add the key
+    if grep -q "^[[:space:]]*${key}=" "$AP_CONFIG_FILE" 2>/dev/null; then
+        sed -i "s|^[[:space:]]*${key}=.*|${key}=${value}|" "$AP_CONFIG_FILE"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$AP_CONFIG_FILE"
+    fi
+}
+
+cmd_ap_edit() {
+    _ae_ssid="" _ae_pass="" _ae_yes=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ssid=*) _ae_ssid="${1#--ssid=}"; shift ;;
+            --ssid) _ae_ssid="$2"; shift 2 ;;
+            --password=*) _ae_pass="${1#--password=}"; shift ;;
+            --password) _ae_pass="$2"; shift 2 ;;
+            --yes|-y) _ae_yes=1; shift ;;
+            *) shift ;;
+        esac
+    done
+    need_root
+    [ -n "$_ae_ssid" ] || [ -n "$_ae_pass" ] || { err "请指定 --ssid 或 --password"; return 1; }
+    ap_load_config 2>/dev/null || true
+    _ae_was_running=0
+    ( ap_is_running_healthy ) >/dev/null 2>&1 && _ae_was_running=1
+    [ "$_ae_yes" = "1" ] || tui_confirm "修改后热点将自动重启，已连接设备需重新连接，继续吗？" || return 1
+    [ -n "$_ae_ssid" ] && { ap_config_set ssid "$_ae_ssid"; ok "SSID 已更新：$_ae_ssid"; }
+    [ -n "$_ae_pass" ] && { ap_config_set password "$_ae_pass"; ok "密码已更新"; }
+    if [ "$_ae_was_running" = "1" ]; then
+        step "重启热点..."
+        cmd_ap_stop >/dev/null 2>&1 || true
+        sleep 1
+        cmd_ap_start && ok "热点已重启" || warn "热点重启失败，请手动执行：mgate ap-start"
+    else
+        hint "修改已保存，执行 mgate ap-start 启动热点"
     fi
 }
 
@@ -11030,6 +11240,7 @@ main() {
         ap-status) cmd_ap_status "$@" ;;
         ap-json) cmd_ap_json "$@" ;;
         ap-config) cmd_ap_config "$@" ;;
+        ap-edit) cmd_ap_edit "$@" ;;
         ap-start) cmd_ap_start "$@" ;;
         ap-stop) cmd_ap_stop "$@" ;;
         gateway-check|nat-check) cmd_gateway_check "$@" ;;
