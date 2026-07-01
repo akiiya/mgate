@@ -1481,9 +1481,23 @@ param_get() {
 }
 
 url_decode() {
-    # Decode application/x-www-form-urlencoded values. BusyBox printf supports \xHH on common builds.
-    v="$(printf '%s' "$1" | sed 's/+/ /g; s/%/\\x/g')"
-    printf '%b' "$v"
+    # Decode application/x-www-form-urlencoded. Uses awk for byte-level hex conversion
+    # to avoid busybox printf's lack of \xHH support (only \NNN octal).
+    printf '%s' "$1" | awk '
+    BEGIN {
+        for (i = 0; i < 256; i++) {
+            D[sprintf("%02x",i)] = sprintf("%c",i)
+            D[sprintf("%02X",i)] = sprintf("%c",i)
+        }
+    }
+    {
+        gsub(/\+/, " ")
+        while (match($0, /%[0-9a-fA-F][0-9a-fA-F]/)) {
+            printf "%s%s", substr($0, 1, RSTART-1), D[substr($0, RSTART+1, 2)]
+            $0 = substr($0, RSTART+RLENGTH)
+        }
+        printf "%s", $0
+    }'
 }
 
 read_post_body() {
@@ -1543,7 +1557,7 @@ page_start() {
 <a class="nav-link" data-act="subscription" href="?action=subscription">&#x1F504; 代理管理</a>
 <div class="sb-sec">热点</div>
 <a class="nav-link" data-act="hotspot-page" href="?action=hotspot-page">&#x1F4E1; 热点设置</a>
-<a class="nav-link" data-act="devices-page" href="?action=devices-page">&#x1F4F1; 已连接设备</a>
+<a class="nav-link" data-act="devices-page" href="?action=devices-page">&#x1F4F1; 设备列表</a>
 <div class="sb-sec">高级</div>
 <a class="nav-link" data-act="gateway-status" href="?action=gateway-status">&#x1F309; 网关 / NAT</a>
 <a class="nav-link" data-act="tproxy-page" href="?action=tproxy-page">&#x1F6E1;&#xFE0F; 透明代理</a>
@@ -2766,56 +2780,82 @@ EOF
 
 devices_page() {
     header
-    page_start "已连接设备"
+    page_start "设备列表"
     nav
 
-    # 获取连接设备：优先读 dnsmasq lease 文件，降级用 arp
     _lease_file="/var/lib/misc/dnsmasq.leases"
     [ -f "$_lease_file" ] || _lease_file="/opt/mgate/run/ap/dnsmasq.leases"
     [ -f "$_lease_file" ] || _lease_file=""
 
+    # Build ARP table for ap0 to check actual online status
+    _arp_tmp="/tmp/.mgate-arp-dev.$$"
+    ip neigh show dev ap0 2>/dev/null | awk '{print $1}' > "$_arp_tmp" 2>/dev/null || \
+        arp -n 2>/dev/null | awk '/^10\.88\.0\./{print $1}' > "$_arp_tmp" 2>/dev/null || true
+    _now="$(date +%s 2>/dev/null || printf '0')"
+
     printf '<div class="card">\n'
-    printf '<h2>已连接设备</h2>\n'
-    printf '<table class="table"><thead><tr><th>设备名称</th><th>IP 地址</th><th>MAC 地址</th><th>连接时间</th></tr></thead><tbody>\n'
+    printf '<div class="card-title"><h2>热点已知设备</h2>'
+    printf '<a class="btn btn-sm" href="?action=devices-page">&#x21BA; 刷新</a></div>\n'
+    printf '<table class="table"><thead><tr><th>设备名称</th><th>IP 地址</th><th>MAC 地址</th><th>状态</th></tr></thead><tbody>\n'
 
     _device_count=0
+    _online_count=0
     if [ -n "$_lease_file" ] && [ -f "$_lease_file" ]; then
-        # dnsmasq lease format: expire_time mac ip hostname clientid
         while IFS=' ' read -r _exp _mac _ip _name _cid; do
             [ -z "$_ip" ] && continue
             [ "$_name" = "*" ] && _name="未知设备"
             _device_count=$((_device_count + 1))
-            printf '<tr><td>%s</td><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td>%s</td></tr>\n' \
+            # Check ARP table: if IP present → online; else → offline
+            if grep -qxF "$_ip" "$_arp_tmp" 2>/dev/null; then
+                _status='<span class="stat-badge sb-good">&#x2022; 在线</span>'
+                _online_count=$((_online_count + 1))
+            else
+                # Show lease expiry for context
+                _remain=""
+                if [ "$_exp" -gt 0 ] 2>/dev/null && [ "$_now" -gt 0 ] 2>/dev/null; then
+                    _diff=$((_exp - _now))
+                    if [ "$_diff" -gt 0 ]; then
+                        _hrs=$((_diff / 3600)); _mins=$(((_diff % 3600) / 60))
+                        _remain="租约剩余 ${_hrs}h${_mins}m"
+                    else
+                        _remain="租约已过期"
+                    fi
+                fi
+                _status="$(printf '<span style="color:var(--muted);font-size:13px">离线%s</span>' "${_remain:+（$_remain）}")"
+            fi
+            printf '<tr><td><strong>%s</strong></td><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td>%s</td></tr>\n' \
                 "$(printf '%s' "$_name" | html_escape)" \
                 "$(printf '%s' "$_ip" | html_escape)" \
                 "$(printf '%s' "$_mac" | html_escape)" \
-                "活跃"
+                "$_status"
         done < "$_lease_file"
     else
-        # 降级：ARP 表过滤热点子网（POSIX sh 兼容，不使用进程替换）
-        _arp_tmp="/tmp/.mgate-arp.$$"
-        arp -n 2>/dev/null | tail -n +2 > "$_arp_tmp" 2>/dev/null || true
-        if [ -f "$_arp_tmp" ]; then
+        # Fallback: ARP only
+        _arp_fb="/tmp/.mgate-arp-fb.$$"
+        arp -n 2>/dev/null | tail -n +2 > "$_arp_fb" 2>/dev/null || true
+        if [ -f "$_arp_fb" ]; then
             while IFS= read -r _line; do
                 case "$_line" in 10.88.0.*) : ;; *) continue ;; esac
                 _arp_ip="$(printf '%s' "$_line" | awk '{print $1}')"
                 _arp_mac="$(printf '%s' "$_line" | awk '{print $3}')"
                 [ "$_arp_mac" = "<incomplete>" ] && continue
                 _device_count=$((_device_count + 1))
-                printf '<tr><td>%s</td><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td>活跃</td></tr>\n' \
-                    "设备 $_device_count" \
+                _online_count=$((_online_count + 1))
+                printf '<tr><td><strong>设备 %d</strong></td><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td><span class="stat-badge sb-good">&#x2022; 在线</span></td></tr>\n' \
+                    "$_device_count" \
                     "$(printf '%s' "$_arp_ip" | html_escape)" \
                     "$(printf '%s' "$_arp_mac" | html_escape)"
-            done < "$_arp_tmp"
-            rm -f "$_arp_tmp"
+            done < "$_arp_fb"
+            rm -f "$_arp_fb"
         fi
     fi
+    rm -f "$_arp_tmp"
 
     if [ "$_device_count" -eq 0 ]; then
-        printf '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">暂无设备连接到热点</td></tr>\n'
+        printf '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">暂无设备记录（热点未开启或无设备连接过）</td></tr>\n'
     fi
     printf '</tbody></table>\n'
-    printf '<p class="muted" style="margin-top:12px">共 <strong>%d</strong> 台设备连接中。页面不自动刷新，请手动刷新查看最新状态。</p>\n' "$_device_count"
+    printf '<p class="muted" style="margin-top:12px"><strong>%d</strong> 台在线 / <strong>%d</strong> 台历史记录。状态基于 ARP 表实时判断，离线设备约 5 分钟内从 ARP 中消失。</p>\n' "$_online_count" "$_device_count"
     printf '</div>\n'
     page_end
 }
@@ -3206,65 +3246,48 @@ subscription_page() {
     fi
     printf '</tbody></table>\n</div>\n</details>\n'
 
-    # ── Modals ──
-    cat <<'MODEOF'
-<div id="modal-add" class="modal-overlay">
-<div class="modal-box">
-<div class="modal-head"><h3>添加订阅组</h3><button class="modal-close" type="button" onclick="closeModal('modal-add')">&#x2715;</button></div>
-<form method="POST" action="/cgi-bin/mgate.cgi">
-<input type="hidden" name="action" value="sub-add-do">
-<div class="modal-body">
-<div class="form-row"><div class="form-label">组名称</div><input type="text" name="sub_name" placeholder="如：work、backup" required autocomplete="off"></div>
-<div class="form-row"><div class="form-label">订阅 URL</div><input type="text" name="sub_url" placeholder="https://example.com/sub.yaml" required autocomplete="off"><div class="hint">Clash / Mihomo YAML 格式</div></div>
-</div>
-<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-add')">取消</button><button type="submit" class="btn primary">保存并拉取</button></div>
-</form></div></div>
+    # ── Modals（用 printf 避免 heredoc 嵌套问题）──
+    printf '<div id="modal-add" class="modal-overlay"><div class="modal-box">\n'
+    printf '<div class="modal-head"><h3>添加订阅组</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-add'"'"')">&#x2715;</button></div>\n'
+    printf '<form method="POST" action="/cgi-bin/mgate.cgi"><input type="hidden" name="action" value="sub-add-do">\n'
+    printf '<div class="modal-body">\n'
+    printf '<div class="form-row"><div class="form-label">组名称</div><input type="text" name="sub_name" placeholder="如：work、backup" required autocomplete="off"></div>\n'
+    printf '<div class="form-row"><div class="form-label">订阅 URL</div><input type="text" name="sub_url" placeholder="https://example.com/sub.yaml" required autocomplete="off"><div class="hint">Clash / Mihomo YAML 格式</div></div>\n'
+    printf '</div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-add'"'"')">取消</button><button type="submit" class="btn primary">保存并拉取</button></div>\n'
+    printf '</form></div></div>\n'
 
-<div id="modal-edit" class="modal-overlay">
-<div class="modal-box">
-<div class="modal-head"><h3>修改订阅</h3><button class="modal-close" type="button" onclick="closeModal('modal-edit')">&#x2715;</button></div>
-<form method="POST" action="/cgi-bin/mgate.cgi">
-<input type="hidden" name="action" value="sub-add-do">
-<div class="modal-body">
-<div class="form-row"><div class="form-label">组名称</div><input type="text" id="edit-name" name="sub_name" readonly style="background:var(--bg);opacity:.7"></div>
-<div class="form-row"><div class="form-label">订阅 URL</div><input type="text" id="edit-url" name="sub_url" required autocomplete="off"></div>
-</div>
-<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-edit')">取消</button><button type="submit" class="btn primary">保存</button></div>
-</form></div></div>
+    printf '<div id="modal-edit" class="modal-overlay"><div class="modal-box">\n'
+    printf '<div class="modal-head"><h3>修改订阅</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-edit'"'"')">&#x2715;</button></div>\n'
+    printf '<form method="POST" action="/cgi-bin/mgate.cgi"><input type="hidden" name="action" value="sub-add-do">\n'
+    printf '<div class="modal-body">\n'
+    printf '<div class="form-row"><div class="form-label">组名称</div><input type="text" id="edit-name" name="sub_name" readonly style="background:var(--bg);opacity:.7"></div>\n'
+    printf '<div class="form-row"><div class="form-label">订阅 URL</div><input type="text" id="edit-url" name="sub_url" required autocomplete="off"></div>\n'
+    printf '</div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-edit'"'"')">取消</button><button type="submit" class="btn primary">保存</button></div>\n'
+    printf '</form></div></div>\n'
 
-<div id="modal-del" class="modal-overlay">
-<div class="modal-box">
-<div class="modal-head"><h3>删除订阅组</h3><button class="modal-close" type="button" onclick="closeModal('modal-del')">&#x2715;</button></div>
-<div class="modal-body"><p>确定要删除 <strong id="del-name-show"></strong> 吗？此操作不可恢复。</p></div>
-<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-del')">取消</button>
-<form id="del-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
-<input type="hidden" name="action" value="sub-del-do">
-<input type="hidden" id="del-name-input" name="sub_name" value="">
-<button type="submit" class="btn danger">确认删除</button>
-</form></div></div>
+    printf '<div id="modal-del" class="modal-overlay"><div class="modal-box">\n'
+    printf '<div class="modal-head"><h3>删除订阅组</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-del'"'"')">&#x2715;</button></div>\n'
+    printf '<div class="modal-body"><p>确定要删除 <strong id="del-name-show"></strong> 吗？此操作不可恢复。</p></div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-del'"'"')">取消</button>\n'
+    printf '<form id="del-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
+    printf '<input type="hidden" name="action" value="sub-del-do"><input type="hidden" id="del-name-input" name="sub_name" value="">\n'
+    printf '<button type="submit" class="btn danger">确认删除</button></form></div></div>\n'
 
-<div id="modal-update" class="modal-overlay">
-<div class="modal-box">
-<div class="modal-head"><h3>更新订阅</h3><button class="modal-close" type="button" onclick="closeModal('modal-update')">&#x2715;</button></div>
-<div class="modal-body"><p>确认重新拉取 <strong id="upd-name-show"></strong> 的订阅内容？</p></div>
-<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-update')">取消</button>
-<form id="upd-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
-<input type="hidden" name="action" value="sub-update-named-do">
-<input type="hidden" id="upd-name-input" name="group_name" value="">
-<button type="submit" class="btn primary">确认更新</button>
-</form></div></div>
+    printf '<div id="modal-update" class="modal-overlay"><div class="modal-box">\n'
+    printf '<div class="modal-head"><h3>更新订阅</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-update'"'"')">&#x2715;</button></div>\n'
+    printf '<div class="modal-body"><p>确认重新拉取 <strong id="upd-name-show"></strong> 的订阅内容？</p></div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-update'"'"')">取消</button>\n'
+    printf '<form id="upd-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
+    printf '<input type="hidden" name="action" value="sub-update-named-do"><input type="hidden" id="upd-name-input" name="group_name" value="">\n'
+    printf '<button type="submit" class="btn primary">确认更新</button></form></div></div>\n'
 
-<div id="modal-activate" class="modal-overlay">
-<div class="modal-box">
-<div class="modal-head"><h3>切换订阅组</h3><button class="modal-close" type="button" onclick="closeModal('modal-activate')">&#x2715;</button></div>
-<div class="modal-body"><p>切换到订阅组 <strong id="act-name-show"></strong>？</p><p class="muted">切换后将重载 mihomo，有本地缓存时无需重新下载。</p></div>
-<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-activate')">取消</button>
-<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
-<input type="hidden" name="action" value="group-switch-do">
-<input type="hidden" id="act-name-input" name="group_name" value="">
-<button type="submit" class="btn primary">确认切换</button>
-</form></div></div>
-MODEOF
+    printf '<div id="modal-activate" class="modal-overlay"><div class="modal-box">\n'
+    printf '<div class="modal-head"><h3>切换订阅组</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-activate'"'"')">&#x2715;</button></div>\n'
+    printf '<div class="modal-body"><p>切换到订阅组 <strong id="act-name-show"></strong>？</p><p class="muted">切换后将重载 mihomo，有本地缓存时无需重新下载。</p></div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-activate'"'"')">取消</button>\n'
+    printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
+    printf '<input type="hidden" name="action" value="group-switch-do"><input type="hidden" id="act-name-input" name="group_name" value="">\n'
+    printf '<button type="submit" class="btn primary">确认切换</button></form></div></div>\n'
 
     # 节点管理 modal（带实际 YAML 内容）
     printf '<div id="modal-nodes" class="modal-overlay"><div class="modal-box" style="max-width:600px">\n'
@@ -3275,15 +3298,14 @@ MODEOF
         "$(printf '%s' "$_custom_yaml" | html_escape)"
     printf '</div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-nodes'"'"')">取消</button><button type="submit" class="btn primary">保存并重载</button></div></form></div></div>\n'
 
-    cat <<'JSEOF'
-<script>
-function activateGroup(n){document.getElementById('act-name-show').textContent=n;document.getElementById('act-name-input').value=n;openModal('modal-activate');}
-function editGroup(n,u){document.getElementById('edit-name').value=n;document.getElementById('edit-url').value=u;openModal('modal-edit');}
-function deleteGroup(n){document.getElementById('del-name-show').textContent=n;document.getElementById('del-name-input').value=n;openModal('modal-del');}
-function updateGroup(n){document.getElementById('upd-name-show').textContent=n;document.getElementById('upd-name-input').value=n;openModal('modal-update');}
-function manageNodes(){openModal('modal-nodes');}
-</script>
-JSEOF
+    printf '<script>\n'
+    printf 'function _set(id,prop,val){var e=document.getElementById(id);if(e)e[prop]=val;}\n'
+    printf 'function activateGroup(n){_set("act-name-show","textContent",n);_set("act-name-input","value",n);openModal("modal-activate");}\n'
+    printf 'function editGroup(n,u){_set("edit-name","value",n);_set("edit-url","value",u);openModal("modal-edit");}\n'
+    printf 'function deleteGroup(n){_set("del-name-show","textContent",n);_set("del-name-input","value",n);openModal("modal-del");}\n'
+    printf 'function updateGroup(n){_set("upd-name-show","textContent",n);_set("upd-name-input","value",n);openModal("modal-update");}\n'
+    printf 'function manageNodes(){openModal("modal-nodes");}\n'
+    printf '</script>\n'
     page_end
 }
 
@@ -3397,7 +3419,7 @@ else
             ;;
         devices-page) devices_page ;;
         ap-start-do) run_job_page "开启热点" ap-start ;;
-        ap-restart) run_job_page "重启热点" ap-stop && run_job_page "重启热点" ap-start ;;
+        ap-restart) run_job_page "重启热点" ap-restart ;;
         custom-nodes-save)
             custom_yaml="$(url_decode "$(param_get "$post_body" custom_yaml)")"
             printf '%s\n' "$custom_yaml" > "$CUSTOM_PROVIDER_FILE" 2>/dev/null
