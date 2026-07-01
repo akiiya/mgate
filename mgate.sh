@@ -1489,18 +1489,17 @@ page_start() {
 <a class="nav-link" data-act="status" href="?action=status">&#x1F3E0; 总览</a>
 <div class="sb-sec">上网</div>
 <a class="nav-link" data-act="wifi-page" href="?action=wifi-page">&#x1F4F6; WiFi 上游</a>
-<a class="nav-link" data-act="subscription" href="?action=subscription">&#x1F504; 代理订阅</a>
-<a class="nav-link" data-act="proxy-info" href="?action=proxy-info">&#x1F517; 连接信息</a>
+<a class="nav-link" data-act="subscription" href="?action=subscription">&#x1F504; 代理管理</a>
 <div class="sb-sec">热点</div>
 <a class="nav-link" data-act="hotspot-page" href="?action=hotspot-page">&#x1F4E1; 热点设置</a>
 <a class="nav-link" data-act="devices-page" href="?action=devices-page">&#x1F4F1; 已连接设备</a>
 <div class="sb-sec">高级</div>
 <a class="nav-link" data-act="gateway-status" href="?action=gateway-status">&#x1F309; 网关 / NAT</a>
-<a class="nav-link" data-act="tproxy-health" href="?action=tproxy-health">&#x1F6E1;&#xFE0F; 透明代理</a>
+<a class="nav-link" data-act="tproxy-page" href="?action=tproxy-page">&#x1F6E1;&#xFE0F; 透明代理</a>
 <div class="sb-sec">系统</div>
 <a class="nav-link" data-act="doctor" href="?action=doctor">&#x1F50D; 诊断</a>
 <a class="nav-link" data-act="logs" href="?action=logs&amp;lines=100">&#x1F4C4; 日志</a>
-<a class="nav-link" data-act="backups" href="?action=backups">&#x1F4BE; 备份</a>
+<a class="nav-link" data-act="backup-page" href="?action=backup-page">&#x1F4BE; 备份</a>
 <a class="nav-link" data-act="token" href="?action=token">&#x1F512; 密码</a>
 <a class="nav-link nl-danger" href="?action=logout">&#x1F6AA; 退出</a>
 </nav>
@@ -1993,15 +1992,17 @@ EOF
 }
 _state_zh() {
     case "$1" in
-        yes|running) printf '运行中' ;;
-        no|stopped) printf '已停止' ;;
-        active) printf '已激活' ;;
-        inactive) printf '未激活' ;;
+        yes|running|online|connected) printf '运行中' ;;
+        no|stopped|offline|disconnected) printf '已停止' ;;
+        active|已连接) printf '已连接' ;;
+        inactive|未连接) printf '未连接' ;;
         enabled) printf '已启用' ;;
         disabled) printf '未启用' ;;
         healthy) printf '正常' ;;
         degraded) printf '降级' ;;
         broken) printf '故障' ;;
+        open|开启) printf '已开启' ;;
+        closed|关闭) printf '已关闭' ;;
         *) printf '未知' ;;
     esac
 }
@@ -2056,12 +2057,20 @@ status_page() {
     _ap_ssid="${AP_SSID:-mgate}"
 
     # Internet status (can we reach upstream)
-    _inet_cls="warn"; _inet_val="检测中"
+    # 上网状态：先用 web_collect 结果，再降级到路由表检查
+    _inet_cls="warn"; _inet_val="offline"
     case "$WEB_NAT_FALLBACK" in
-        active) _inet_cls="good"; _inet_val="已连接" ;;
-        inactive) _inet_cls="warn"; _inet_val="未连接" ;;
+        active)   _inet_cls="good"; _inet_val="active" ;;
+        inactive) _inet_cls="warn"; _inet_val="offline" ;;
+        *)
+            # fallback: 直接检查是否有经 wlan0/usb0 的默认路由
+            if ip route show default 2>/dev/null | grep -qE 'wlan0|usb0|wwan0'; then
+                _inet_cls="good"; _inet_val="active"
+            else
+                _inet_cls="warn"; _inet_val="offline"
+            fi ;;
     esac
-    [ "$_ap_cls" = "good" ] || _inet_cls="warn"
+    [ "$_ap_cls" = "good" ] || { _inet_cls="warn"; _inet_val="offline"; }
 
     # Proxy status
     _proxy_val="未启动"; _proxy_cls="warn"
@@ -2503,6 +2512,148 @@ devices_page() {
     page_end
 }
 
+tproxy_page() {
+    header
+    page_start "透明代理"
+    nav
+    # 状态数据
+    _tp_json="$($MGATE tproxy-json 2>/dev/null)"
+    _tp_enabled="$(printf '%s' "$_tp_json" | sed -n 's/.*"enabled"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)"
+    _tp_state="$(printf '%s' "$_tp_json" | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    _tp_health="$(printf '%s' "$_tp_json" | sed -n 's/.*"healthy"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)"
+    [ -z "$_tp_state" ] && _tp_state="unknown"
+
+    # 当前节点
+    _tp_nodes_out="$($MGATE tproxy-nodes 2>/dev/null)"
+    _tp_now="$(printf '%s\n' "$_tp_nodes_out" | sed -n 's/.*当前选中：//p' | head -1)"
+    _tp_nodes="$(printf '%s\n' "$_tp_nodes_out" | grep '^\[INFO\] [0-9]' | \
+        sed 's/^\[INFO\] [0-9]*\.\*[[:space:]]*//' | sed 's/^\[INFO\] [0-9]*\.[[:space:]]*//' | \
+        sed 's/（当前）//' | grep -v '^$')"
+
+    # 状态概览
+    printf '<div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:20px">\n'
+    if [ "$_tp_enabled" = "true" ]; then
+        printf '<div class="stat-card sc-good"><div class="stat-label">透明代理</div><div class="stat-val"><span class="stat-badge sb-good">已启用</span></div></div>\n'
+    else
+        printf '<div class="stat-card sc-neutral"><div class="stat-label">透明代理</div><div class="stat-val"><span class="stat-badge sb-unknown">未启用</span></div></div>\n'
+    fi
+    if [ -n "$_tp_now" ]; then
+        printf '<div class="stat-card sc-unknown"><div class="stat-label">当前节点</div><div class="stat-val" style="font-size:13px;word-break:break-all">%s</div></div>\n' "$(printf '%s' "$_tp_now" | html_escape)"
+    fi
+    printf '<div class="stat-card sc-unknown"><div class="stat-label">透明代理端口</div><div class="stat-val" style="font-size:20px;font-weight:700">%s</div></div>\n' "$TPROXY_PORT"
+    printf '</div>\n'
+
+    # 控制
+    cat <<'EOF'
+<div class="card">
+<h2>控制</h2>
+<div class="btn-group">
+EOF
+    if [ "$_tp_enabled" = "true" ]; then
+        printf '<a class="btn danger" href="?action=confirm&amp;target=tproxy-stop">停止透明代理</a>\n'
+        printf '<a class="btn" href="?action=tproxy-health-do">健康检查</a>\n'
+    else
+        printf '<a class="btn primary" href="?action=tproxy-start-do">启用透明代理</a>\n'
+        printf '<a class="btn" href="?action=tproxy-check-do">检查环境</a>\n'
+    fi
+    cat <<'EOF'
+</div>
+<p class="muted" style="margin-top:12px">透明代理让热点中的所有设备自动走代理，无需在每台设备上单独设置。启用前需确保 Mihomo 已运行且热点已开启。</p>
+</div>
+EOF
+
+    # 节点切换（仅在启用时显示）
+    if [ "$_tp_enabled" = "true" ] && [ -n "$_tp_nodes" ]; then
+        cat <<EOF
+<div class="card">
+<h2>切换代理节点</h2>
+<p class="muted">当前节点：<strong>$(printf '%s' "${_tp_now:-未知}" | html_escape)</strong>。切换即时生效，无需重启。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="tproxy-select-do">
+<div class="row">
+<select name="tproxy_node" required>
+<option value="">-- 选择节点 --</option>
+EOF
+        printf '%s\n' "$_tp_nodes" | while IFS= read -r _n; do
+            [ -n "$_n" ] || continue
+            if [ "$_n" = "$_tp_now" ]; then
+                printf '<option value="%s" selected>%s（当前）</option>\n' \
+                    "$(printf '%s' "$_n" | html_escape)" "$(printf '%s' "$_n" | html_escape)"
+            else
+                printf '<option value="%s">%s</option>\n' \
+                    "$(printf '%s' "$_n" | html_escape)" "$(printf '%s' "$_n" | html_escape)"
+            fi
+        done
+        cat <<'EOF'
+</select>
+</div>
+<div class="row"><button class="primary" type="submit">切换节点</button></div>
+</form>
+</div>
+EOF
+    fi
+
+    # 健康状态（运行时）
+    if [ "$_tp_enabled" = "true" ]; then
+        printf '<div class="card"><h2>健康状态</h2><pre>'
+        $MGATE tproxy-health 2>&1 | html_escape
+        printf '</pre></div>\n'
+    fi
+
+    page_end
+}
+
+backup_page() {
+    header
+    page_start "备份管理"
+    nav
+
+    # 备份列表
+    _bk_list="$($MGATE backups 2>&1)"
+
+    # 创建备份
+    cat <<'EOF'
+<div class="card">
+<h2>创建备份</h2>
+<p class="muted">备份内容包括：配置文件、订阅数据、账号信息、服务配置。</p>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="backup-create-do">
+<div class="row" style="display:flex;gap:10px;align-items:center">
+<input type="text" name="backup_label" placeholder="备注名称（可选，如：更新前备份）" autocomplete="off" style="flex:1">
+<button class="primary" type="submit">&#x1F4BE; 立即备份</button>
+</div>
+</form>
+</div>
+EOF
+
+    # 备份列表
+    printf '<div class="card">\n'
+    printf '<h2>备份列表</h2>\n'
+    _bk_count=0
+    if [ -n "$_bk_list" ] && printf '%s' "$_bk_list" | grep -q '^\[INFO\]'; then
+        printf '<table class="table"><thead><tr><th>备份 ID</th><th>操作</th></tr></thead><tbody>\n'
+        printf '%s\n' "$_bk_list" | grep '^\[INFO\]' | sed 's/^\[INFO\][[:space:]]*//' | while IFS= read -r _bk; do
+            [ -n "$_bk" ] || continue
+            _bk_count=$((_bk_count + 1))
+            printf '<tr><td><span class="code" style="font-size:12px">%s</span></td><td><a class="btn btn-sm" href="?action=restore-confirm&id=%s">恢复</a></td></tr>\n' \
+                "$(printf '%s' "$_bk" | html_escape)" \
+                "$(printf '%s' "$_bk" | html_escape)"
+        done
+        printf '</tbody></table>\n'
+    else
+        printf '<p class="muted" style="text-align:center;padding:24px">暂无备份记录，点击上方按钮创建第一个备份。</p>\n'
+    fi
+    printf '</div>\n'
+
+    cat <<'EOF'
+<div class="card">
+<h2>恢复说明</h2>
+<p class="muted">点击「恢复」按钮后需要二次确认。恢复操作会覆盖当前配置，建议先创建一个新备份再恢复旧版本。恢复完成后需手动重启 Mihomo 服务。</p>
+</div>
+EOF
+    page_end
+}
+
 sub_status_page() {
     header
     page_start "订阅状态"
@@ -2660,6 +2811,39 @@ subscription_page() {
     printf '<a class="btn" href="?action=confirm&amp;target=sub-update">更新当前订阅</a>'
     printf '<a class="btn" href="?action=sub-status">查看订阅详情</a>'
     printf '</div>\n</div>\n'
+
+    # 代理接入方式（原 proxy-info 内容，合并于此）
+    _sub_host="$(request_proxy_host)"
+    _sub_port="$(listener_port mixed-users "$DEFAULT_MIXED_PORT")"
+    cat <<EOF
+<details style="margin:0 0 16px">
+<summary style="cursor:pointer;font-weight:600;padding:14px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);list-style:none;display:flex;align-items:center;justify-content:space-between">
+<span>&#x1F4F2; 手动接入代理（给其他设备设置代理时查看）</span>
+<span style="font-size:12px;color:var(--muted);font-weight:400">点击展开</span>
+</summary>
+<div class="card" style="border-top-left-radius:0;border-top-right-radius:0;border-top:none;margin-top:0">
+<p class="muted">将以下地址填入设备的「WiFi 代理」或「HTTP/SOCKS5 代理」设置中，即可让设备通过本机上网。</p>
+<table class="table"><thead><tr><th>账号</th><th>HTTP 代理</th><th>SOCKS5 代理</th></tr></thead><tbody>
+EOF
+    if [ -f "$CONFIG_FILE" ]; then
+        awk '/^authentication:/{on=1;next} /^[A-Za-z0-9_-]+:/{if(on)exit} on&&/^[[:space:]]*-[[:space:]]*"/{line=$0;sub(/^[^"]*"/,"",line);sub(/"[[:space:]]*$/,"",line);print line}' \
+            "$CONFIG_FILE" | while IFS= read -r entry; do
+            [ -n "$entry" ] || continue
+            user="${entry%%:*}"; pass="${entry#*:}"
+            printf '<tr><td><strong>%s</strong></td><td><span class="code">http://%s:%s@%s:%s</span></td><td><span class="code">socks5://%s:%s@%s:%s</span></td></tr>\n' \
+                "$(printf '%s' "$user" | html_escape)" \
+                "$(printf '%s' "$user" | html_escape)" "$(printf '%s' "$pass" | html_escape)" \
+                "$(printf '%s' "$_sub_host" | html_escape)" "$_sub_port" \
+                "$(printf '%s' "$user" | html_escape)" "$(printf '%s' "$pass" | html_escape)" \
+                "$(printf '%s' "$_sub_host" | html_escape)" "$_sub_port"
+        done
+    fi
+    cat <<'EOF'
+</tbody></table>
+<p class="muted" style="margin-top:10px">端口 <strong>统一</strong>，HTTP 和 SOCKS5 <strong>同一端口</strong>，按客户端支持的协议填写即可。</p>
+</div>
+</details>
+EOF
 
     # Switch group
     cat <<'EOF'
@@ -2839,7 +3023,15 @@ else
         doctor) run_output_page "系统诊断" doctor ;;
         proxy-info) proxy_info_page ;;
         gateway-status) gateway_status_page ;;
+        tproxy-page) tproxy_page ;;
         tproxy-health) run_job_page "TProxy 健康" tproxy-health ;;
+        tproxy-health-do) run_job_page "TProxy 健康检查" tproxy-health ;;
+        tproxy-check-do) run_job_page "TProxy 环境检查" tproxy-check ;;
+        tproxy-start-do) run_job_page "启用透明代理" tproxy-start ;;
+        tproxy-select-do)
+            tproxy_node="$(url_decode "$(param_get "$post_body" tproxy_node)")"
+            run_job_page "切换节点 $tproxy_node" tproxy-select "$tproxy_node"
+            ;;
         gateway-doctor) run_job_page "网关诊断" gateway-doctor ;;
         tproxy-doctor) run_job_page "TProxy 诊断" tproxy-doctor ;;
         account-password) account_password_page ;;
@@ -2899,6 +3091,15 @@ else
         logs) logs_page "$lines" ;;
         config) run_output_page "当前配置" config ;;
         backups) run_output_page "备份列表" backups ;;
+        backup-page) backup_page ;;
+        backup-create-do)
+            bk_label="$(url_decode "$(param_get "$post_body" backup_label)")"
+            [ -n "$bk_label" ] && run_job_page "创建备份 $bk_label" backup "$bk_label" || run_job_page "创建备份" backup web
+            ;;
+        restore-confirm)
+            bk_id="$(param_get "${QUERY_STRING:-}" id)"
+            run_job_page "恢复备份 $bk_id" restore "$bk_id"
+            ;;
         backup) run_job_page "创建备份" backup web ;;
         token) token_page ;;
         confirm)
