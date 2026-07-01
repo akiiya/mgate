@@ -1368,10 +1368,30 @@ body.auth-body{align-items:center;justify-content:center;display:flex;min-height
 [data-theme="dark"]{--bg:#0f172a;--card:#1e293b;--border:#2d3748;--text:#f1f5f9;--muted:#94a3b8}
 @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f172a;--card:#1e293b;--border:#2d3748;--text:#f1f5f9;--muted:#94a3b8}}
 [data-theme="dark"] pre{background:#020617}
-[data-theme="dark"] input[type=text],[data-theme="dark"] input[type=password]{background:#0f172a;color:var(--text);border-color:var(--border)}
+[data-theme="dark"] input[type=text],[data-theme="dark"] input[type=password],[data-theme="dark"] select{background:#0f172a;color:var(--text);border-color:var(--border)}
 [data-theme="dark"] .warn-box{background:#451a03;border-color:#92400e;color:#fde68a}
-[data-theme="dark"] .table tr:hover td{background:#1e293b}
+[data-theme="dark"] .table tr:hover td{background:#243347}
 [data-theme="dark"] .btn:hover,[data-theme="dark"] button:hover{background:#2d3748;border-color:#475569}
+[data-theme="dark"] .code{background:#2d3748;color:#e2e8f0}
+[data-theme="dark"] .pill{background:#2d3748;color:var(--muted);border-color:var(--border)}
+[data-theme="dark"] .sb-good{background:rgba(34,197,94,.15);color:#4ade80}
+[data-theme="dark"] .sb-good::before{background:#4ade80}
+[data-theme="dark"] .sb-warn{background:rgba(245,158,11,.15);color:#fbbf24}
+[data-theme="dark"] .sb-warn::before{background:#fbbf24}
+[data-theme="dark"] .sb-danger{background:rgba(239,68,68,.15);color:#f87171}
+[data-theme="dark"] .sb-danger::before{background:#f87171}
+[data-theme="dark"] .sb-unknown,[data-theme="dark"] .sb-neutral{background:rgba(148,163,184,.1);color:#94a3b8}
+[data-theme="dark"] details summary{color:#93c5fd}
+[data-theme="dark"] .pg-footer{background:var(--card);border-top-color:var(--border)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .code{background:#2d3748;color:#e2e8f0}
+:root:not([data-theme="light"]) .pill{background:#2d3748;color:#94a3b8;border-color:#2d3748}
+:root:not([data-theme="light"]) .sb-good{background:rgba(34,197,94,.15);color:#4ade80}
+:root:not([data-theme="light"]) .sb-good::before{background:#4ade80}
+:root:not([data-theme="light"]) .sb-warn{background:rgba(245,158,11,.15);color:#fbbf24}
+:root:not([data-theme="light"]) .sb-warn::before{background:#fbbf24}
+:root:not([data-theme="light"]) .sb-danger{background:rgba(239,68,68,.15);color:#f87171}
+:root:not([data-theme="light"]) .sb-danger::before{background:#f87171}
+:root:not([data-theme="light"]) input[type=text],:root:not([data-theme="light"]) input[type=password],:root:not([data-theme="light"]) select{background:#0f172a;color:#f1f5f9;border-color:#2d3748}}
 @media(max-width:768px){
 .sidebar{transform:translateX(-100%)}
 .sidebar.open{transform:translateX(0);box-shadow:4px 0 24px rgba(0,0,0,.2)}
@@ -1832,10 +1852,11 @@ web_collect_gateway_state_from_json() {
     WEB_FINAL_HEALTH="$(web_json_scalar "$final_health_raw")"
     case "$WEB_FINAL_HEALTH" in healthy|degraded|broken|disabled|unknown) : ;; *) WEB_FINAL_HEALTH="unknown" ;; esac
 
+    mihomo_raw="$(web_json_section_value "$data" tproxy mihomo_running)"
+    WEB_MIHOMO_RUNNING="$(web_json_bool_state "$mihomo_raw" yes no)"
     WEB_IPV4_FORWARDING="unknown"
     WEB_TPROXY_PORT="none"
     WEB_TPROXY_OUT_TYPE="unknown"
-    WEB_MIHOMO_RUNNING="unknown"
     WEB_GATEWAY_STATUS_OUT=""
     WEB_TPROXY_STATUS_OUT=""
     WEB_SUMMARY_SOURCE="status-json"
@@ -1939,27 +1960,28 @@ gateway_status_page() {
     nav
     status_out="$($MGATE status 2>&1)"
     web_collect_gateway_state_from_text "$status_out"
+    printf '<div class="card"><h2>网关状态</h2>\n'
+    printf '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 0;margin-bottom:16px">\n'
+    _kv() { printf '<div><div style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">%s</div><div style="font-size:14px;font-weight:500">%s</div></div>\n' "$(printf '%s' "$1" | html_escape)" "$(printf '%s' "$2" | html_escape)"; }
+    _kv "AP 接口" "ap0"
+    _kv "上游接口" "wlan0"
+    _kv "AP IP" "${WEB_AP_IP:-—}"
+    _kv "AP 健康" "$WEB_AP_HEALTHY"
+    _kv "网关模式" "$WEB_GATEWAY_MODE"
+    _kv "IPv4 转发" "$WEB_IPV4_FORWARDING"
+    _kv "NAT fallback" "$WEB_NAT_FALLBACK"
+    _kv "TProxy 状态" "$WEB_TPROXY_ENABLED"
+    _kv "Mihomo 运行" "$WEB_MIHOMO_RUNNING"
+    _kv "tproxy-port" "$WEB_TPROXY_PORT"
+    _kv "TPROXY-OUT 类型" "$WEB_TPROXY_OUT_TYPE"
+    _kv "健康结果" "$WEB_FINAL_HEALTH"
     cat <<'EOF'
-<div class="card"><h2>网关状态</h2>
-<table class="table"><tbody>
-EOF
-    web_table_row "AP 接口" "ap0"
-    web_table_row "上游接口" "wlan0"
-    web_table_row "AP IP" "$WEB_AP_IP"
-    web_table_row "AP 健康" "$WEB_AP_HEALTHY"
-    web_table_row "网关模式" "$WEB_GATEWAY_MODE"
-    web_table_row "IPv4 转发" "$WEB_IPV4_FORWARDING"
-    web_table_row "NAT fallback" "$WEB_NAT_FALLBACK"
-    web_table_row "TProxy 状态" "$WEB_TPROXY_ENABLED"
-    web_table_row "mihomo 运行" "$WEB_MIHOMO_RUNNING"
-    web_table_row "tproxy-port" "$WEB_TPROXY_PORT"
-    web_table_row "TPROXY-OUT 类型" "$WEB_TPROXY_OUT_TYPE"
-    web_table_row "健康结果" "$WEB_FINAL_HEALTH"
-    cat <<'EOF'
-</tbody></table>
-<p><a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
+</div>
+<div class="btn-group">
+<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-health">TProxy 健康</a>
 <a class="btn" href="/cgi-bin/mgate.cgi?action=gateway-doctor">网关诊断</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-doctor">TProxy 诊断</a></p>
+<a class="btn" href="/cgi-bin/mgate.cgi?action=tproxy-doctor">TProxy 诊断</a>
+</div>
 </div>
 EOF
 
@@ -2007,11 +2029,21 @@ status_page() {
     version_out="$($MGATE version 2>&1)"
     web_collect_gateway_state "$status_out"
 
-    # Mihomo service state
-    case "$WEB_MIHOMO_RUNNING" in
-        yes|true) svc_val="running"; svc_cls="good" ;;
-        *) svc_val="stopped"; svc_cls="warn" ;;
-    esac
+    # Mihomo: check multiple sources
+    _svc_running="${WEB_MIHOMO_RUNNING:-unknown}"
+    # If still unknown, try text-based check
+    if [ "$_svc_running" = "unknown" ]; then
+        _tp_chk="$($MGATE tproxy-status 2>/dev/null | grep 'mihomo running' | head -1)"
+        case "$_tp_chk" in *yes*|*true*) _svc_running="yes";; *no*|*false*) _svc_running="no";; esac
+    fi
+    case "$_svc_running" in yes|true) svc_cls="good";; no|false) svc_cls="warn";; *) svc_cls="warn";; esac
+
+    # AP: use healthy state (more accurate than just running)
+    _ap_state="${WEB_AP_HEALTHY:-${WEB_AP_STATE:-unknown}}"
+    case "$_ap_state" in yes|healthy|running) ap_cls="good";; no|unhealthy|stopped) ap_cls="warn";; *) ap_cls="warn";; esac
+    _ap_disp=""; case "$_ap_state" in yes|healthy|running) _ap_disp="yes";; *) _ap_disp="no";; esac
+    _ap_ip="${WEB_AP_IP:-}"
+    [ -n "$_ap_ip" ] && [ "$_ap_ip" != "none" ] && _ap_sub="$_ap_ip" || _ap_sub="ap0"
 
     # Overall health
     case "$WEB_FINAL_HEALTH" in
@@ -2020,10 +2052,10 @@ status_page() {
 
     cat <<EOF
 <div class="stat-grid">
-$(_sc "Mihomo" "$svc_val" "$svc_cls" "混合端口 $DEFAULT_MIXED_PORT")
-$(_sc "AP 热点" "$WEB_AP_STATE" "$(web_class_for_state "$WEB_AP_STATE")" "${WEB_AP_IP:-—}")
-$(_sc "网关 / NAT" "$WEB_NAT_FALLBACK" "$(web_class_for_state "$WEB_NAT_FALLBACK")" "$WEB_GATEWAY_MODE")
-$(_sc "TProxy" "$WEB_TPROXY_ENABLED" "$(case "$WEB_TPROXY_ENABLED" in disabled) printf 'neutral';; *) web_class_for_state "$WEB_TPROXY_ENABLED";; esac)" "端口 $TPROXY_PORT")
+$(_sc "Mihomo" "$_svc_running" "$svc_cls" "混合端口 $DEFAULT_MIXED_PORT")
+$(_sc "AP 热点" "$_ap_disp" "$ap_cls" "$_ap_sub")
+$(_sc "网关 / NAT" "$WEB_NAT_FALLBACK" "$(web_class_for_state "$WEB_NAT_FALLBACK")" "${WEB_GATEWAY_MODE:-nat}")
+$(_sc "TProxy" "$WEB_TPROXY_ENABLED" "$(case "$WEB_TPROXY_ENABLED" in disabled|unknown) printf 'neutral';; *) web_class_for_state "$WEB_TPROXY_ENABLED";; esac)" "端口 $TPROXY_PORT")
 $(_sc "整体健康" "$WEB_FINAL_HEALTH" "$health_cls" "")
 </div>
 EOF
@@ -2253,7 +2285,14 @@ wifi_page() {
     header
     page_start "WiFi 管理"
     nav
-    # 当前状态
+    _wifi_list_raw="$($MGATE wifi-list 2>&1)"
+    # Parse profile names: strip [INFO], marker (*/ ), and parenthesized suffix
+    _wifi_profiles="$(printf '%s\n' "$_wifi_list_raw" | \
+        grep '^\[INFO\]' | \
+        sed 's/^\[INFO\][[:space:]]*//' | \
+        sed 's/^[* ]*//' | \
+        sed 's/（.*//' | \
+        grep -v '^$')"
     cat <<'EOF'
 <div class="card">
 <h2>当前 WiFi 状态</h2>
@@ -2267,7 +2306,7 @@ EOF
 <h2>已保存 WiFi（按优先级排序）</h2>
 <pre>
 EOF
-    $MGATE wifi-list 2>&1 | html_escape
+    printf '%s\n' "$_wifi_list_raw" | html_escape
     cat <<'EOF'
 </pre>
 </div>
@@ -2284,10 +2323,22 @@ EOF
 </div>
 <div class="card">
 <h2>删除 WiFi 配置</h2>
-<p class="muted">只能删除非当前连接的已保存配置。配置名称见上方列表。</p>
+<p class="muted">只能删除非当前连接的已保存配置。</p>
 <form method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="wifi-delete-do">
-<div class="row"><input type="text" name="wifi_profile" placeholder="profile 名称（区分大小写）" required autocomplete="off"></div>
+<div class="row">
+<select name="wifi_profile" required style="min-width:220px">
+<option value="">-- 选择要删除的 WiFi --</option>
+EOF
+    printf '%s\n' "$_wifi_profiles" | while IFS= read -r _wn; do
+        [ -n "$_wn" ] || continue
+        printf '<option value="%s">%s</option>\n' \
+            "$(printf '%s' "$_wn" | html_escape)" \
+            "$(printf '%s' "$_wn" | html_escape)"
+    done
+    cat <<'EOF'
+</select>
+</div>
 <div class="row"><button class="btn danger" type="submit">删除 WiFi 配置</button></div>
 </form>
 </div>
@@ -2336,6 +2387,15 @@ group_page() {
     page_start "Group 管理"
     nav
     grp_out="$($MGATE group 2>&1)"
+    # Parse group names from output: lines like [INFO]   default *  [订阅]...
+    _grp_names="$(printf '%s\n' "$grp_out" | \
+        grep '^\[INFO\]' | \
+        sed 's/^\[INFO\][[:space:]]*//' | \
+        sed 's/[[:space:]]*.*//' | \
+        grep -v '^$')"
+    # Named subscriptions only (exclude default, custom)
+    _sub_names="$(printf '%s\n' "$_grp_names" | grep -v '^default$' | grep -v '^custom$' | grep -v '^$')"
+
     cat <<'EOF'
 <div class="card">
 <h2>当前代理来源</h2>
@@ -2350,7 +2410,19 @@ EOF
 <p class="muted">切换后将重新加载 mihomo，AP 客户端可能短暂断线。有本地缓存时无需重新下载订阅。</p>
 <form method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="group-switch-do">
-<div class="row"><input type="text" name="group_name" placeholder="Group 名称（default / work / custom 等）" required autocomplete="off"></div>
+<div class="row">
+<select name="group_name" required style="min-width:220px">
+<option value="">-- 选择目标 Group --</option>
+EOF
+    printf '%s\n' "$_grp_names" | while IFS= read -r _gn; do
+        [ -n "$_gn" ] || continue
+        printf '<option value="%s">%s</option>\n' \
+            "$(printf '%s' "$_gn" | html_escape)" \
+            "$(printf '%s' "$_gn" | html_escape)"
+    done
+    cat <<'EOF'
+</select>
+</div>
 <div class="row"><button class="primary" type="submit">切换</button></div>
 </form>
 </div>
@@ -2364,15 +2436,33 @@ EOF
 <div class="row"><button class="primary" type="submit">添加并拉取</button></div>
 </form>
 </div>
+EOF
+    if [ -n "$_sub_names" ]; then
+        cat <<'EOF'
 <div class="card">
 <h2>删除命名订阅</h2>
 <p class="muted">只能删除非当前激活的命名订阅（default / custom 不可删除）。</p>
 <form method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="sub-del-do">
-<div class="row"><input type="text" name="sub_name" placeholder="要删除的 Group 名称" required autocomplete="off"></div>
+<div class="row">
+<select name="sub_name" required style="min-width:220px">
+<option value="">-- 选择要删除的订阅 --</option>
+EOF
+        printf '%s\n' "$_sub_names" | while IFS= read -r _sn; do
+            [ -n "$_sn" ] || continue
+            printf '<option value="%s">%s</option>\n' \
+                "$(printf '%s' "$_sn" | html_escape)" \
+                "$(printf '%s' "$_sn" | html_escape)"
+        done
+        cat <<'EOF'
+</select>
+</div>
 <div class="row"><button class="btn danger" type="submit">删除</button></div>
 </form>
 </div>
+EOF
+    fi
+    cat <<'EOF'
 <div class="card">
 <h2>批量更新</h2>
 <p><a class="btn" href="/cgi-bin/mgate.cgi?action=sub-update-all-do">更新所有订阅缓存</a></p>
