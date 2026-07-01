@@ -1459,6 +1459,13 @@ DEFAULT_MIXED_PORT="__DEFAULT_MIXED_PORT__"
 DEFAULT_HTTP_PORT="$DEFAULT_MIXED_PORT"
 DEFAULT_SOCKS_PORT="$DEFAULT_MIXED_PORT"
 TPROXY_PORT="__TPROXY_PORT__"
+DATA_DIR="__DATA_DIR__"
+GROUPS_DIR="__GROUPS_DIR__"
+SUB_URL_FILE="__SUB_URL_FILE__"
+CUSTOM_PROVIDER_FILE="__CUSTOM_PROVIDER_FILE__"
+SUB_LAST_UPDATE_FILE="__SUB_LAST_UPDATE_FILE__"
+WIFI_IF="__WIFI_IF__"
+CUSTOM_NODES_FILE="__CUSTOM_PROVIDER_FILE__"
 FAVICON_VER="0.3.7"
 
 html_escape() {
@@ -1689,6 +1696,8 @@ job_id_new() {
 job_page() {
     id="$1"
     case "$id" in ''|*/*|*..*|*\\*) id="" ;; esac
+    # src: which page triggered this job (for the return button)
+    src_action="$(param_get "${QUERY_STRING:-}" src)"
     header
     page_start "任务状态"
     nav
@@ -1705,26 +1714,35 @@ EOF
     title="$(sed -n '1p' "$base.meta" 2>/dev/null)"
     [ -n "$title" ] || title="$id"
     if [ "$status" = "running" ]; then
-        cat <<'EOF'
-<script>
-setTimeout(function(){ window.location.reload(); }, 2000);
-</script>
-EOF
+        # Auto-refresh while running, preserve src param
+        printf '<script>setTimeout(function(){window.location.reload();},2000);</script>\n'
     fi
     printf '<div class="card"><h2>%s</h2>' "$(printf '%s' "$title" | html_escape)"
-    printf '<p>任务 ID：<span class="code">%s</span></p>' "$(printf '%s' "$id" | html_escape)"
-    printf '<p>状态：<span class="pill">%s</span></p>' "$(printf '%s' "$status" | html_escape)"
     if [ "$status" = "running" ]; then
-        printf '<p class="muted">任务正在后台执行，页面会自动刷新。</p>'
+        printf '<p><span class="stat-badge sb-warn">执行中...</span> 页面每 2 秒自动刷新</p>'
+    elif [ "$status" = "success" ]; then
+        printf '<p><span class="stat-badge sb-good">&#x2713; 成功</span></p>'
+    else
+        printf '<p><span class="stat-badge sb-danger">&#x2715; 失败</span></p>'
     fi
-    printf '<pre>'
+    printf '<pre style="max-height:400px;overflow-y:auto">'
     if [ -f "$base.log" ]; then
         tail -n 200 "$base.log" 2>/dev/null | html_escape
     else
         printf '暂无日志' | html_escape
     fi
     printf '</pre>'
-    printf '<p><a class="btn" href="/cgi-bin/mgate.cgi?action=job&id=%s">刷新</a> <a class="btn" href="/cgi-bin/mgate.cgi?action=status">返回首页</a></p>' "$(printf '%s' "$id" | html_escape)"
+    # Return button: go back to originating page if src is known
+    printf '<div class="btn-group" style="margin-top:12px">'
+    printf '<a class="btn" href="/cgi-bin/mgate.cgi?action=job&id=%s&src=%s">刷新</a>' \
+        "$(printf '%s' "$id" | html_escape)" \
+        "$(printf '%s' "${src_action:-status}" | html_escape)"
+    if [ -n "$src_action" ] && [ "$src_action" != "status" ]; then
+        printf '<a class="btn primary" href="/cgi-bin/mgate.cgi?action=%s">&#x2190; 返回</a>' \
+            "$(printf '%s' "$src_action" | html_escape)"
+    fi
+    printf '<a class="btn" href="/cgi-bin/mgate.cgi?action=status">&#x1F3E0; 首页</a>'
+    printf '</div>\n'
     printf '</div>\n'
     page_end
 }
@@ -2402,97 +2420,148 @@ EOF
 
 wifi_page() {
     header
-    page_start "WiFi 管理"
+    page_start "WiFi 上游"
     nav
+
+    # 当前连接状态
+    _wifi_json="$(printf '%s' "$($MGATE agent-snapshot 2>/dev/null)" | sed -n '/\"wifi\"/{p}; /\"wifi\"/{:a;n;/^[[:space:]]*},/{p;q};p;ba}')"
+    _wf_conn="$(printf '%s' "$($MGATE wifi-status 2>&1)" | grep '连接状态' | sed 's/.*连接状态：//' | head -1)"
+    _wf_ssid="$(printf '%s' "$($MGATE wifi-status 2>&1)" | grep '当前 SSID' | sed 's/.*当前 SSID：//' | head -1)"
+    _wf_ip="$(printf '%s' "$($MGATE wifi-status 2>&1)" | grep '当前 IP' | sed 's/.*当前 IP：//' | head -1)"
+
+    # 扫描支持（如果有 scan=1 参数）
+    _scan_req="$(param_get "${QUERY_STRING:-}" scan)"
+    _scan_out=""
+    [ "$_scan_req" = "1" ] && _scan_out="$($MGATE wifi-scan 2>/dev/null)"
+
+    # 已保存 WiFi 列表
     _wifi_list_raw="$($MGATE wifi-list 2>&1)"
-    # Parse profile names: strip [INFO], marker (*/ ), and parenthesized suffix
-    _wifi_profiles="$(printf '%s\n' "$_wifi_list_raw" | \
-        grep '^\[INFO\]' | \
-        sed 's/^\[INFO\][[:space:]]*//' | \
-        sed 's/^[* ]*//' | \
-        sed 's/（.*//' | \
-        grep -v '^$')"
-    cat <<'EOF'
-<div class="card">
-<h2>当前 WiFi 状态</h2>
-<pre>
-EOF
-    $MGATE wifi-status 2>&1 | html_escape
-    cat <<'EOF'
-</pre>
-</div>
-<div class="card">
-<h2>已保存 WiFi（按优先级排序）</h2>
-<pre>
-EOF
-    printf '%s\n' "$_wifi_list_raw" | html_escape
-    cat <<'EOF'
-</pre>
-</div>
-<div class="card">
-<h2>添加 WiFi</h2>
-<p class="muted">添加后不会立即切换，可在下方"切换 WiFi 上游"中选择并切换。</p>
-<p class="muted">⚠️ 此页面通过 HTTP 传输，密码不加密，请在受信任网络内使用。</p>
-<form method="POST" action="/cgi-bin/mgate.cgi">
-<input type="hidden" name="action" value="wifi-add-do">
-<table class="table" style="margin-bottom:12px">
-<tbody>
-<tr>
-<td style="color:var(--muted);font-size:12px;width:100px;vertical-align:middle">WiFi 名称</td>
-<td><input type="text" name="wifi_ssid" placeholder="路由器的 WiFi 名称（SSID）" required autocomplete="off" style="width:100%"></td>
-</tr>
-<tr>
-<td style="color:var(--muted);font-size:12px;vertical-align:middle">密码</td>
-<td><input type="password" name="wifi_password" placeholder="WiFi 密码（留空 = 开放网络）" autocomplete="off" style="width:100%"></td>
-</tr>
-<tr>
-<td style="color:var(--muted);font-size:12px;vertical-align:middle">备注名称</td>
-<td><input type="text" name="wifi_alias" placeholder="给这个 WiFi 起个好记的名字（如：家里、公司、酒店）" autocomplete="off" style="width:100%">
-<div style="font-size:11px;color:var(--muted);margin-top:4px">不填则使用 WiFi 名称，建议填写方便识别</div></td>
-</tr>
-<tr>
-<td style="color:var(--muted);font-size:12px;vertical-align:middle">优先级</td>
-<td>
-<select name="wifi_priority" style="min-width:0;width:100%">
-<option value="0">普通（默认）</option>
-<option value="10">较高 — 同等条件下优先连接</option>
-<option value="50">高 — 有此网络时优先使用</option>
-<option value="100">最高 — 首选，始终优先</option>
-</select>
-<div style="font-size:11px;color:var(--muted);margin-top:4px">优先级越高，设备在多个已保存 WiFi 都可用时越优先连接</div>
-</td>
-</tr>
-</tbody>
-</table>
-<div class="row"><button class="primary" type="submit">&#x2795; 添加 WiFi</button></div>
-</form>
-</div>
-<div class="card">
-<h2>删除 WiFi 配置</h2>
-<p class="muted">只能删除非当前连接的已保存配置。</p>
-<form method="POST" action="/cgi-bin/mgate.cgi">
-<input type="hidden" name="action" value="wifi-delete-do">
-<div class="row">
-<select name="wifi_profile" required style="min-width:220px">
-<option value="">-- 选择要删除的 WiFi --</option>
-EOF
-    printf '%s\n' "$_wifi_profiles" | while IFS= read -r _wn; do
-        [ -n "$_wn" ] || continue
-        printf '<option value="%s">%s</option>\n' \
-            "$(printf '%s' "$_wn" | html_escape)" \
-            "$(printf '%s' "$_wn" | html_escape)"
+    _wifi_current="$(printf '%s\n' "$_wifi_list_raw" | grep '^\[INFO\].*\*' | sed 's/^\[INFO\][[:space:]]*\* *//' | sed 's/（.*//' | head -1)"
+
+    # 当前连接状态卡
+    printf '<div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:20px">\n'
+    if [ -n "$_wf_ssid" ] && [ "$_wf_ssid" != "none" ]; then
+        printf '<div class="stat-card sc-good"><div class="stat-label">当前 WiFi</div><div class="stat-val" style="font-size:18px">%s</div><div class="stat-sub">%s</div></div>\n' \
+            "$(printf '%s' "$_wf_ssid" | html_escape)" "$(printf '%s' "${_wf_ip:-—}" | html_escape)"
+    else
+        printf '<div class="stat-card sc-neutral"><div class="stat-label">上游 WiFi</div><div class="stat-val"><span class="stat-badge sb-unknown">未连接</span></div></div>\n'
+    fi
+    printf '</div>\n'
+
+    # WiFi 列表卡
+    printf '<div class="card">\n'
+    printf '<div class="card-title"><h2>已保存 WiFi</h2>'
+    printf '<button type="button" onclick="openModal('"'"'modal-wifi-add'"'"')" class="btn btn-sm primary">&#x2795; 添加 WiFi</button></div>\n'
+    printf '<table class="table"><thead><tr><th>名称</th><th>SSID</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead><tbody>\n'
+
+    printf '%s\n' "$_wifi_list_raw" | grep '^\[INFO\]' | sed 's/^\[INFO\][[:space:]]*//' | while IFS= read -r _wline; do
+        [ -n "$_wline" ] || continue
+        _is_cur="false"; printf '%s' "$_wline" | grep -q '^\*' && _is_cur="true"
+        _wname="$(printf '%s' "$_wline" | sed 's/^[* ]*//' | sed 's/（.*//')"
+        [ -z "$_wname" ] && continue
+        _wprio="$(printf '%s' "$_wline" | sed -n 's/.*优先级：\([0-9]*\).*/\1/p')"
+        [ -z "$_wprio" ] && _wprio="0"
+        printf '<tr>'
+        printf '<td><strong>%s</strong></td>' "$(printf '%s' "$_wname" | html_escape)"
+        printf '<td><span class="code" style="font-size:12px">%s</span></td>' "$(printf '%s' "$_wname" | html_escape)"
+        printf '<td><span class="pill">%s</span></td>' "$_wprio"
+        if [ "$_is_cur" = "true" ]; then
+            printf '<td><span class="badge-active">&#x2713; 当前连接</span></td>'
+        else
+            printf '<td><span style="color:var(--muted);font-size:12px">-</span></td>'
+        fi
+        _wn_esc="$(printf '%s' "$_wname" | html_escape)"
+        printf '<td><div class="ops">'
+        [ "$_is_cur" = "false" ] && printf '<button type="button" onclick="connectWifi('"'"'%s'"'"')" class="btn btn-sm">连接</button>' "$_wn_esc"
+        printf '<button type="button" onclick="deleteWifi('"'"'%s'"'"')" class="btn btn-sm danger">删除</button>' "$_wn_esc"
+        printf '</div></td></tr>\n'
     done
+    printf '</tbody></table>\n</div>\n'
+
+    # 扫描 & 诊断
     cat <<'EOF'
-</select>
-</div>
-<div class="row"><button class="btn danger" type="submit">删除 WiFi 配置</button></div>
-</form>
-</div>
 <div class="card">
 <h2>扫描 / 诊断</h2>
-<p><a class="btn" href="/cgi-bin/mgate.cgi?action=wifi-scan-do">扫描附近 WiFi</a>
-   <a class="btn" href="/cgi-bin/mgate.cgi?action=wifi-doctor-do">WiFi Doctor</a></p>
+<div class="btn-group">
+EOF
+    printf '<a class="btn" href="?action=wifi-page&scan=1">&#x1F50D; 扫描附近 WiFi</a>\n'
+    printf '<a class="btn" href="?action=wifi-doctor-do">WiFi Doctor</a>\n'
+    cat <<'EOF'
 </div>
+EOF
+    # 扫描结果（如果已触发）
+    if [ -n "$_scan_out" ]; then
+        printf '<div style="margin-top:14px"><h2 style="font-size:13px;margin-bottom:10px">扫描结果</h2><pre style="max-height:300px;overflow:auto">%s</pre></div>\n' \
+            "$(printf '%s' "$_scan_out" | html_escape)"
+    fi
+    printf '</div>\n'
+
+    # 添加 WiFi 弹窗
+    cat <<'EOF'
+<div id="modal-wifi-add" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>添加 WiFi</h3><button class="modal-close" type="button" onclick="closeModal('modal-wifi-add')">&#x2715;</button></div>
+<form method="POST" action="/cgi-bin/mgate.cgi">
+<input type="hidden" name="action" value="wifi-add-do">
+<div class="modal-body">
+<div class="form-row">
+<div class="form-label">WiFi 名称（SSID）<a class="btn btn-sm" href="?action=wifi-page&scan=1" style="float:right;font-size:11px">&#x1F50D; 扫描</a></div>
+<input type="text" name="wifi_ssid" placeholder="路由器的 WiFi 名称" required autocomplete="off">
+<div class="hint">如不确定可点击"扫描"查看附近 WiFi，然后手动填写</div>
+</div>
+<div class="form-row"><div class="form-label">密码</div><input type="password" name="wifi_password" placeholder="WiFi 密码（留空=开放网络）" autocomplete="off"></div>
+<div class="form-row">
+<div class="form-label">备注名称（可选）</div>
+<input type="text" name="wifi_alias" placeholder="给这个 WiFi 起个好记的名字（如：家里、公司）" autocomplete="off">
+<div class="hint">不填则使用 WiFi 名称</div>
+</div>
+<div class="form-row">
+<div class="form-label">优先级</div>
+<select name="wifi_priority">
+<option value="0">普通（默认）</option>
+<option value="10">较高</option>
+<option value="50">高</option>
+<option value="100">最高</option>
+</select>
+<div class="hint">多个已保存 WiFi 都可用时，优先连接数值高的</div>
+</div>
+<p class="muted" style="margin-top:4px">⚠️ 此页面通过 HTTP 传输，密码不加密，请在受信任网络内操作。</p>
+</div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-wifi-add')">取消</button><button type="submit" class="btn primary">添加</button></div>
+</form>
+</div>
+</div>
+
+<div id="modal-wifi-del" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>删除 WiFi 配置</h3><button class="modal-close" type="button" onclick="closeModal('modal-wifi-del')">&#x2715;</button></div>
+<div class="modal-body"><p>确定要删除 WiFi 配置 <strong id="wdel-name"></strong> 吗？</p><p class="muted">删除后不会立即断开当前连接，但下次无法自动连接。</p></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-wifi-del')">取消</button>
+<form id="wdel-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
+<input type="hidden" name="action" value="wifi-delete-do">
+<input type="hidden" id="wdel-input" name="wifi_profile" value="">
+<button type="submit" class="btn danger">确认删除</button>
+</form></div>
+</div>
+</div>
+
+<div id="modal-wifi-conn" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>连接 WiFi</h3><button class="modal-close" type="button" onclick="closeModal('modal-wifi-conn')">&#x2715;</button></div>
+<div class="modal-body"><p>确认切换上游 WiFi 到 <strong id="wconn-name"></strong>？</p><p class="muted">切换后当前 SSH/Web 连接可能断线，设备会自动重连。</p></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-wifi-conn')">取消</button>
+<form id="wconn-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
+<input type="hidden" name="action" value="wifi-connect-do">
+<input type="hidden" id="wconn-input" name="wifi_profile" value="">
+<button type="submit" class="btn primary">确认连接</button>
+</form></div>
+</div>
+</div>
+
+<script>
+function deleteWifi(n){document.getElementById('wdel-name').textContent=n;document.getElementById('wdel-input').value=n;openModal('modal-wifi-del');}
+function connectWifi(n){document.getElementById('wconn-name').textContent=n;document.getElementById('wconn-input').value=n;openModal('modal-wifi-conn');}
+</script>
 EOF
     page_end
 }
@@ -2501,9 +2570,14 @@ hotspot_page() {
     header
     page_start "热点设置"
     nav
-    ap_load_config 2>/dev/null || true
-    _hs_healthy="false"; ( ap_is_running_healthy ) >/dev/null 2>&1 && _hs_healthy="true"
-    _hs_ip="${AP_IPADDR:-10.88.0.1}"
+    # 用 ap-json 获取状态（CGI 中 ap_load_config/ap_is_running_healthy 无法使用）
+    _ap_json="$($MGATE ap-json 2>/dev/null)"
+    _hs_healthy="false"
+    printf '%s' "$_ap_json" | grep -q '"healthy"[[:space:]]*:[[:space:]]*true' && _hs_healthy="true"
+    _hs_ssid="$(printf '%s' "$_ap_json" | sed -n 's/.*"ssid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    [ -z "$_hs_ssid" ] && _hs_ssid="mgate"
+    _hs_ip="$(printf '%s' "$_ap_json" | sed -n 's/.*"ip"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    [ -z "$_hs_ip" ] || [ "$_hs_ip" = "null" ] && _hs_ip="10.88.0.1"
 
     # 热点状态卡
     printf '<div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">\n'
@@ -2514,7 +2588,7 @@ hotspot_page() {
     fi
     printf '<div class="stat-card %s"><div class="stat-label">热点状态</div>' "$([ "$_hs_healthy" = "true" ] && echo sc-good || echo sc-warn)"
     printf '<div class="stat-val"><span class="stat-badge %s">%s</span></div></div>\n' "$_hs_badge" "$_hs_label"
-    printf '<div class="stat-card sc-unknown"><div class="stat-label">SSID（热点名称）</div><div class="stat-val" style="font-size:16px;font-weight:700">%s</div></div>\n' "$(printf '%s' "${AP_SSID:-mgate}" | html_escape)"
+    printf '<div class="stat-card sc-unknown"><div class="stat-label">SSID（热点名称）</div><div class="stat-val" style="font-size:16px;font-weight:700">%s</div></div>\n' "$(printf '%s' "$_hs_ssid" | html_escape)"
     printf '<div class="stat-card sc-unknown"><div class="stat-label">热点 IP 地址</div><div class="stat-val" style="font-size:16px;font-weight:700">%s</div></div>\n' "$_hs_ip"
     printf '</div>\n'
 
@@ -2543,12 +2617,14 @@ EOF
 <tbody>
 EOF
     _kv2() { printf '<tr><td style="color:var(--muted);font-size:12px;width:120px">%s</td><td><strong>%s</strong></td></tr>\n' "$(printf '%s' "$1" | html_escape)" "$(printf '%s' "$2" | html_escape)"; }
-    _kv2 "SSID（名称）" "${AP_SSID:-mgate}"
-    _kv2 "密码" "${AP_PASSWORD:-mgate12345678}"
+    _hs_pass="$(printf '%s' "$_ap_json" | sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    [ -z "$_hs_pass" ] && _hs_pass="mgate12345678"
+    _kv2 "SSID（名称）" "$_hs_ssid"
+    _kv2 "密码" "$_hs_pass"
     _kv2 "频段" "2.4GHz"
-    _kv2 "热点 IP" "${AP_IPADDR:-10.88.0.1}"
+    _kv2 "热点 IP" "$_hs_ip"
     _kv2 "DHCP 范围" "10.88.0.100 – 10.88.0.200"
-    _kv2 "接口" "${AP_IF:-ap0}"
+    _kv2 "接口" "ap0"
     cat <<'EOF'
 </tbody>
 </table>
@@ -3178,6 +3254,10 @@ else
             wifi_profile="$(url_decode "$(param_get "$post_body" wifi_profile)")"
             run_job_page "删除 WiFi $wifi_profile" wifi-delete "$wifi_profile" --yes
             ;;
+        wifi-connect-do)
+            wifi_profile="$(url_decode "$(param_get "$post_body" wifi_profile)")"
+            run_job_page "连接 WiFi $wifi_profile" wifi-connect "$wifi_profile"
+            ;;
         wifi-scan-do) run_job_page "扫描 WiFi" wifi-scan ;;
         wifi-doctor-do) run_job_page "WiFi Doctor" wifi-doctor ;;
         sub-set) sub_set_page ;;
@@ -3270,6 +3350,12 @@ EOF_WEB_CGI
         -e "s#__DEFAULT_SOCKS_PORT__#$DEFAULT_SOCKS_PORT#g" \
         -e "s#__TPROXY_PORT__#$TPROXY_PORT#g" \
         -e "s#__MIHOMO_API_PORT__#$DEFAULT_MIHOMO_API_PORT#g" \
+        -e "s#__DATA_DIR__#$DATA_DIR#g" \
+        -e "s#__GROUPS_DIR__#$GROUPS_DIR#g" \
+        -e "s#__SUB_URL_FILE__#$SUB_URL_FILE#g" \
+        -e "s#__CUSTOM_PROVIDER_FILE__#$CUSTOM_PROVIDER_FILE#g" \
+        -e "s#__SUB_LAST_UPDATE_FILE__#$SUB_LAST_UPDATE_FILE#g" \
+        -e "s#__WIFI_IF__#$WIFI_IF#g" \
         "$WEB_CGI_FILE"
 
     chmod 755 "$WEB_CGI_FILE" || die "failed to chmod $WEB_CGI_FILE"
@@ -10786,54 +10872,47 @@ menu_wifi_connect() {
 
 menu_wifi() {
     while :; do
-        tui_header "上级 WiFi 管理"
+        tui_header "WiFi 上游"
         say ""
-        say "    1.  WiFi 状态"
-        say "    2.  扫描附近 WiFi"
-        say "    3.  已保存 WiFi"
-        say "    4.  添加 WiFi"
-        say "    5.  切换 WiFi"
-        say "    6.  重连 WiFi"
-        say "    7.  断开 WiFi"
-        say "    8.  删除 WiFi"
-        say "    9.  WiFi Doctor"
-        say "   10.  WiFi JSON"
+        say "   1.  已保存 WiFi 列表"
+        say "   2.  添加 WiFi"
+        say "   3.  连接 WiFi（切换上游）"
+        say "   4.  删除 WiFi"
+        say "   5.  当前状态"
+        say "   6.  扫描附近 WiFi"
+        say "   7.  WiFi 诊断"
         say ""
-        say "    0.  返回  ( Enter 也可 )"
+        say "   0.  返回  ( Enter 也可 )"
         say ""
         printf '>>> '
         read -r choice || return 0
         case "$choice" in
             ""|0) return 0 ;;
-            1) cmd_wifi_status; pause_enter ;;
-            2) cmd_wifi_scan; pause_enter ;;
-            3) cmd_wifi_list; pause_enter ;;
-            4)
+            1) cmd_wifi_list; pause_enter ;;
+            2)
                 printf 'SSID: '
                 read -r _wssid || _wssid=""
                 [ -z "$_wssid" ] && { warn "未输入 SSID"; pause_enter; continue; }
-                warn "密码将在输入时显示，请注意周围环境"
                 printf '密码 (留空=开放网络): '
                 read -r _wpass || _wpass=""
-                cmd_wifi_add "$_wssid" "$_wpass"
+                printf '备注名称 (留空=用SSID): '
+                read -r _walias || _walias=""
+                printf '优先级 (0-100, 默认0): '
+                read -r _wprio || _wprio="0"
+                cmd_wifi_add "$_wssid" "$_wpass" --alias="$_walias" --priority="${_wprio:-0}"
                 pause_enter
                 ;;
-            5) menu_wifi_connect ;;
-            6) cmd_wifi_reconnect; pause_enter ;;
-            7)
-                if tui_confirm_yes "断开 $WIFI_IF 将导致 SSH 断线和上游中断"; then
-                    cmd_wifi_disconnect
-                fi
-                pause_enter
-                ;;
-            8)
+            3) menu_wifi_connect ;;
+            4)
+                cmd_wifi_list; pause_enter
                 printf '要删除的 profile 名: '
                 read -r _wdel || _wdel=""
                 [ -n "$_wdel" ] && cmd_wifi_delete "$_wdel" || warn "未输入"
                 pause_enter
                 ;;
-            9)  cmd_wifi_doctor; pause_enter ;;
-            10) cmd_wifi_json; pause_enter ;;
+            5) cmd_wifi_status; pause_enter ;;
+            6) cmd_wifi_scan; pause_enter ;;
+            7) cmd_wifi_doctor; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
