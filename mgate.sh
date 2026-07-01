@@ -2475,18 +2475,23 @@ devices_page() {
                 "活跃"
         done < "$_lease_file"
     else
-        # 降级：ARP 表过滤热点子网
-        while IFS= read -r _line; do
-            case "$_line" in 10.88.0.*) : ;; *) continue ;; esac
-            _arp_ip="$(printf '%s' "$_line" | awk '{print $1}')"
-            _arp_mac="$(printf '%s' "$_line" | awk '{print $3}')"
-            [ "$_arp_mac" = "<incomplete>" ] && continue
-            _device_count=$((_device_count + 1))
-            printf '<tr><td>%s</td><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td>活跃</td></tr>\n' \
-                "设备 $_device_count" \
-                "$(printf '%s' "$_arp_ip" | html_escape)" \
-                "$(printf '%s' "$_arp_mac" | html_escape)"
-        done < <(arp -n 2>/dev/null | tail -n +2)
+        # 降级：ARP 表过滤热点子网（POSIX sh 兼容，不使用进程替换）
+        _arp_tmp="/tmp/.mgate-arp.$$"
+        arp -n 2>/dev/null | tail -n +2 > "$_arp_tmp" 2>/dev/null || true
+        if [ -f "$_arp_tmp" ]; then
+            while IFS= read -r _line; do
+                case "$_line" in 10.88.0.*) : ;; *) continue ;; esac
+                _arp_ip="$(printf '%s' "$_line" | awk '{print $1}')"
+                _arp_mac="$(printf '%s' "$_line" | awk '{print $3}')"
+                [ "$_arp_mac" = "<incomplete>" ] && continue
+                _device_count=$((_device_count + 1))
+                printf '<tr><td>%s</td><td><span class="code">%s</span></td><td><span class="code">%s</span></td><td>活跃</td></tr>\n' \
+                    "设备 $_device_count" \
+                    "$(printf '%s' "$_arp_ip" | html_escape)" \
+                    "$(printf '%s' "$_arp_mac" | html_escape)"
+            done < "$_arp_tmp"
+            rm -f "$_arp_tmp"
+        fi
     fi
 
     if [ "$_device_count" -eq 0 ]; then
