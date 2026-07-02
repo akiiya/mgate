@@ -1629,9 +1629,90 @@ document.querySelectorAll('.tt-btn').forEach(function(b){
 // Modal 系统
 function openModal(id){var m=document.getElementById(id);if(m){m.classList.add('open');document.body.style.overflow='hidden';}}
 function closeModal(id){var m=document.getElementById(id);if(m){m.classList.remove('open');document.body.style.overflow='';}}
-document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.querySelectorAll('.modal-overlay.open').forEach(function(m){m.classList.remove('open');});document.body.style.overflow='';}});
+document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){
+        var pd=document.getElementById('btn-job-done');
+        var pg=document.getElementById('modal-job-progress');
+        if(pg&&pg.style.display==='flex'&&pd&&pd.disabled)return;
+        document.querySelectorAll('.modal-overlay.open').forEach(function(m){m.classList.remove('open');m.style.display='none';});
+        document.body.style.overflow='';
+    }
+});
 document.querySelectorAll('.modal-overlay').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m){closeModal(m.id);}});});
+// Global job progress modal system
+var _pt=0;
+function smCloseJob(){var m=document.getElementById('modal-job-progress');if(m)m.style.display='none';document.body.style.overflow='';}
+function startJobModal(closeId,postBody,titleText){
+    _pt++;var tok=_pt;
+    var ptitle=document.getElementById('job-prog-title');
+    var pstatus=document.getElementById('job-prog-status');
+    var plog=document.getElementById('job-prog-log');
+    var pdone=document.getElementById('btn-job-done');
+    var pclose=document.getElementById('btn-job-close');
+    if(closeId){var pm=document.getElementById(closeId);if(pm)pm.style.display='none';}
+    document.body.style.overflow='hidden';
+    if(ptitle)ptitle.textContent=titleText;
+    if(pstatus){pstatus.innerHTML='';pstatus.style.cssText='';}
+    if(plog)plog.textContent='正在提交任务...';
+    if(pdone)pdone.disabled=true;
+    if(pclose)pclose.disabled=true;
+    var m=document.getElementById('modal-job-progress');if(m)m.style.display='flex';
+    fetch('/cgi-bin/mgate.cgi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:postBody})
+    .then(function(r){return r.json();})
+    .then(function(d){
+        if(tok!==_pt)return;
+        if(!d.ok){if(plog)plog.textContent='提交失败';if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}
+        pollJobProgress(d.id,tok);
+    })
+    .catch(function(e){if(tok!==_pt)return;if(plog)plog.textContent='请求错误：'+e;if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;});
+}
+function pollJobProgress(jobId,tok){
+    var polls=0;
+    function poll(){
+        if(tok!==_pt)return;
+        polls++;
+        var ptitle=document.getElementById('job-prog-title');
+        var pstatus=document.getElementById('job-prog-status');
+        var plog=document.getElementById('job-prog-log');
+        var pdone=document.getElementById('btn-job-done');
+        var pclose=document.getElementById('btn-job-close');
+        if(polls>180){if(plog)plog.textContent+='\n[等待超时，任务仍在后台运行]';if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}
+        fetch('/cgi-bin/mgate.cgi?action=job-log-text&id='+jobId)
+        .then(function(r){return r.text();})
+        .then(function(txt){
+            if(tok!==_pt)return;
+            var nl=txt.indexOf('\n');
+            var status=nl>=0?txt.substring(7,nl).trim():'unknown';
+            var log=nl>=0?txt.substring(nl+1):txt;
+            if(plog){plog.textContent=log;plog.scrollTop=plog.scrollHeight;}
+            if(status==='success'||status==='failed'){
+                var ok=status==='success';
+                if(pstatus){pstatus.style.cssText=ok?'color:#22c55e;font-weight:700;margin-bottom:6px':'color:#ef4444;font-weight:700;margin-bottom:6px';pstatus.innerHTML=(ok?'✓ 操作成功':'✗ 操作失败')+'&nbsp;&nbsp;<a href="'+location.href+'" style="font-size:13px;font-weight:400">刷新页面</a>';}
+                if(ptitle)ptitle.textContent=ok?'完成':'失败';
+                if(pdone)pdone.disabled=false;
+                if(pclose)pclose.disabled=false;
+            }else{setTimeout(poll,1000);}
+        })
+        .catch(function(){if(tok===_pt)setTimeout(poll,2000);});
+    }
+    setTimeout(poll,800);
+}
 </script>
+<div id="modal-job-progress" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:1001;padding:16px">
+<div class="modal-box" style="max-width:580px;width:95vw">
+<div class="modal-head">
+<h3 id="job-prog-title">执行中...</h3>
+<button class="modal-close" type="button" id="btn-job-close" onclick="if(!this.disabled)smCloseJob()" disabled>&#x2715;</button>
+</div>
+<div class="modal-body" style="padding:0">
+<div id="job-prog-status" style="padding:12px 20px 0"></div>
+<pre id="job-prog-log" style="margin:0;padding:16px 20px;background:var(--bg);max-height:55vh;overflow:auto;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all">正在准备...</pre>
+</div>
+<div class="modal-foot">
+<button type="button" class="btn primary" id="btn-job-done" disabled onclick="smCloseJob()">完成</button>
+</div>
+</div>
+</div>
 </body></html>
 EOF
 }
@@ -1758,6 +1839,28 @@ EOF
     printf '</div>\n'
     printf '</div>\n'
     page_end
+}
+
+run_job_json() {
+    # Creates bg job, outputs JSON {"ok":true,"id":"..."} to $_CGI_BODY
+    # Caller must set _CGI_CONTENT_TYPE="application/json" before calling
+    _rjj_title="$1"; shift
+    mkdir -p "$WEB_JOB_DIR" 2>/dev/null || { printf '{"ok":false,"error":"no job dir"}'; return; }
+    job_cleanup 19
+    _rjj_id="$(job_id_new)"
+    _rjj_base="$WEB_JOB_DIR/$_rjj_id"
+    printf 'running\n' > "$_rjj_base.status"
+    printf '%s\n' "$_rjj_title" > "$_rjj_base.meta"
+    (
+        printf '[STEP] 开始执行：%s\n' "$_rjj_title"
+        printf '[INFO] 命令：mgate'; for _a in "$@"; do printf ' %s' "$_a"; done; printf '\n'
+        "$MGATE" "$@"
+        _rc=$?
+        printf '[INFO] exit code: %s\n' "$_rc"
+        if [ "$_rc" -eq 0 ]; then printf 'success\n' > "$_rjj_base.status"
+        else printf 'failed\n' > "$_rjj_base.status"; fi
+    ) </dev/null >> "$_rjj_base.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
+    printf '{"ok":true,"id":"%s"}' "$_rjj_id"
 }
 
 run_job_page_delayed() {
@@ -2508,7 +2611,7 @@ wifi_page() {
 <div class="btn-group">
 EOF
     printf '<a class="btn" href="?action=wifi-page&scan=1">&#x1F50D; 扫描附近 WiFi</a>\n'
-    printf '<a class="btn" href="?action=wifi-doctor-do">WiFi Doctor</a>\n'
+    printf '<button type="button" class="btn" onclick="startJobModal(null,'"'"'action=wifi-doctor-modal-do'"'"','"'"'WiFi 诊断'"'"')">WiFi Doctor</button>\n'
     cat <<'EOF'
 </div>
 EOF
@@ -2565,11 +2668,8 @@ EOF
 <div class="modal-head"><h3>删除 WiFi 配置</h3><button class="modal-close" type="button" onclick="closeModal('modal-wifi-del')">&#x2715;</button></div>
 <div class="modal-body"><p>确定要删除 WiFi 配置 <strong id="wdel-name"></strong> 吗？</p><p class="muted">删除后不会立即断开当前连接，但下次无法自动连接。</p></div>
 <div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-wifi-del')">取消</button>
-<form id="wdel-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
-<input type="hidden" name="action" value="wifi-delete-do">
-<input type="hidden" id="wdel-input" name="wifi_profile" value="">
-<button type="submit" class="btn danger">确认删除</button>
-</form></div>
+<button type="button" class="btn danger" onclick="var n=document.getElementById('wdel-input').value;startJobModal('modal-wifi-del','action=wifi-delete-modal-do&wifi_profile='+encodeURIComponent(n),'删除 WiFi '+n)">确认删除</button>
+<input type="hidden" id="wdel-input" name="wifi_profile" value=""></div>
 </div>
 </div>
 
@@ -2578,11 +2678,8 @@ EOF
 <div class="modal-head"><h3>连接 WiFi</h3><button class="modal-close" type="button" onclick="closeModal('modal-wifi-conn')">&#x2715;</button></div>
 <div class="modal-body"><p>确认切换上游 WiFi 到 <strong id="wconn-name"></strong>？</p><p class="muted">切换后当前 SSH/Web 连接可能断线，设备会自动重连。</p></div>
 <div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-wifi-conn')">取消</button>
-<form id="wconn-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
-<input type="hidden" name="action" value="wifi-connect-do">
-<input type="hidden" id="wconn-input" name="wifi_profile" value="">
-<button type="submit" class="btn primary">确认连接</button>
-</form></div>
+<button type="button" class="btn primary" onclick="var n=document.getElementById('wconn-input').value;startJobModal('modal-wifi-conn','action=wifi-connect-modal-do&wifi_profile='+encodeURIComponent(n),'连接 WiFi '+n)">确认连接</button>
+<input type="hidden" id="wconn-input" name="wifi_profile" value=""></div>
 </div>
 </div>
 
@@ -2613,6 +2710,21 @@ function doWifiScan(){
     .catch(function(){hint.textContent='扫描失败，请手动输入 SSID';})
     .finally(function(){btn.innerHTML='🔍 重新扫描';btn.disabled=false;});
 }
+document.addEventListener('submit',function(ev){
+  var f=ev.target;
+  if(!f.closest('#modal-wifi-add'))return;
+  ev.preventDefault();
+  var ssid=f.querySelector('[name=wifi_ssid]');
+  var pw=f.querySelector('[name=wifi_password]');
+  var alias=f.querySelector('[name=wifi_alias]');
+  var prio=f.querySelector('[name=wifi_priority]');
+  var s=ssid?ssid.value:'';
+  var p=pw?pw.value:'';
+  var a=alias?alias.value:'';
+  var pr=prio?prio.value:'0';
+  var body='action=wifi-add-modal-do&wifi_ssid='+encodeURIComponent(s)+'&wifi_password='+encodeURIComponent(p)+'&wifi_alias='+encodeURIComponent(a)+'&wifi_priority='+encodeURIComponent(pr);
+  startJobModal('modal-wifi-add',body,'添加 WiFi '+s);
+});
 </script>
 EOF
     page_end
@@ -2654,7 +2766,7 @@ service_page() {
         printf '<div class="card" style="border-color:#86efac;text-align:center;padding:20px">\n'
         printf '<div style="font-size:28px">&#x25B6;&#xFE0F;</div><div style="font-weight:700;margin:10px 0 6px">启动服务</div>\n'
         printf '<div class="muted" style="margin-bottom:14px">Mihomo 当前已停止，点击重新启动代理</div>\n'
-        printf '<a class="btn primary" href="?action=start&amp;src=service-page" style="display:block">启动 Mihomo</a>\n'
+        printf '<button type="button" class="btn primary" onclick="startJobModal(null,'"'"'action=start-modal-do'"'"','"'"'启动 Mihomo'"'"')" style="display:block;width:100%%">启动 Mihomo</button>\n'
         printf '</div></div>\n'
     fi
     printf '</div>\n'
@@ -2695,14 +2807,14 @@ service_page() {
     printf '<div class="modal-head"><h3>⚠️ 确认停止 Mihomo</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-svc-stop'"'"')">&#x2715;</button></div>\n'
     printf '<div class="modal-body"><div class="warn-box">停止后，所有设备的代理连接将立即中断，恢复直连上网。</div></div>\n'
     printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-svc-stop'"'"')">取消</button>'
-    printf '<a class="btn danger" href="?action=do&amp;target=stop">确认停止</a></div>\n'
+    printf '<button type="button" class="btn danger" onclick="startJobModal('"'"'modal-svc-stop'"'"','"'"'action=stop-modal-do'"'"','"'"'停止 Mihomo'"'"')">确认停止</button></div>\n'
     printf '</div></div>\n'
 
     printf '<div id="modal-svc-restart" class="modal-overlay"><div class="modal-box">\n'
     printf '<div class="modal-head"><h3>确认重启 Mihomo</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-svc-restart'"'"')">&#x2715;</button></div>\n'
     printf '<div class="modal-body"><p>代理服务将短暂中断（约 3–5 秒），之后自动恢复。</p></div>\n'
     printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-svc-restart'"'"')">取消</button>'
-    printf '<a class="btn primary" href="?action=do&amp;target=restart">确认重启</a></div>\n'
+    printf '<button type="button" class="btn primary" onclick="startJobModal('"'"'modal-svc-restart'"'"','"'"'action=restart-modal-do'"'"','"'"'重启 Mihomo'"'"')">确认重启</button></div>\n'
     printf '</div></div>\n'
     page_end
 }
@@ -2741,13 +2853,12 @@ hotspot_page() {
 EOF
     if [ "$_hs_healthy" = "true" ]; then
         cat <<'EOF'
-<a class="btn danger" href="/cgi-bin/mgate.cgi?action=confirm&target=ap-stop">关闭热点</a>
-<a class="btn" href="/cgi-bin/mgate.cgi?action=confirm&target=ap-restart">重启热点</a>
-<input type="hidden" name="src" value="hotspot-page">
+<button type="button" class="btn danger" onclick="openModal('modal-ap-stop')">关闭热点</button>
+<button type="button" class="btn" onclick="openModal('modal-ap-restart')">重启热点</button>
 EOF
     else
         cat <<'EOF'
-<a class="btn primary" href="/cgi-bin/mgate.cgi?action=ap-start-do&src=hotspot-page">开启热点</a>
+<button type="button" class="btn primary" onclick="startJobModal(null,'action=ap-start-modal-do','开启热点')">开启热点</button>
 EOF
     fi
     cat <<'EOF'
@@ -2795,10 +2906,35 @@ EOF
 <input type="password" name="ap_password" placeholder="留空=不修改密码" autocomplete="off">
 <div class="hint">密码至少 8 个字符</div></div>
 </div>
-<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-ap-edit')">取消</button><button type="submit" class="btn primary">保存并重启热点</button></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-ap-edit')">取消</button><button type="button" class="btn primary" onclick="submitApEdit()">保存并重启热点</button></div>
 </form>
 </div>
 </div>
+EOF
+    # ap-stop 确认弹窗
+    cat <<'EOF'
+<div id="modal-ap-stop" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>确认关闭热点</h3><button class="modal-close" type="button" onclick="closeModal('modal-ap-stop')">&#x2715;</button></div>
+<div class="modal-body"><div class="warn-box">关闭热点后，所有已连接设备将断开连接。</div></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-ap-stop')">取消</button><button type="button" class="btn danger" onclick="startJobModal('modal-ap-stop','action=ap-stop-modal-do','停止热点')">确认关闭</button></div>
+</div></div>
+<div id="modal-ap-restart" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>确认重启热点</h3><button class="modal-close" type="button" onclick="closeModal('modal-ap-restart')">&#x2715;</button></div>
+<div class="modal-body"><p>重启热点后设备需要重新连接。</p></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-ap-restart')">取消</button><button type="button" class="btn primary" onclick="startJobModal('modal-ap-restart','action=ap-restart-modal-do','重启热点')">确认重启</button></div>
+</div></div>
+<script>
+function submitApEdit(){
+    var ssid=document.querySelector('#modal-ap-edit input[name=ap_ssid]');
+    var pass=document.querySelector('#modal-ap-edit input[name=ap_password]');
+    var s=ssid?ssid.value:'';
+    var p=pass?pass.value:'';
+    var body='action=ap-edit-modal-do&ap_ssid='+encodeURIComponent(s)+'&ap_password='+encodeURIComponent(p);
+    startJobModal('modal-ap-edit',body,'修改热点设置');
+}
+</script>
 EOF
     page_end
 }
@@ -2925,11 +3061,11 @@ tproxy_page() {
 <div class="btn-group">
 EOF
     if [ "$_tp_enabled" = "true" ]; then
-        printf '<a class="btn danger" href="?action=confirm&amp;target=tproxy-stop">停止透明代理</a>\n'
-        printf '<a class="btn" href="?action=tproxy-health-do&amp;src=tproxy-page">健康检查</a>\n'
+        printf '<button type="button" class="btn danger" onclick="openModal('"'"'modal-tproxy-stop'"'"')">停止透明代理</button>\n'
+        printf '<button type="button" class="btn" onclick="startJobModal(null,'"'"'action=tproxy-health-modal-do'"'"','"'"'TProxy 健康检查'"'"')">健康检查</button>\n'
     else
-        printf '<a class="btn primary" href="?action=tproxy-start-do&amp;src=tproxy-page">启用透明代理</a>\n'
-        printf '<a class="btn" href="?action=tproxy-check-do&amp;src=tproxy-page">检查环境</a>\n'
+        printf '<button type="button" class="btn primary" onclick="openModal('"'"'modal-tproxy-start'"'"')">启用透明代理</button>\n'
+        printf '<button type="button" class="btn" onclick="startJobModal(null,'"'"'action=tproxy-check-modal-do'"'"','"'"'TProxy 环境检查'"'"')">检查环境</button>\n'
     fi
     cat <<'EOF'
 </div>
@@ -2964,7 +3100,7 @@ EOF
         cat <<'EOF'
 </select>
 </div>
-<div class="row"><button class="primary" type="submit">切换节点</button></div>
+<div class="row"><button type="button" class="primary" onclick="var s=this.closest('form').querySelector('[name=tproxy_node]');if(s&&s.value)startJobModal(null,'action=tproxy-select-modal-do&tproxy_node='+s.value,'切换代理节点 #'+s.value)">切换节点</button></div>
 </form>
 </div>
 EOF
@@ -2977,6 +3113,20 @@ EOF
         printf '</pre></div>\n'
     fi
 
+    cat <<'EOF'
+<div id="modal-tproxy-stop" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>确认停止透明代理</h3><button class="modal-close" type="button" onclick="closeModal('modal-tproxy-stop')">&#x2715;</button></div>
+<div class="modal-body"><div class="warn-box">停止后热点内所有设备将恢复直连，不再走代理。</div></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-tproxy-stop')">取消</button><button type="button" class="btn danger" onclick="startJobModal('modal-tproxy-stop','action=tproxy-stop-modal-do','停止透明代理')">确认停止</button></div>
+</div></div>
+<div id="modal-tproxy-start" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>确认启用透明代理</h3><button class="modal-close" type="button" onclick="closeModal('modal-tproxy-start')">&#x2715;</button></div>
+<div class="modal-body"><p>启用透明代理将让热点内所有设备自动走代理。</p><p class="muted">请确认 Mihomo 已运行且热点已开启。</p></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-tproxy-start')">取消</button><button type="button" class="btn primary" onclick="startJobModal('modal-tproxy-start','action=tproxy-start-modal-do','启用透明代理')">确认启用</button></div>
+</div></div>
+EOF
     page_end
 }
 
@@ -2993,11 +3143,11 @@ backup_page() {
 <div class="card">
 <h2>创建备份</h2>
 <p class="muted">备份内容包括：配置文件、订阅数据、账号信息、服务配置。</p>
-<form method="POST" action="/cgi-bin/mgate.cgi">
+<form id="backup-create-form" method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="backup-create-do">
 <div class="row" style="display:flex;gap:10px;align-items:center">
-<input type="text" name="backup_label" placeholder="备注名称（可选，如：更新前备份）" autocomplete="off" style="flex:1">
-<button class="primary" type="submit">&#x1F4BE; 立即备份</button>
+<input type="text" id="backup-label-input" name="backup_label" placeholder="备注名称（可选，如：更新前备份）" autocomplete="off" style="flex:1">
+<button class="primary" type="button" onclick="submitBackupCreate()">&#x1F4BE; 立即备份</button>
 </div>
 </form>
 </div>
@@ -3040,16 +3190,14 @@ EOF
 </div>
 <div class="modal-foot">
 <button type="button" class="btn" onclick="closeModal('modal-restore')">取消</button>
-<form id="restore-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">
-<input type="hidden" name="action" value="restore-do">
-<input type="hidden" id="restore-bk-input" name="backup_id" value="">
-<button type="submit" class="btn danger">确认恢复</button>
-</form>
+<input type="hidden" id="restore-bk-input" value="">
+<button type="button" class="btn danger" onclick="var id=document.getElementById('restore-bk-input').value;startJobModal('modal-restore','action=restore-modal-do&backup_id='+encodeURIComponent(id),'恢复备份 '+id)">确认恢复</button>
 </div>
 </div>
 </div>
 <script>
 function restoreBackup(id){document.getElementById('restore-bk-id').textContent=id;document.getElementById('restore-bk-input').value=id;openModal('modal-restore');}
+function submitBackupCreate(){var lbl=document.getElementById('backup-label-input');var l=lbl?lbl.value:'';startJobModal(null,'action=backup-create-modal-do&backup_label='+encodeURIComponent(l),'创建备份');}
 </script>
 EOF
     page_end
@@ -3323,20 +3471,6 @@ subscription_page() {
     printf '<input type="hidden" id="act-name-input" value="">\n'
     printf '<button type="button" id="btn-group-switch-ok" class="btn primary">确认切换</button></div></div></div>\n'
 
-    # 切换进度弹窗（自包含，无跳转）
-    printf '<div id="modal-job-progress" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:1001;padding:16px">\n'
-    printf '<div class="modal-box" style="max-width:580px;width:95vw">\n'
-    printf '<div class="modal-head">\n'
-    printf '<h3 id="job-prog-title">正在切换...</h3>\n'
-    printf '<button class="modal-close" type="button" id="btn-job-close" data-sm-close="modal-job-progress" disabled>&#x2715;</button>\n'
-    printf '</div>\n'
-    printf '<div class="modal-body" style="padding:0">\n'
-    printf '<div id="job-prog-status" style="padding:12px 20px 0"></div>\n'
-    printf '<pre id="job-prog-log" style="margin:0;padding:16px 20px;background:var(--bg);max-height:55vh;overflow:auto;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all">正在提交任务...</pre>\n'
-    printf '</div>\n'
-    printf '<div class="modal-foot"><button type="button" class="btn primary" id="btn-job-done" disabled data-sm-close="modal-job-progress">完成</button></div>\n'
-    printf '</div></div>\n'
-
     # 节点管理 modal（带实际 YAML 内容）
     printf '<div id="modal-nodes" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:1000;padding:16px">\n'
     printf '<div class="modal-box" style="max-width:600px">\n'
@@ -3347,7 +3481,7 @@ subscription_page() {
         "$(printf '%s' "$_custom_yaml" | html_escape)"
     printf '</div><div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-nodes">取消</button><button type="submit" class="btn primary">保存并重载</button></div></form></div></div>\n'
 
-    # ── 自包含 JS：data-sm 触发开，data-sm-close 触发关，完全不依赖 page_end 的 openModal ──
+    # ── 自包含 JS：data-sm 触发开，data-sm-close 触发关；startJobModal/pollJobProgress 来自 page_end ──
     printf '<script>\n'
     printf '(function(){\n'
     printf '  function smOpen(id){\n'
@@ -3385,75 +3519,6 @@ subscription_page() {
     printf '    else if(mid==="modal-del"){setEl("del-name-show","textContent",gname);setEl("del-name-input","value",gname);}\n'
     printf '    smOpen(mid);\n'
     printf '  });\n'
-    printf '  // Esc：运行中不允许关闭进度弹窗\n'
-    printf '  document.addEventListener("keydown",function(e){\n'
-    printf '    if(e.key!=="Escape")return;\n'
-    printf '    var pd=document.getElementById("btn-job-done");\n'
-    printf '    var pg=document.getElementById("modal-job-progress");\n'
-    printf '    if(pg&&pg.style.display==="flex"&&pd&&pd.disabled)return;\n'
-    printf '    document.querySelectorAll(".modal-overlay").forEach(function(m){m.style.display="none";});\n'
-    printf '    document.body.style.overflow="";\n'
-    printf '  });\n'
-    printf '  // ── 通用 job 进度弹窗（token 机制防并发写入同一 DOM）──\n'
-    printf '  var _pt=0;\n'
-    printf '  function startJobModal(closeId,postBody,titleText){\n'
-    printf '    _pt++; var tok=_pt;\n'
-    printf '    var ptitle=document.getElementById("job-prog-title");\n'
-    printf '    var pstatus=document.getElementById("job-prog-status");\n'
-    printf '    var plog=document.getElementById("job-prog-log");\n'
-    printf '    var pdone=document.getElementById("btn-job-done");\n'
-    printf '    var pclose=document.getElementById("btn-job-close");\n'
-    printf '    if(closeId)smClose(closeId);\n'
-    printf '    if(ptitle)ptitle.textContent=titleText;\n'
-    printf '    if(pstatus){pstatus.innerHTML="";pstatus.style.cssText="";}\n'
-    printf '    if(plog)plog.textContent="正在提交任务...";\n'
-    printf '    if(pdone)pdone.disabled=true;\n'
-    printf '    if(pclose)pclose.disabled=true;\n'
-    printf '    smOpen("modal-job-progress");\n'
-    printf '    fetch("/cgi-bin/mgate.cgi",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:postBody})\n'
-    printf '    .then(function(r){return r.json();})\n'
-    printf '    .then(function(d){\n'
-    printf '      if(tok!==_pt)return;\n'
-    printf '      if(!d.ok){if(plog)plog.textContent="提交失败";if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}\n'
-    printf '      pollJobProgress(d.id,tok);\n'
-    printf '    })\n'
-    printf '    .catch(function(e){if(tok!==_pt)return;if(plog)plog.textContent="请求错误："+e;if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;});\n'
-    printf '  }\n'
-    printf '  function pollJobProgress(jobId,tok){\n'
-    printf '    var polls=0;\n'
-    printf '    function poll(){\n'
-    printf '      if(tok!==_pt)return; // 已被更新任务取代，静默退出\n'
-    printf '      polls++;\n'
-    printf '      var ptitle=document.getElementById("job-prog-title");\n'
-    printf '      var pstatus=document.getElementById("job-prog-status");\n'
-    printf '      var plog=document.getElementById("job-prog-log");\n'
-    printf '      var pdone=document.getElementById("btn-job-done");\n'
-    printf '      var pclose=document.getElementById("btn-job-close");\n'
-    printf '      if(polls>180){if(plog)plog.textContent+="\\n[等待超时，任务仍在后台运行]";if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}\n'
-    printf '      fetch("/cgi-bin/mgate.cgi?action=job-log-text&id="+jobId)\n'
-    printf '      .then(function(r){return r.text();})\n'
-    printf '      .then(function(txt){\n'
-    printf '        if(tok!==_pt)return;\n'
-    printf '        var nl=txt.indexOf("\\n");\n'
-    printf '        var status=nl>=0?txt.substring(7,nl).trim():"unknown";\n'
-    printf '        var log=nl>=0?txt.substring(nl+1):txt;\n'
-    printf '        if(plog){plog.textContent=log;plog.scrollTop=plog.scrollHeight;}\n'
-    printf '        if(status==="success"||status==="failed"){\n'
-    printf '          var ok=status==="success";\n'
-    printf '          if(pstatus){\n'
-    printf '            pstatus.style.cssText=ok?"color:#22c55e;font-weight:700;margin-bottom:6px":"color:#ef4444;font-weight:700;margin-bottom:6px";\n'
-    printf '            pstatus.innerHTML=(ok?"✓ 操作成功":"✗ 操作失败")\n'
-    printf '              +"&nbsp;&nbsp;<a href=\""+location.href+"\" style=\"font-size:13px;font-weight:400\">刷新页面</a>";\n'
-    printf '          }\n'
-    printf '          if(ptitle)ptitle.textContent=ok?"完成":"失败";\n'
-    printf '          if(pdone)pdone.disabled=false;\n'
-    printf '          if(pclose)pclose.disabled=false;\n'
-    printf '        }else{setTimeout(poll,1000);}\n'
-    printf '      })\n'
-    printf '      .catch(function(){if(tok===_pt)setTimeout(poll,2000);});\n'
-    printf '    }\n'
-    printf '    setTimeout(poll,800);\n'
-    printf '  }\n'
     printf '  // 切换订阅组\n'
     printf '  document.addEventListener("click",function(ev){\n'
     printf '    if(!ev.target.closest("#btn-group-switch-ok"))return;\n'
@@ -3462,13 +3527,42 @@ subscription_page() {
     printf '    var gname=inp?inp.value:"";\n'
     printf '    startJobModal("modal-activate","action=group-switch-modal-do&group_name="+encodeURIComponent(gname),"正在切换到："+gname);\n'
     printf '  });\n'
-    printf '  // 更新订阅（支持任意多个订阅组，token 保证同一时刻只有一个 poll 有效）\n'
+    printf '  // 更新订阅\n'
     printf '  document.addEventListener("click",function(ev){\n'
     printf '    if(!ev.target.closest("#btn-sub-update-ok"))return;\n'
     printf '    ev.stopPropagation();\n'
     printf '    var inp=document.getElementById("upd-name-input");\n'
     printf '    var gname=inp?inp.value:"";\n'
     printf '    startJobModal("modal-update","action=sub-update-modal-do&group_name="+encodeURIComponent(gname),"正在更新："+gname);\n'
+    printf '  });\n'
+    printf '  // 添加订阅组（拦截表单提交）\n'
+    printf '  document.addEventListener("submit",function(ev){\n'
+    printf '    var f=ev.target;\n'
+    printf '    if(!f.closest("#modal-add"))return;\n'
+    printf '    ev.preventDefault();\n'
+    printf '    var nm=f.querySelector("[name=sub_name]");\n'
+    printf '    var ur=f.querySelector("[name=sub_url]");\n'
+    printf '    var name=nm?nm.value:"";\n'
+    printf '    var url=ur?ur.value:"";\n'
+    printf '    startJobModal("modal-add","action=sub-add-modal-do&sub_name="+encodeURIComponent(name)+"&sub_url="+encodeURIComponent(url),"添加订阅组 "+name);\n'
+    printf '  });\n'
+    printf '  // 删除订阅组（拦截表单提交）\n'
+    printf '  document.addEventListener("submit",function(ev){\n'
+    printf '    var f=ev.target;\n'
+    printf '    if(!f.closest("#modal-del"))return;\n'
+    printf '    ev.preventDefault();\n'
+    printf '    var nm=document.getElementById("del-name-input");\n'
+    printf '    var name=nm?nm.value:"";\n'
+    printf '    startJobModal("modal-del","action=sub-del-modal-do&sub_name="+encodeURIComponent(name),"删除订阅组 "+name);\n'
+    printf '  });\n'
+    printf '  // 自定义节点保存（拦截表单提交）\n'
+    printf '  document.addEventListener("submit",function(ev){\n'
+    printf '    var f=ev.target;\n'
+    printf '    if(!f.closest("#modal-nodes"))return;\n'
+    printf '    ev.preventDefault();\n'
+    printf '    var ta=f.querySelector("[name=custom_yaml]");\n'
+    printf '    var yaml=ta?ta.value:"";\n'
+    printf '    startJobModal("modal-nodes","action=custom-nodes-modal-do&custom_yaml="+encodeURIComponent(yaml),"保存并重载节点");\n'
     printf '  });\n'
     printf '})();\n'
     printf '</script>\n'
@@ -3656,6 +3750,110 @@ else
                 ) </dev/null >> "$_sumd_base.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
                 printf '{"ok":true,"id":"%s"}' "$_sumd_id"
             fi
+            ;;
+        ap-start-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "开启热点" ap-start
+            ;;
+        ap-stop-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "停止热点" ap-stop
+            ;;
+        ap-restart-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "重启热点" ap-restart
+            ;;
+        ap-edit-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _aem_ssid="$(url_decode "$(param_get "$post_body" ap_ssid)")"
+            _aem_pass="$(url_decode "$(param_get "$post_body" ap_password)")"
+            run_job_json "修改热点设置" ap-edit \
+                ${_aem_ssid:+--ssid="$_aem_ssid"} \
+                ${_aem_pass:+--password="$_aem_pass"} --yes
+            ;;
+        tproxy-start-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "启用透明代理" tproxy-start
+            ;;
+        tproxy-stop-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "停止透明代理" tproxy-stop
+            ;;
+        tproxy-check-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "TProxy 环境检查" tproxy-check
+            ;;
+        tproxy-health-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "TProxy 健康检查" tproxy-health
+            ;;
+        tproxy-select-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _tsm_idx="$(param_get "$post_body" tproxy_node)"
+            run_job_json "切换代理节点 #${_tsm_idx}" tproxy-select-idx "$_tsm_idx"
+            ;;
+        wifi-add-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _wam_ssid="$(url_decode "$(param_get "$post_body" wifi_ssid)")"
+            _wam_pw="$(url_decode "$(param_get "$post_body" wifi_password)")"
+            _wam_alias="$(url_decode "$(param_get "$post_body" wifi_alias)")"
+            _wam_prio="$(param_get "$post_body" wifi_priority)"
+            [ -z "$_wam_prio" ] && _wam_prio="0"
+            run_job_json "添加 WiFi $_wam_ssid" wifi-add "$_wam_ssid" "$_wam_pw" \
+                --alias="$_wam_alias" --priority="$_wam_prio" --yes
+            ;;
+        wifi-delete-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _wdm_profile="$(url_decode "$(param_get "$post_body" wifi_profile)")"
+            run_job_json "删除 WiFi $_wdm_profile" wifi-delete "$_wdm_profile" --yes
+            ;;
+        wifi-connect-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _wcm_profile="$(url_decode "$(param_get "$post_body" wifi_profile)")"
+            run_job_json "连接 WiFi $_wcm_profile" wifi-connect "$_wcm_profile"
+            ;;
+        wifi-doctor-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "WiFi 诊断" wifi-doctor
+            ;;
+        backup-create-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _bcm_label="$(url_decode "$(param_get "$post_body" backup_label)")"
+            run_job_json "创建备份" backup "${_bcm_label:-web}"
+            ;;
+        restore-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _rm_id="$(url_decode "$(param_get "$post_body" backup_id)")"
+            run_job_json "恢复备份 $_rm_id" restore "$_rm_id" --yes
+            ;;
+        start-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "启动服务" start
+            ;;
+        stop-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "停止服务" stop
+            ;;
+        restart-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            run_job_json "重启服务" restart
+            ;;
+        sub-add-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _sam_name="$(url_decode "$(param_get "$post_body" sub_name)")"
+            _sam_url="$(url_decode "$(param_get "$post_body" sub_url)")"
+            run_job_json "添加订阅 $_sam_name" sub-add "$_sam_name" "$_sam_url"
+            ;;
+        sub-del-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _sdm_name="$(url_decode "$(param_get "$post_body" sub_name)")"
+            run_job_json "删除订阅 $_sdm_name" sub-del "$_sdm_name" --yes
+            ;;
+        custom-nodes-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _cnm_yaml="$(url_decode "$(param_get "$post_body" custom_yaml)")"
+            printf '%s\n' "$_cnm_yaml" > "$CUSTOM_PROVIDER_FILE" 2>/dev/null
+            run_job_json "保存自定义节点并重载" group custom
             ;;
         sub-add-do)
             sname="$(url_decode "$(param_get "$post_body" sub_name)")"
