@@ -1336,6 +1336,8 @@ h3{font-size:17px;font-weight:600;margin:0 0 8px}
 .btn:hover,button:hover{background:#f8fafc;border-color:#cbd5e1;box-shadow:0 1px 2px rgba(0,0,0,.06)}
 .primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .primary:hover,.btn.primary:hover{background:var(--accent-h);border-color:var(--accent-h)}
+.btn:disabled,button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
+.btn.btn-running{background:#f1f5f9;border-color:#cbd5e1;color:#94a3b8;cursor:not-allowed}
 .danger,.btn.danger{color:var(--danger);border-color:#fecaca}
 .danger:hover,.btn.danger:hover{background:#fee2e2}
 .btn-sm{padding:5px 13px;font-size:15px;border-radius:6px}
@@ -1656,7 +1658,7 @@ function startJobModal(closeId,postBody,titleText,afterUrl){
     if(ptitle)ptitle.textContent=titleText;
     if(pstatus){pstatus.innerHTML='';pstatus.style.cssText='';}
     if(plog)plog.textContent='正在提交任务...';
-    if(pdone){pdone.disabled=true;pdone.textContent='完成';pdone.className='btn primary';pdone.onclick=smCloseJob;}
+    if(pdone){pdone.disabled=true;pdone.textContent='执行中...';pdone.className='btn btn-running';pdone.onclick=null;}
     if(pclose)pclose.disabled=true;
     var m=document.getElementById('modal-job-progress');if(m)m.style.display='flex';
     fetch('/cgi-bin/mgate.cgi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:postBody})
@@ -1678,7 +1680,11 @@ function pollJobProgress(jobId,tok){
         var plog=document.getElementById('job-prog-log');
         var pdone=document.getElementById('btn-job-done');
         var pclose=document.getElementById('btn-job-close');
-        if(polls>180){if(plog)plog.textContent+='\n[等待超时，任务仍在后台运行]';if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}
+        if(polls>180){
+          if(plog)plog.textContent+='\n[等待超时，任务仍在后台运行]';
+          if(pdone){pdone.disabled=false;pdone.textContent='关闭';pdone.className='btn';pdone.onclick=smCloseJob;}
+          if(pclose)pclose.disabled=false;return;
+        }
         fetch('/cgi-bin/mgate.cgi?action=job-log-text&id='+jobId)
         .then(function(r){return r.text();})
         .then(function(txt){
