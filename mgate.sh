@@ -1290,7 +1290,7 @@ generate_web_style() {
     cat > "$WEB_CSS_FILE" <<'EOF_WEB_CSS'
 :root{--sb:#1e293b;--sb-txt:#94a3b8;--sb-act:#3b82f6;--sb-act-bg:rgba(59,130,246,.15);--sb-sec:#475569;--sb-w:220px;--accent:#3b82f6;--accent-h:#2563eb;--danger:#ef4444;--warn-c:#f59e0b;--good-c:#22c55e;--bg:#f1f5f9;--card:#fff;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--r:10px;--sh:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06)}
 *,*::before,*::after{box-sizing:border-box}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.6}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);font-size:17px;line-height:1.6}
 .layout{display:flex;min-height:100vh}
 .sidebar{width:var(--sb-w);background:var(--sb);color:var(--sb-txt);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:100;transition:transform .2s ease}
 .sb-logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
@@ -1332,20 +1332,20 @@ h3{font-size:17px;font-weight:600;margin:0 0 8px}
 .sb-warn{background:#fef3c7;color:#92400e}.sb-warn::before{background:var(--warn-c)}
 .sb-danger{background:#fee2e2;color:#991b1b}.sb-danger::before{background:var(--danger)}
 .sb-unknown{background:#f1f5f9;color:#475569}.sb-unknown::before{background:#94a3b8}
-.btn,button{display:inline-flex;align-items:center;justify-content:center;padding:8px 18px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:15px;font-weight:500;text-decoration:none;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s;white-space:nowrap;font-family:inherit}
+.btn,button{display:inline-flex;align-items:center;justify-content:center;padding:8px 18px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:16px;font-weight:500;text-decoration:none;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s;white-space:nowrap;font-family:inherit}
 .btn:hover,button:hover{background:#f8fafc;border-color:#cbd5e1;box-shadow:0 1px 2px rgba(0,0,0,.06)}
 .primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .primary:hover,.btn.primary:hover{background:var(--accent-h);border-color:var(--accent-h)}
 .danger,.btn.danger{color:var(--danger);border-color:#fecaca}
 .danger:hover,.btn.danger:hover{background:#fee2e2}
-.btn-sm{padding:5px 13px;font-size:14px;border-radius:6px}
+.btn-sm{padding:5px 13px;font-size:15px;border-radius:6px}
 .btn-group{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .row{margin:12px 0}
 input[type=text],input[type=password],select{padding:8px 12px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);font-size:13px;min-width:220px;max-width:100%;outline:none;transition:border-color .12s,box-shadow .12s;font-family:inherit}
 input[type=text]:focus,input[type=password]:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
 select{-webkit-appearance:none;appearance:none;padding-right:32px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Cpath fill='%2394a3b8' d='m7 10 5 5 5-5z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;cursor:pointer}
-.table{width:100%;border-collapse:collapse;font-size:15px}
-.table th{text-align:left;padding:9px 12px;font-weight:700;color:var(--muted);border-bottom:2px solid var(--border);font-size:13px;text-transform:uppercase;letter-spacing:.05em}
+.table{width:100%;border-collapse:collapse;font-size:16px}
+.table th{text-align:left;padding:9px 12px;font-weight:700;color:var(--muted);border-bottom:2px solid var(--border);font-size:14px;text-transform:uppercase;letter-spacing:.05em}
 .table td{padding:10px 12px;border-bottom:1px solid #f8fafc;vertical-align:top}
 .table tr:last-child td{border-bottom:none}
 .table tr:hover td{background:#fafcff}
@@ -3194,9 +3194,10 @@ subscription_page() {
     _custom_yaml="$(cat "$CUSTOM_PROVIDER_FILE" 2>/dev/null)"
 
     # ── 订阅组列表 ──
+    # 按钮全部用 data-sm 属性触发，不用 onclick，完全自包含，不依赖 page_end 的 openModal
     printf '<div class="card">\n'
     printf '<div class="card-title"><h2>订阅组</h2>'
-    printf '<button type="button" onclick="openModal('"'"'modal-add'"'"')" class="btn btn-sm primary">&#x2795; 添加订阅组</button></div>\n'
+    printf '<button type="button" data-sm="modal-add" class="btn btn-sm primary">&#x2795; 添加订阅组</button></div>\n'
     printf '<table class="table group-table"><thead><tr><th>组名</th><th>类型</th><th>状态</th><th>最近更新</th><th>操作</th></tr></thead><tbody>\n'
 
     # default 组
@@ -3207,11 +3208,13 @@ subscription_page() {
     else
         printf '<td><span style="color:var(--muted)">-</span></td>'
     fi
-    printf '<td style="font-size:12px;color:var(--muted)">%s</td>' "$(printf '%s' "$_def_upd" | html_escape)"
+    printf '<td style="color:var(--muted)">%s</td>' "$(printf '%s' "$_def_upd" | html_escape)"
     printf '<td><div class="ops">'
-    [ "$_active_grp" != "default" ] && printf '<button type="button" onclick="activateGroup('"'"'default'"'"')" class="btn btn-sm">激活</button>'
-    printf '<button type="button" onclick="editGroup('"'"'default'"'"','"'"'%s'"'"')" class="btn btn-sm">修改</button>' "$(printf '%s' "$_def_url" | html_escape)"
-    printf '<button type="button" onclick="updateGroup('"'"'default'"'"')" class="btn btn-sm">更新</button>'
+    [ "$_active_grp" != "default" ] && \
+        printf '<button type="button" data-sm="modal-activate" data-gname="default" class="btn btn-sm">激活</button>'
+    printf '<button type="button" data-sm="modal-edit" data-gname="default" data-gurl="%s" class="btn btn-sm">修改</button>' \
+        "$(printf '%s' "$_def_url" | html_escape)"
+    printf '<button type="button" data-sm="modal-update" data-gname="default" class="btn btn-sm">更新</button>'
     printf '</div></td></tr>\n'
 
     # 命名订阅组 + custom
@@ -3225,28 +3228,30 @@ subscription_page() {
             else
                 printf '<td><span style="color:var(--muted)">-</span></td>'
             fi
-            printf '<td style="font-size:12px;color:var(--muted)">手动管理</td>'
+            printf '<td style="color:var(--muted)">手动管理</td>'
             printf '<td><div class="ops">'
-            [ "$_active_grp" != "custom" ] && printf '<button type="button" onclick="activateGroup('"'"'custom'"'"')" class="btn btn-sm">激活</button>'
-            printf '<button type="button" onclick="manageNodes()" class="btn btn-sm">节点管理</button>'
+            [ "$_active_grp" != "custom" ] && \
+                printf '<button type="button" data-sm="modal-activate" data-gname="custom" class="btn btn-sm">激活</button>'
+            printf '<button type="button" data-sm="modal-nodes" class="btn btn-sm">节点管理</button>'
             printf '</div></td></tr>\n'
         else
             _gn_url="$(cat "$GROUPS_DIR/${_gn}.url" 2>/dev/null | head -1)"
             _gn_upd="$(cat "$GROUPS_DIR/${_gn}.updated" 2>/dev/null || printf '未更新')"
-            printf '<tr><td><strong>%s</strong></td><td><span class="badge-url">URL 订阅</span></td>' "$(printf '%s' "$_gn" | html_escape)"
+            _gn_esc="$(printf '%s' "$_gn" | html_escape)"
+            _gn_url_esc="$(printf '%s' "$_gn_url" | html_escape)"
+            printf '<tr><td><strong>%s</strong></td><td><span class="badge-url">URL 订阅</span></td>' "$_gn_esc"
             if [ "$_active_grp" = "$_gn" ]; then
                 printf '<td><span class="badge-active">&#x2713; 激活中</span></td>'
             else
                 printf '<td><span style="color:var(--muted)">-</span></td>'
             fi
-            printf '<td style="font-size:12px;color:var(--muted)">%s</td>' "$(printf '%s' "$_gn_upd" | html_escape)"
-            _gn_esc="$(printf '%s' "$_gn" | html_escape)"
-            _gn_url_esc="$(printf '%s' "$_gn_url" | html_escape)"
+            printf '<td style="color:var(--muted)">%s</td>' "$(printf '%s' "$_gn_upd" | html_escape)"
             printf '<td><div class="ops">'
-            [ "$_active_grp" != "$_gn" ] && printf '<button type="button" onclick="activateGroup('"'"'%s'"'"')" class="btn btn-sm">激活</button>' "$_gn_esc"
-            printf '<button type="button" onclick="editGroup('"'"'%s'"'"','"'"'%s'"'"')" class="btn btn-sm">修改</button>' "$_gn_esc" "$_gn_url_esc"
-            printf '<button type="button" onclick="updateGroup('"'"'%s'"'"')" class="btn btn-sm">更新</button>' "$_gn_esc"
-            printf '<button type="button" onclick="deleteGroup('"'"'%s'"'"')" class="btn btn-sm danger">删除</button>' "$_gn_esc"
+            [ "$_active_grp" != "$_gn" ] && \
+                printf '<button type="button" data-sm="modal-activate" data-gname="%s" class="btn btn-sm">激活</button>' "$_gn_esc"
+            printf '<button type="button" data-sm="modal-edit" data-gname="%s" data-gurl="%s" class="btn btn-sm">修改</button>' "$_gn_esc" "$_gn_url_esc"
+            printf '<button type="button" data-sm="modal-update" data-gname="%s" class="btn btn-sm">更新</button>' "$_gn_esc"
+            printf '<button type="button" data-sm="modal-del" data-gname="%s" class="btn btn-sm danger">删除</button>' "$_gn_esc"
             printf '</div></td></tr>\n'
         fi
     done
@@ -3254,7 +3259,9 @@ subscription_page() {
 
     # ── 手动接入（折叠）──
     printf '<details style="margin:0 0 16px">\n'
-    printf '<summary style="cursor:pointer;font-weight:600;padding:14px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);list-style:none;display:flex;align-items:center;justify-content:space-between"><span>&#x1F4F2; 手动接入代理（其他设备使用 HTTP/SOCKS5 代理时查看）</span><span style="font-size:12px;color:var(--muted)">点击展开</span></summary>\n'
+    printf '<summary style="cursor:pointer;font-weight:600;padding:14px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);list-style:none;display:flex;align-items:center;justify-content:space-between">'
+    printf '<span>&#x1F4F2; 手动接入代理（其他设备使用 HTTP/SOCKS5 代理时查看）</span>'
+    printf '<span style="color:var(--muted)">点击展开</span></summary>\n'
     printf '<div class="card" style="border-top-left-radius:0;border-top-right-radius:0;border-top:none;margin-top:0">\n'
     printf '<p class="muted">将以下地址填入设备的代理设置，即可让该设备通过本机上网。</p>\n'
     printf '<table class="table"><thead><tr><th>账号</th><th>HTTP 代理</th><th>SOCKS5 代理</th></tr></thead><tbody>\n'
@@ -3273,65 +3280,102 @@ subscription_page() {
     fi
     printf '</tbody></table>\n</div>\n</details>\n'
 
-    # ── Modals（用 printf 避免 heredoc 嵌套问题）──
-    printf '<div id="modal-add" class="modal-overlay"><div class="modal-box">\n'
-    printf '<div class="modal-head"><h3>添加订阅组</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-add'"'"')">&#x2715;</button></div>\n'
+    # ── Modals（所有关闭按钮用 data-sm-close，不依赖 closeModal）──
+    _sub_modal() {
+        mid="$1"; mtitle="$2"
+        printf '<div id="%s" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:1000;padding:16px">\n' "$mid"
+        printf '<div class="modal-box">\n'
+        printf '<div class="modal-head"><h3>%s</h3><button class="modal-close" type="button" data-sm-close="%s">&#x2715;</button></div>\n' "$mtitle" "$mid"
+    }
+
+    _sub_modal "modal-add" "添加订阅组"
     printf '<form method="POST" action="/cgi-bin/mgate.cgi"><input type="hidden" name="action" value="sub-add-do">\n'
     printf '<div class="modal-body">\n'
     printf '<div class="form-row"><div class="form-label">组名称</div><input type="text" name="sub_name" placeholder="如：work、backup" required autocomplete="off"></div>\n'
     printf '<div class="form-row"><div class="form-label">订阅 URL</div><input type="text" name="sub_url" placeholder="https://example.com/sub.yaml" required autocomplete="off"><div class="hint">Clash / Mihomo YAML 格式</div></div>\n'
-    printf '</div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-add'"'"')">取消</button><button type="submit" class="btn primary">保存并拉取</button></div>\n'
+    printf '</div><div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-add">取消</button><button type="submit" class="btn primary">保存并拉取</button></div>\n'
     printf '</form></div></div>\n'
 
-    printf '<div id="modal-edit" class="modal-overlay"><div class="modal-box">\n'
-    printf '<div class="modal-head"><h3>修改订阅</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-edit'"'"')">&#x2715;</button></div>\n'
+    _sub_modal "modal-edit" "修改订阅"
     printf '<form method="POST" action="/cgi-bin/mgate.cgi"><input type="hidden" name="action" value="sub-add-do">\n'
     printf '<div class="modal-body">\n'
     printf '<div class="form-row"><div class="form-label">组名称</div><input type="text" id="edit-name" name="sub_name" readonly style="background:var(--bg);opacity:.7"></div>\n'
     printf '<div class="form-row"><div class="form-label">订阅 URL</div><input type="text" id="edit-url" name="sub_url" required autocomplete="off"></div>\n'
-    printf '</div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-edit'"'"')">取消</button><button type="submit" class="btn primary">保存</button></div>\n'
+    printf '</div><div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-edit">取消</button><button type="submit" class="btn primary">保存</button></div>\n'
     printf '</form></div></div>\n'
 
-    printf '<div id="modal-del" class="modal-overlay"><div class="modal-box">\n'
-    printf '<div class="modal-head"><h3>删除订阅组</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-del'"'"')">&#x2715;</button></div>\n'
+    _sub_modal "modal-del" "删除订阅组"
     printf '<div class="modal-body"><p>确定要删除 <strong id="del-name-show"></strong> 吗？此操作不可恢复。</p></div>\n'
-    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-del'"'"')">取消</button>\n'
-    printf '<form id="del-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-del">取消</button>\n'
+    printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
     printf '<input type="hidden" name="action" value="sub-del-do"><input type="hidden" id="del-name-input" name="sub_name" value="">\n'
     printf '<button type="submit" class="btn danger">确认删除</button></form></div></div>\n'
 
-    printf '<div id="modal-update" class="modal-overlay"><div class="modal-box">\n'
-    printf '<div class="modal-head"><h3>更新订阅</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-update'"'"')">&#x2715;</button></div>\n'
+    _sub_modal "modal-update" "更新订阅"
     printf '<div class="modal-body"><p>确认重新拉取 <strong id="upd-name-show"></strong> 的订阅内容？</p></div>\n'
-    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-update'"'"')">取消</button>\n'
-    printf '<form id="upd-form" method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-update">取消</button>\n'
+    printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
     printf '<input type="hidden" name="action" value="sub-update-named-do"><input type="hidden" id="upd-name-input" name="group_name" value="">\n'
     printf '<button type="submit" class="btn primary">确认更新</button></form></div></div>\n'
 
-    printf '<div id="modal-activate" class="modal-overlay"><div class="modal-box">\n'
-    printf '<div class="modal-head"><h3>切换订阅组</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-activate'"'"')">&#x2715;</button></div>\n'
+    _sub_modal "modal-activate" "切换订阅组"
     printf '<div class="modal-body"><p>切换到订阅组 <strong id="act-name-show"></strong>？</p><p class="muted">切换后将重载 mihomo，有本地缓存时无需重新下载。</p></div>\n'
-    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-activate'"'"')">取消</button>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-activate">取消</button>\n'
     printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
     printf '<input type="hidden" name="action" value="group-switch-do"><input type="hidden" id="act-name-input" name="group_name" value="">\n'
     printf '<button type="submit" class="btn primary">确认切换</button></form></div></div>\n'
 
     # 节点管理 modal（带实际 YAML 内容）
-    printf '<div id="modal-nodes" class="modal-overlay"><div class="modal-box" style="max-width:600px">\n'
-    printf '<div class="modal-head"><h3>&#x2728; 自定义节点管理</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-nodes'"'"')">&#x2715;</button></div>\n'
+    printf '<div id="modal-nodes" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:1000;padding:16px">\n'
+    printf '<div class="modal-box" style="max-width:600px">\n'
+    printf '<div class="modal-head"><h3>&#x2728; 自定义节点管理</h3><button class="modal-close" type="button" data-sm-close="modal-nodes">&#x2715;</button></div>\n'
     printf '<form method="POST" action="/cgi-bin/mgate.cgi"><input type="hidden" name="action" value="custom-nodes-save">\n'
     printf '<div class="modal-body"><p class="muted">编辑标准 Mihomo proxies YAML 节点列表：</p>\n'
-    printf '<textarea name="custom_yaml" rows="14" style="width:100%%;font-family:ui-monospace,monospace;font-size:12px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:12px;resize:vertical">%s</textarea>\n' \
+    printf '<textarea name="custom_yaml" rows="14" style="width:100%%;font-family:ui-monospace,monospace;font-size:13px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:12px;resize:vertical">%s</textarea>\n' \
         "$(printf '%s' "$_custom_yaml" | html_escape)"
-    printf '</div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-nodes'"'"')">取消</button><button type="submit" class="btn primary">保存并重载</button></div></form></div></div>\n'
+    printf '</div><div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-nodes">取消</button><button type="submit" class="btn primary">保存并重载</button></div></form></div></div>\n'
 
+    # ── 自包含 JS：data-sm 触发开，data-sm-close 触发关，完全不依赖 page_end 的 openModal ──
     printf '<script>\n'
-    printf 'function _set(id,prop,val){var e=document.getElementById(id);if(e)e[prop]=val;}\n'
-    printf 'function activateGroup(n){_set("act-name-show","textContent",n);_set("act-name-input","value",n);openModal("modal-activate");}\n'
-    printf 'function editGroup(n,u){_set("edit-name","value",n);_set("edit-url","value",u);openModal("modal-edit");}\n'
-    printf 'function deleteGroup(n){_set("del-name-show","textContent",n);_set("del-name-input","value",n);openModal("modal-del");}\n'
-    printf 'function updateGroup(n){_set("upd-name-show","textContent",n);_set("upd-name-input","value",n);openModal("modal-update");}\n'
-    printf 'function manageNodes(){openModal("modal-nodes");}\n'
+    printf '(function(){\n'
+    printf '  function smOpen(id){\n'
+    printf '    var m=document.getElementById(id);\n'
+    printf '    if(!m)return;\n'
+    printf '    m.style.display="flex";\n'
+    printf '    document.body.style.overflow="hidden";\n'
+    printf '  }\n'
+    printf '  function smClose(id){\n'
+    printf '    var m=document.getElementById(id);\n'
+    printf '    if(!m)return;\n'
+    printf '    m.style.display="none";\n'
+    printf '    document.body.style.overflow="";\n'
+    printf '  }\n'
+    printf '  function el(id){return document.getElementById(id);}\n'
+    printf '  function setEl(id,prop,val){var e=el(id);if(e)e[prop]=val;}\n'
+    printf '  document.addEventListener("click",function(ev){\n'
+    printf '    var t=ev.target;\n'
+    printf '    // 关闭按钮\n'
+    printf '    var cb=t.closest("[data-sm-close]");\n'
+    printf '    if(cb){smClose(cb.getAttribute("data-sm-close"));return;}\n'
+    printf '    // 背景遮罩点击关闭\n'
+    printf '    if(t.style&&t.id&&t.style.display==="flex"&&t.classList.contains("modal-overlay")){\n'
+    printf '      if(t===ev.target){smClose(t.id);return;}\n'
+    printf '    }\n'
+    printf '    // 触发弹窗的按钮\n'
+    printf '    var ob=t.closest("[data-sm]");\n'
+    printf '    if(!ob)return;\n'
+    printf '    var mid=ob.getAttribute("data-sm");\n'
+    printf '    var gname=ob.getAttribute("data-gname")||"";\n'
+    printf '    var gurl=ob.getAttribute("data-gurl")||"";\n'
+    printf '    if(mid==="modal-activate"){setEl("act-name-show","textContent",gname);setEl("act-name-input","value",gname);}\n'
+    printf '    else if(mid==="modal-edit"){setEl("edit-name","value",gname);setEl("edit-url","value",gurl);}\n'
+    printf '    else if(mid==="modal-update"){setEl("upd-name-show","textContent",gname);setEl("upd-name-input","value",gname);}\n'
+    printf '    else if(mid==="modal-del"){setEl("del-name-show","textContent",gname);setEl("del-name-input","value",gname);}\n'
+    printf '    smOpen(mid);\n'
+    printf '  });\n'
+    printf '  // Esc 关闭\n'
+    printf '  document.addEventListener("keydown",function(e){if(e.key==="Escape"){document.querySelectorAll(".modal-overlay").forEach(function(m){m.style.display="none";});document.body.style.overflow="";}});\n'
+    printf '})();\n'
     printf '</script>\n'
     page_end
 }
