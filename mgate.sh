@@ -1300,7 +1300,7 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans
 .sb-logo{display:flex;align-items:center;gap:11px;padding:20px 16px 18px;border-bottom:1px solid rgba(255,255,255,.07)}
 .sb-mark{width:34px;height:34px;background:linear-gradient(135deg,#3b82f6 0%,#6366f1 100%);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;box-shadow:0 2px 8px rgba(99,102,241,.45)}
 .sb-brand{display:flex;flex-direction:column;gap:3px;min-width:0}
-.sb-name{font-size:19px;font-weight:800;color:#f1f5f9;letter-spacing:-.2px;line-height:1}
+.sb-name{font-size:19px;font-weight:800;color:#f1f5f9;letter-spacing:.05em;line-height:1;text-transform:uppercase}
 .sb-tagline{font-size:11px;color:#475569;letter-spacing:.06em;line-height:1;font-weight:500;white-space:nowrap;text-transform:uppercase}
 .sb-nav{padding:10px 0;flex:1}
 .sb-sec{padding:14px 16px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--sb-sec)}
