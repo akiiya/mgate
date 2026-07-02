@@ -2809,7 +2809,7 @@ service_page() {
         printf '<div class="card" style="border-color:#86efac;text-align:center;padding:20px">\n'
         printf '<div style="font-size:28px">&#x25B6;&#xFE0F;</div><div style="font-weight:700;margin:10px 0 6px">启动服务</div>\n'
         printf '<div class="muted" style="margin-bottom:14px">Mihomo 当前已停止，点击重新启动代理</div>\n'
-        printf '<button type="button" class="btn primary" onclick="startJobModal(null,'"'"'action=start-modal-do'"'"','"'"'启动 Mihomo'"'"')" style="display:block;width:100%%">启动 Mihomo</button>\n'
+        printf '<button type="button" class="btn primary" onclick="openModal('"'"'modal-svc-start'"'"')" style="display:block;width:100%%">启动 Mihomo</button>\n'
         printf '</div></div>\n'
     fi
     printf '</div>\n'
@@ -2846,6 +2846,12 @@ service_page() {
     printf '</script>\n'
 
     # 停止/重启确认弹窗
+    printf '<div id="modal-svc-start" class="modal-overlay"><div class="modal-box">\n'
+    printf '<div class="modal-head"><h3>确认启动 Mihomo</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-svc-start'"'"')">&#x2715;</button></div>\n'
+    printf '<div class="modal-body"><p>启动后代理服务将开始运行，已连接设备可通过代理上网。</p></div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-svc-start'"'"')">取消</button>'
+    printf '<button type="button" class="btn primary" onclick="startJobModal('"'"'modal-svc-start'"'"','"'"'action=start-modal-do'"'"','"'"'启动 Mihomo'"'"')">确认启动</button></div>\n'
+    printf '</div></div>\n'
     printf '<div id="modal-svc-stop" class="modal-overlay"><div class="modal-box">\n'
     printf '<div class="modal-head"><h3>⚠️ 确认停止 Mihomo</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-svc-stop'"'"')">&#x2715;</button></div>\n'
     printf '<div class="modal-body"><div class="warn-box">停止后，所有设备的代理连接将立即中断，恢复直连上网。</div></div>\n'
@@ -3151,8 +3157,24 @@ EOF
         cat <<'EOF'
 </select>
 </div>
-<div class="row"><button type="button" class="primary" onclick="var s=this.closest('form').querySelector('[name=tproxy_node]');if(s&&s.value)startJobModal(null,'action=tproxy-select-modal-do&tproxy_node='+s.value,'切换代理节点 #'+s.value)">切换节点</button></div>
+<div class="row"><button type="button" class="primary" onclick="var s=this.closest('form').querySelector('[name=tproxy_node]');if(!s||!s.value)return;var idx=s.value;var label=s.options[s.selectedIndex]?s.options[s.selectedIndex].text:'#'+idx;document.getElementById('tproxy-sel-label').textContent=label;document.getElementById('tproxy-sel-idx').value=idx;openModal('modal-tproxy-select')">切换节点</button></div>
 </form>
+
+<div id="modal-tproxy-select" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>确认切换代理节点</h3><button class="modal-close" type="button" onclick="closeModal('modal-tproxy-select')">&#x2715;</button></div>
+<div class="modal-body">
+<p>将切换到节点：<strong id="tproxy-sel-label"></strong></p>
+<p class="muted">切换即时生效，热点中所有设备的流量将立即走新节点。</p>
+</div>
+<div class="modal-foot">
+<button type="button" class="btn" onclick="closeModal('modal-tproxy-select')">取消</button>
+<input type="hidden" id="tproxy-sel-idx" value="">
+<button type="button" class="btn primary" onclick="var idx=document.getElementById('tproxy-sel-idx').value;if(idx)startJobModal('modal-tproxy-select','action=tproxy-select-modal-do&tproxy_node='+idx,'切换代理节点 #'+idx)">确认切换</button>
+</div>
+</div>
+</div>
+
 </div>
 EOF
     fi
