@@ -4,14 +4,15 @@
 
 ## ✨ 能力一览
 
-- 📡 管理 `ap0` 热点，提供 SSID / DHCP / DNS
+- 📡 管理 `ap0` 热点，支持在线修改 SSID / 密码，无需 SSH
 - 🌉 普通 NAT fallback：AP 客户端经 `wlan0` 出网
-- 🧩 TProxy 透明代理：AP 流量无感进入 Mihomo，无需客户端配代理
+- 🧩 TProxy 透明代理：AP 流量无感进入 Mihomo，无需客户端配代理；支持即时切换代理节点
 - 📶 上级 WiFi 管理：通过系统网络管理器管理 `wlan0` 上级连接，不接管 `wlan0`
-- 🔁 Clash / Mihomo YAML 订阅，自动识别节点国家/地区并生成代理组
-- 🖥️ Web 管理后台，慢操作 job 化，不卡浏览器
-- 🧭 TUI 菜单，覆盖所有主要操作
+- 🔁 多订阅组管理：多个 Clash / Mihomo YAML 订阅源，一键切换；支持手动节点（custom 组）
+- 🖥️ Web 管理后台：全异步弹窗操作，无中间跳转页，操作进度实时显示
+- 🧭 TUI 菜单，覆盖所有主要操作，与 Web / CLI 三端对齐
 - 🔎 health / doctor / debug / JSON 状态接口
+- 🤖 mgate-agent 云端联动支持
 - 🛡️ 不接管 `wlan0`，不停止系统网络服务
 
 ## 📌 默认值
@@ -88,7 +89,7 @@ mgate tui
 
 或不带参数运行 `mgate` 直接进入。
 
-TUI 覆盖：基础服务、订阅管理、Web 管理、AP 热点、NAT 网关、TProxy 透明代理、状态/诊断/JSON、备份/恢复。危险操作需二次确认；`tproxy-start` 需输入 `yes` 强确认。
+TUI 覆盖：基础服务、多订阅组管理、Web 管理、AP 热点、NAT 网关、TProxy 透明代理、上级 WiFi 管理、状态/诊断/JSON、备份/恢复。危险操作均需二次确认；`tproxy-start` 需输入 `yes` 强确认；`wifi-disconnect` 需输入 `YES` 强确认。
 
 ## ⌨️ 常用命令
 
@@ -113,14 +114,25 @@ mgate version
 ### 🔁 订阅管理
 
 ```sh
-mgate sub-set <url>    # 设置订阅并立即拉取
-mgate sub-update       # 更新订阅（失败不覆盖现有配置）
+mgate sub-set <url>    # 设置 default 组订阅并立即拉取
+mgate sub-update       # 更新当前激活组的订阅
 mgate sub-status       # 订阅状态
 mgate sub-nodes        # 查看节点国家识别结果
 mgate sub-unmatched    # 查看未识别节点
-mgate sub-debug
-mgate sub-clear        # 清除订阅
+mgate sub-clear        # 清除订阅（危险）
 ```
+
+### 🗂️ 多订阅组管理
+
+```sh
+mgate group                        # 查看所有订阅组及当前激活组
+mgate group <名称>                 # 切换到指定组（有本地缓存时无需网络）
+mgate sub-add <名称> <url>         # 添加命名订阅组
+mgate sub-update <名称>            # 更新指定组的订阅缓存
+mgate sub-del <名称>               # 删除命名订阅组
+```
+
+每个订阅组维护独立的节点缓存，切换时从缓存重建配置，秒级完成。`custom` 是特殊的手动节点组，直接编辑 YAML 文件管理节点。
 
 ### 🔑 账号与代理连接
 
@@ -143,8 +155,10 @@ SOCKS5: socks5://用户:密码@设备IP:31800
 mgate ap-check         # 检查网卡支持情况
 mgate ap-install-deps  # 安装 hostapd / dnsmasq
 mgate ap-config        # 查看 AP 配置
+mgate ap-edit          # 修改 SSID / 密码（修改后自动重启热点）
 mgate ap-start         # 启动热点
 mgate ap-stop          # 停止热点
+mgate ap-restart       # 重启热点
 mgate ap-status
 mgate ap-json
 ```
@@ -172,6 +186,8 @@ mgate tproxy-plan      # 预览将要执行的操作（不执行）
 mgate tproxy-dry-run   # 干跑模式
 mgate tproxy-start     # 启动 TProxy
 mgate tproxy-stop      # 停止并退回 NAT fallback
+mgate tproxy-nodes     # 列出 TPROXY-OUT 可用节点
+mgate tproxy-select <节点名>  # 即时切换代理节点（无需重启）
 mgate tproxy-status
 mgate tproxy-health
 mgate tproxy-doctor
@@ -179,7 +195,7 @@ mgate tproxy-debug
 mgate tproxy-json
 ```
 
-`tproxy-start` 检查环境健康后添加 `tproxy-port: 31802`、ip rule、route table 100、iptables mangle chain，并保留 NAT fallback。启动失败会自动回滚。
+`tproxy-start` 检查环境健康后添加 `tproxy-port: 31802`、ip rule、route table 100、iptables mangle chain，并保留 NAT fallback。启动失败会自动回滚。`tproxy-select` 通过 Mihomo API 即时切换节点，无需重启服务。
 
 ### 🖥️ Web 管理
 
@@ -194,7 +210,7 @@ mgate web-refresh      # 重新生成 Web 文件
 
 默认访问地址：`http://设备IP:31888`
 
-慢操作（启停、更新、订阅等）通过后台 job 执行，页面会跳转至 job 状态页，不会卡住浏览器。
+所有操作均在弹窗内完成，实时展示执行日志，无中间跳转页。危险操作（停止服务、恢复备份等）有确认弹窗保护。
 
 ### 📶 上级 WiFi 管理
 
@@ -207,13 +223,13 @@ mgate wifi-list            # 列出已保存 WiFi 配置
 mgate wifi-add <ssid> [pw] # 添加 WiFi 配置（不立即连接）
 mgate wifi-connect <ssid>  # 切换上级 WiFi
 mgate wifi-reconnect       # 重连当前 WiFi
-mgate wifi-disconnect      # 断开上级 WiFi
+mgate wifi-disconnect      # 断开上级 WiFi（需输入 YES 强确认）
 mgate wifi-delete <ssid>   # 删除已保存配置
 mgate wifi-doctor          # 诊断上级连接
 mgate wifi-json            # JSON 状态输出
 ```
 
-> ⚠️ **高风险操作**：`wifi-connect` / `wifi-reconnect` / `wifi-disconnect` 可能导致 SSH 断线、AP 信道变化、AP 客户端短暂掉线、NAT/TProxy 暂时不可用。执行前会提示确认，`wifi-disconnect` 需输入 `yes` 强确认。
+> ⚠️ **高风险操作**：`wifi-connect` / `wifi-reconnect` / `wifi-disconnect` 可能导致 SSH 断线、AP 信道变化、AP 客户端短暂掉线、NAT/TProxy 暂时不可用。执行前会提示确认，`wifi-disconnect` 需输入 `YES` 强确认。
 
 ### 📊 JSON / 自动化接口
 
@@ -324,7 +340,7 @@ mgate restore <备份ID>
 - AP 使用 `/opt/mgate/run/ap/` 下的隔离配置
 - NAT fallback 始终保留；TProxy 不替代它
 - `tproxy-start` 失败自动回滚；`tproxy-stop` 可随时退回 NAT fallback
-- Web 慢操作必须 job 化，不恢复 CGI 同步阻塞
+- Web 操作全程异步弹窗，所有写操作有确认保护
 - JSON 接口只读，不修改系统网络状态
 - 不要将 Web / 代理端口暴露到公网
 
