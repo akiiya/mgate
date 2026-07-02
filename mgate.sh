@@ -3309,21 +3309,21 @@ subscription_page() {
     printf '<div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-del">取消</button>\n'
     printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
     printf '<input type="hidden" name="action" value="sub-del-do"><input type="hidden" id="del-name-input" name="sub_name" value="">\n'
-    printf '<button type="submit" class="btn danger">确认删除</button></form></div></div>\n'
+    printf '<button type="submit" class="btn danger">确认删除</button></form></div></div></div>\n'
 
     _sub_modal "modal-update" "更新订阅"
     printf '<div class="modal-body"><p>确认重新拉取 <strong id="upd-name-show"></strong> 的订阅内容？</p></div>\n'
     printf '<div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-update">取消</button>\n'
     printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
     printf '<input type="hidden" name="action" value="sub-update-named-do"><input type="hidden" id="upd-name-input" name="group_name" value="">\n'
-    printf '<button type="submit" class="btn primary">确认更新</button></form></div></div>\n'
+    printf '<button type="submit" class="btn primary">确认更新</button></form></div></div></div>\n'
 
     _sub_modal "modal-activate" "切换订阅组"
     printf '<div class="modal-body"><p>切换到订阅组 <strong id="act-name-show"></strong>？</p><p class="muted">切换后将重载 mihomo，有本地缓存时无需重新下载。</p></div>\n'
     printf '<div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-activate">取消</button>\n'
     printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
     printf '<input type="hidden" name="action" value="group-switch-do"><input type="hidden" id="act-name-input" name="group_name" value="">\n'
-    printf '<button type="submit" class="btn primary">确认切换</button></form></div></div>\n'
+    printf '<button type="submit" class="btn primary">确认切换</button></form></div></div></div>\n'
 
     # 节点管理 modal（带实际 YAML 内容）
     printf '<div id="modal-nodes" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:1000;padding:16px">\n'
