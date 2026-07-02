@@ -1290,7 +1290,7 @@ generate_web_style() {
     cat > "$WEB_CSS_FILE" <<'EOF_WEB_CSS'
 :root{--sb:#1e293b;--sb-txt:#94a3b8;--sb-act:#3b82f6;--sb-act-bg:rgba(59,130,246,.15);--sb-sec:#475569;--sb-w:220px;--accent:#3b82f6;--accent-h:#2563eb;--danger:#ef4444;--warn-c:#f59e0b;--good-c:#22c55e;--bg:#f1f5f9;--card:#fff;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--r:10px;--sh:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06)}
 *,*::before,*::after{box-sizing:border-box}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);font-size:15px;line-height:1.55}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.6}
 .layout{display:flex;min-height:100vh}
 .sidebar{width:var(--sb-w);background:var(--sb);color:var(--sb-txt);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:100;transition:transform .2s ease}
 .sb-logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
@@ -1312,8 +1312,8 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans
 .content{padding:24px;flex:1;max-width:1200px;width:100%}
 .pg-footer{padding:14px 24px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;background:var(--card)}
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin:0 0 16px;box-shadow:var(--sh)}
-h2{font-size:13px;font-weight:700;margin:0 0 16px;color:var(--text);text-transform:uppercase;letter-spacing:.04em}
-h3{font-size:15px;font-weight:600;margin:0 0 8px}
+h2{font-size:14px;font-weight:700;margin:0 0 16px;color:var(--text);text-transform:uppercase;letter-spacing:.04em}
+h3{font-size:17px;font-weight:600;margin:0 0 8px}
 .card-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 16px}
 .card-title h2{margin:0}
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:0 0 20px}
@@ -1332,20 +1332,20 @@ h3{font-size:15px;font-weight:600;margin:0 0 8px}
 .sb-warn{background:#fef3c7;color:#92400e}.sb-warn::before{background:var(--warn-c)}
 .sb-danger{background:#fee2e2;color:#991b1b}.sb-danger::before{background:var(--danger)}
 .sb-unknown{background:#f1f5f9;color:#475569}.sb-unknown::before{background:#94a3b8}
-.btn,button{display:inline-flex;align-items:center;justify-content:center;padding:7px 16px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px;font-weight:500;text-decoration:none;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s;white-space:nowrap;font-family:inherit}
+.btn,button{display:inline-flex;align-items:center;justify-content:center;padding:8px 18px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:15px;font-weight:500;text-decoration:none;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s;white-space:nowrap;font-family:inherit}
 .btn:hover,button:hover{background:#f8fafc;border-color:#cbd5e1;box-shadow:0 1px 2px rgba(0,0,0,.06)}
 .primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .primary:hover,.btn.primary:hover{background:var(--accent-h);border-color:var(--accent-h)}
 .danger,.btn.danger{color:var(--danger);border-color:#fecaca}
 .danger:hover,.btn.danger:hover{background:#fee2e2}
-.btn-sm{padding:5px 12px;font-size:13px;border-radius:6px}
+.btn-sm{padding:5px 13px;font-size:14px;border-radius:6px}
 .btn-group{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .row{margin:12px 0}
 input[type=text],input[type=password],select{padding:8px 12px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);font-size:13px;min-width:220px;max-width:100%;outline:none;transition:border-color .12s,box-shadow .12s;font-family:inherit}
 input[type=text]:focus,input[type=password]:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
 select{-webkit-appearance:none;appearance:none;padding-right:32px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Cpath fill='%2394a3b8' d='m7 10 5 5 5-5z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;cursor:pointer}
-.table{width:100%;border-collapse:collapse;font-size:14px}
-.table th{text-align:left;padding:9px 12px;font-weight:700;color:var(--muted);border-bottom:2px solid var(--border);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+.table{width:100%;border-collapse:collapse;font-size:15px}
+.table th{text-align:left;padding:9px 12px;font-weight:700;color:var(--muted);border-bottom:2px solid var(--border);font-size:13px;text-transform:uppercase;letter-spacing:.05em}
 .table td{padding:10px 12px;border-bottom:1px solid #f8fafc;vertical-align:top}
 .table tr:last-child td{border-bottom:none}
 .table tr:hover td{background:#fafcff}
@@ -2130,8 +2130,7 @@ status_page() {
 
     # AP: use healthy state (more accurate than just running)
     _ap_state="${WEB_AP_HEALTHY:-${WEB_AP_STATE:-unknown}}"
-    case "$_ap_state" in yes|healthy|running) ap_cls="good";; no|unhealthy|stopped) ap_cls="warn";; *) ap_cls="warn";; esac
-    _ap_disp=""; case "$_ap_state" in yes|healthy|running) _ap_disp="yes";; *) _ap_disp="no";; esac
+    case "$_ap_state" in yes|healthy|running) ap_cls="good" ;; *) ap_cls="warn" ;; esac
     _ap_ip="${WEB_AP_IP:-}"
     [ -n "$_ap_ip" ] && [ "$_ap_ip" != "none" ] && _ap_sub="$_ap_ip" || _ap_sub="ap0"
 
@@ -2158,7 +2157,7 @@ status_page() {
                 _inet_cls="warn"; _inet_val="offline"
             fi ;;
     esac
-    [ "$_ap_cls" = "good" ] || { _inet_cls="warn"; _inet_val="offline"; }
+    # 不强制绑定上网状态和AP状态；AP未开启时设备仍可有上行连接
 
     # Proxy status
     _proxy_val="未启动"; _proxy_cls="warn"
@@ -2175,12 +2174,12 @@ status_page() {
 <div class="hero-icon">&#x1F4E1;</div>
 <div class="hero-label">上网状态</div>
 <div class="hero-value" style="color:$([ "$_inet_cls" = "good" ] && printf '#22c55e' || printf '#f59e0b')">$(_state_zh "$_inet_val")</div>
-<div class="hero-sub">$([ "$_ap_cls" = "good" ] && printf '热点中有 %s 台设备' "$_dev_cnt" || printf '热点尚未启动')</div>
+<div class="hero-sub">$([ "$ap_cls" = "good" ] && printf '热点中有 %s 台设备在线' "$_dev_cnt" || printf '热点尚未启动')</div>
 </div>
 <div class="hero-card hc-${ap_cls}">
 <div class="hero-icon">&#x1F4F6;</div>
 <div class="hero-label">热点</div>
-<div class="hero-value" style="color:$([ "$_ap_cls" = "good" ] && printf '#22c55e' || printf '#94a3b8')">$([ "$_ap_cls" = "good" ] && printf '已开启' || printf '已关闭')</div>
+<div class="hero-value" style="color:$([ "$ap_cls" = "good" ] && printf '#22c55e' || printf '#94a3b8')">$([ "$ap_cls" = "good" ] && printf '已开启' || printf '已关闭')</div>
 <div class="hero-sub">SSID：$(printf '%s' "$_ap_ssid_disp" | html_escape)</div>
 </div>
 <div class="hero-card hc-${svc_cls}">
@@ -2639,33 +2638,24 @@ service_page() {
     printf '<h2>服务控制</h2>\n'
     printf '<div class="warn-box" style="margin-bottom:16px">以下操作会直接影响所有设备的代理连接，操作前请确认已告知使用该设备的用户。</div>\n'
     if [ "$_svc_running" = "yes" ]; then
-        cat <<'EOF'
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-<div class="card" style="border-color:#fca5a5;text-align:center;padding:20px">
-<div style="font-size:28px">&#x23F9;&#xFE0F;</div>
-<div style="font-weight:700;margin:10px 0 6px">停止服务</div>
-<div class="muted" style="font-size:11px;margin-bottom:14px">停止后所有代理立即中断，设备恢复直连</div>
-<a class="btn danger" href="?action=confirm&target=stop" style="display:block">停止 Mihomo</a>
-</div>
-<div class="card" style="border-color:#fcd34d;text-align:center;padding:20px">
-<div style="font-size:28px">&#x1F504;</div>
-<div style="font-weight:700;margin:10px 0 6px">重启服务</div>
-<div class="muted" style="font-size:11px;margin-bottom:14px">代理短暂中断（约 3-5 秒）后自动恢复</div>
-<a class="btn" href="?action=confirm&target=restart" style="display:block">重启 Mihomo</a>
-</div>
-</div>
-EOF
+        printf '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">\n'
+        printf '<div class="card" style="border-color:#fca5a5;text-align:center;padding:20px">\n'
+        printf '<div style="font-size:28px">&#x23F9;&#xFE0F;</div><div style="font-weight:700;margin:10px 0 6px">停止服务</div>\n'
+        printf '<div class="muted" style="margin-bottom:14px">停止后所有代理立即中断，设备恢复直连</div>\n'
+        printf '<button type="button" onclick="openModal('"'"'modal-svc-stop'"'"')" class="btn danger" style="display:block;width:100%%">停止 Mihomo</button>\n'
+        printf '</div>\n'
+        printf '<div class="card" style="border-color:#fcd34d;text-align:center;padding:20px">\n'
+        printf '<div style="font-size:28px">&#x1F504;</div><div style="font-weight:700;margin:10px 0 6px">重启服务</div>\n'
+        printf '<div class="muted" style="margin-bottom:14px">代理短暂中断（约 3–5 秒）后自动恢复</div>\n'
+        printf '<button type="button" onclick="openModal('"'"'modal-svc-restart'"'"')" class="btn" style="display:block;width:100%%">重启 Mihomo</button>\n'
+        printf '</div></div>\n'
     else
-        cat <<'EOF'
-<div style="display:grid;grid-template-columns:1fr;max-width:300px;gap:12px">
-<div class="card" style="border-color:#86efac;text-align:center;padding:20px">
-<div style="font-size:28px">&#x25B6;&#xFE0F;</div>
-<div style="font-weight:700;margin:10px 0 6px">启动服务</div>
-<div class="muted" style="font-size:11px;margin-bottom:14px">Mihomo 当前已停止，点击重新启动代理</div>
-<a class="btn primary" href="?action=start&src=service-page" style="display:block">启动 Mihomo</a>
-</div>
-</div>
-EOF
+        printf '<div style="display:grid;grid-template-columns:1fr;max-width:300px;gap:12px">\n'
+        printf '<div class="card" style="border-color:#86efac;text-align:center;padding:20px">\n'
+        printf '<div style="font-size:28px">&#x25B6;&#xFE0F;</div><div style="font-weight:700;margin:10px 0 6px">启动服务</div>\n'
+        printf '<div class="muted" style="margin-bottom:14px">Mihomo 当前已停止，点击重新启动代理</div>\n'
+        printf '<a class="btn primary" href="?action=start&amp;src=service-page" style="display:block">启动 Mihomo</a>\n'
+        printf '</div></div>\n'
     fi
     printf '</div>\n'
     cat <<'EOF'
@@ -2679,6 +2669,20 @@ EOF
 </div>
 </div>
 EOF
+    # 停止/重启确认弹窗
+    printf '<div id="modal-svc-stop" class="modal-overlay"><div class="modal-box">\n'
+    printf '<div class="modal-head"><h3>⚠️ 确认停止 Mihomo</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-svc-stop'"'"')">&#x2715;</button></div>\n'
+    printf '<div class="modal-body"><div class="warn-box">停止后，所有设备的代理连接将立即中断，恢复直连上网。</div></div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-svc-stop'"'"')">取消</button>'
+    printf '<a class="btn danger" href="?action=do&amp;target=stop">确认停止</a></div>\n'
+    printf '</div></div>\n'
+
+    printf '<div id="modal-svc-restart" class="modal-overlay"><div class="modal-box">\n'
+    printf '<div class="modal-head"><h3>确认重启 Mihomo</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-svc-restart'"'"')">&#x2715;</button></div>\n'
+    printf '<div class="modal-body"><p>代理服务将短暂中断（约 3–5 秒），之后自动恢复。</p></div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-svc-restart'"'"')">取消</button>'
+    printf '<a class="btn primary" href="?action=do&amp;target=restart">确认重启</a></div>\n'
+    printf '</div></div>\n'
     page_end
 }
 
@@ -2924,14 +2928,16 @@ EOF
 <select name="tproxy_node" required>
 <option value="">-- 选择节点 --</option>
 EOF
+        _tp_idx=0
         printf '%s\n' "$_tp_nodes" | while IFS= read -r _n; do
             [ -n "$_n" ] || continue
+            _tp_idx=$((_tp_idx + 1))
             if [ "$_n" = "$_tp_now" ]; then
-                printf '<option value="%s" selected>%s（当前）</option>\n' \
-                    "$(printf '%s' "$_n" | html_escape)" "$(printf '%s' "$_n" | html_escape)"
+                printf '<option value="%d" selected>%s（当前）</option>\n' \
+                    "$_tp_idx" "$(printf '%s' "$_n" | html_escape)"
             else
-                printf '<option value="%s">%s</option>\n' \
-                    "$(printf '%s' "$_n" | html_escape)" "$(printf '%s' "$_n" | html_escape)"
+                printf '<option value="%d">%s</option>\n' \
+                    "$_tp_idx" "$(printf '%s' "$_n" | html_escape)"
             fi
         done
         cat <<'EOF'
@@ -3383,8 +3389,9 @@ else
         tproxy-check-do) run_job_page "TProxy 环境检查" tproxy-check ;;
         tproxy-start-do) run_job_page "启用透明代理" tproxy-start ;;
         tproxy-select-do)
-            tproxy_node="$(url_decode "$(param_get "$post_body" tproxy_node)")"
-            run_job_page "切换节点 $tproxy_node" tproxy-select "$tproxy_node"
+            # 使用索引而非节点名，彻底避免 UTF-8/多字节编码问题
+            tproxy_idx="$(param_get "$post_body" tproxy_node)"
+            run_job_page "切换代理节点 #${tproxy_idx}" tproxy-select-idx "$tproxy_idx"
             ;;
         gateway-doctor) run_job_page "网关诊断" gateway-doctor ;;
         tproxy-doctor) run_job_page "TProxy 诊断" tproxy-doctor ;;
@@ -6383,6 +6390,15 @@ cmd_tproxy_select() {
 tproxy_doctor_section() {
     say ""
     say "[$1]"
+}
+
+cmd_tproxy_select_idx() {
+    idx="$1"
+    case "$idx" in ''|*[!0-9]*) die "索引必须为正整数，当前值：$idx" ;; esac
+    node="$(tproxy_fetch_nodes | awk -v n="$idx" 'NR==n{print;exit}')"
+    [ -n "$node" ] || die "节点索引 $idx 超出范围，请刷新页面重试"
+    info "索引 $idx → 节点：$node"
+    cmd_tproxy_select "$node"
 }
 
 tproxy_doctor_ok() {
@@ -11364,6 +11380,7 @@ main() {
         tproxy-stop) cmd_tproxy_stop "$@" ;;
         tproxy-nodes) cmd_tproxy_nodes "$@" ;;
         tproxy-select) cmd_tproxy_select "$@" ;;
+        tproxy-select-idx) cmd_tproxy_select_idx "$@" ;;
         tproxy-doctor) cmd_tproxy_doctor "$@" ;;
         tproxy-debug) cmd_tproxy_debug "$@" ;;
         migrate) cmd_migrate "$@" ;;
