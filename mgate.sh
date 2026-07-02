@@ -1299,9 +1299,9 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans
 .sidebar::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.35)}
 .sb-logo{display:flex;align-items:center;gap:11px;padding:20px 16px 18px;border-bottom:1px solid rgba(255,255,255,.07)}
 .sb-mark{width:34px;height:34px;background:linear-gradient(135deg,#3b82f6 0%,#6366f1 100%);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;box-shadow:0 2px 8px rgba(99,102,241,.45)}
-.sb-brand{display:flex;flex-direction:column;gap:2px;min-width:0}
-.sb-name{font-size:16px;font-weight:700;color:#f1f5f9;letter-spacing:.01em;line-height:1.1}
-.sb-tagline{font-size:11px;color:#64748b;letter-spacing:.04em;line-height:1;font-weight:400;white-space:nowrap}
+.sb-brand{display:flex;flex-direction:column;gap:3px;min-width:0}
+.sb-name{font-size:19px;font-weight:800;color:#f1f5f9;letter-spacing:-.2px;line-height:1}
+.sb-tagline{font-size:11px;color:#475569;letter-spacing:.06em;line-height:1;font-weight:500;white-space:nowrap;text-transform:uppercase}
 .sb-nav{padding:10px 0;flex:1}
 .sb-sec{padding:14px 16px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--sb-sec)}
 .nav-link{display:flex;align-items:center;gap:8px;padding:8px 12px;margin:1px 8px;border-radius:7px;text-decoration:none;color:var(--sb-txt);font-size:15px;transition:background .12s,color .12s}
@@ -1430,8 +1430,9 @@ body.auth-body{align-items:center;justify-content:center;display:flex;min-height
 .hero-sub{font-size:13px;color:var(--muted);margin-top:4px}
 .action-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-top:4px}
 .action-card{display:flex;flex-direction:column;gap:5px;padding:18px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);text-decoration:none;color:var(--text);transition:background .12s,box-shadow .12s;cursor:pointer}
-.action-card:hover{background:#f8fafc;box-shadow:var(--sh)}
-[data-theme="dark"] .action-card:hover{background:#243347}
+.action-card:hover{background:#f0f6ff;border-color:#bfdbfe;box-shadow:0 2px 8px rgba(59,130,246,.08)}
+[data-theme="dark"] .action-card:hover{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.12)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .action-card:hover{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.12)}}
 .ac-icon{font-size:20px}
 .ac-title{font-size:14px;font-weight:600}
 .ac-desc{font-size:12px;color:var(--muted)}
