@@ -3314,9 +3314,8 @@ subscription_page() {
     _sub_modal "modal-update" "更新订阅"
     printf '<div class="modal-body"><p>确认重新拉取 <strong id="upd-name-show"></strong> 的订阅内容？</p></div>\n'
     printf '<div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-update">取消</button>\n'
-    printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
-    printf '<input type="hidden" name="action" value="sub-update-named-do"><input type="hidden" id="upd-name-input" name="group_name" value="">\n'
-    printf '<button type="submit" class="btn primary">确认更新</button></form></div></div></div>\n'
+    printf '<input type="hidden" id="upd-name-input" value="">\n'
+    printf '<button type="button" id="btn-sub-update-ok" class="btn primary">确认更新</button></div></div></div>\n'
 
     _sub_modal "modal-activate" "切换订阅组"
     printf '<div class="modal-body"><p>切换到订阅组 <strong id="act-name-show"></strong>？</p><p class="muted">切换后将重载 mihomo，有本地缓存时无需重新下载。</p></div>\n'
@@ -3388,58 +3387,72 @@ subscription_page() {
     printf '  });\n'
     printf '  // Esc 关闭\n'
     printf '  document.addEventListener("keydown",function(e){if(e.key==="Escape"){document.querySelectorAll(".modal-overlay").forEach(function(m){m.style.display="none";});document.body.style.overflow="";}});\n'
-    printf '  // ── 切换订阅组：fetch 异步，进度弹窗 ──\n'
-    printf '  document.addEventListener("click",function(ev){\n'
-    printf '    if(!ev.target.closest("#btn-group-switch-ok"))return;\n'
-    printf '    ev.stopPropagation();\n'
-    printf '    var inp=document.getElementById("act-name-input");\n'
-    printf '    var gname=inp?inp.value:"";\n'
-    printf '    smClose("modal-activate");\n'
+    printf '  // ── 通用：fetch 提交 job，进度弹窗 ──\n'
+    printf '  function startJobModal(closeId,postBody,titleText){\n'
     printf '    var ptitle=document.getElementById("job-prog-title");\n'
     printf '    var pstatus=document.getElementById("job-prog-status");\n'
     printf '    var plog=document.getElementById("job-prog-log");\n'
     printf '    var pdone=document.getElementById("btn-job-done");\n'
     printf '    var pclose=document.getElementById("btn-job-close");\n'
-    printf '    if(ptitle)ptitle.textContent="正在切换到："+gname;\n'
+    printf '    if(closeId)smClose(closeId);\n'
+    printf '    if(ptitle)ptitle.textContent=titleText;\n'
     printf '    if(pstatus)pstatus.textContent="";\n'
     printf '    if(plog)plog.textContent="正在提交任务...";\n'
-    printf '    if(pdone){pdone.disabled=true;}\n'
-    printf '    if(pclose){pclose.disabled=true;}\n'
+    printf '    if(pdone)pdone.disabled=true;\n'
+    printf '    if(pclose)pclose.disabled=true;\n'
     printf '    smOpen("modal-job-progress");\n'
-    printf '    fetch("/cgi-bin/mgate.cgi",{\n'
-    printf '      method:"POST",\n'
-    printf '      headers:{"Content-Type":"application/x-www-form-urlencoded"},\n'
-    printf '      body:"action=group-switch-modal-do&group_name="+encodeURIComponent(gname)\n'
-    printf '    })\n'
+    printf '    fetch("/cgi-bin/mgate.cgi",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:postBody})\n'
     printf '    .then(function(r){return r.json();})\n'
     printf '    .then(function(d){\n'
     printf '      if(!d.ok){if(plog)plog.textContent="提交失败";if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}\n'
-    printf '      var polls=0;\n'
-    printf '      function poll(){\n'
-    printf '        polls++;\n'
-    printf '        if(polls>120){if(plog&&plog.textContent)plog.textContent+="\\n[超时]";if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}\n'
-    printf '        fetch("/cgi-bin/mgate.cgi?action=job-log-text&id="+d.id)\n'
-    printf '        .then(function(r){return r.text();})\n'
-    printf '        .then(function(txt){\n'
-    printf '          var nl=txt.indexOf("\\n");\n'
-    printf '          var status=nl>=0?txt.substring(7,nl).trim():"unknown";\n'
-    printf '          var log=nl>=0?txt.substring(nl+1):txt;\n'
-    printf '          if(plog){plog.textContent=log;plog.scrollTop=plog.scrollHeight;}\n'
-    printf '          if(status==="success"||status==="failed"){\n'
-    printf '            if(pstatus){\n'
-    printf '              pstatus.style.cssText=status==="success"?"color:#22c55e;font-weight:700;padding:12px 20px 0":"color:#ef4444;font-weight:700;padding:12px 20px 0";\n'
-    printf '              pstatus.textContent=status==="success"?"✓ 切换成功":"✗ 切换失败";\n'
-    printf '            }\n'
-    printf '            if(ptitle)ptitle.textContent=status==="success"?"切换完成":"切换失败";\n'
-    printf '            if(pdone)pdone.disabled=false;\n'
-    printf '            if(pclose)pclose.disabled=false;\n'
-    printf '          }else{setTimeout(poll,1000);}\n'
-    printf '        })\n'
-    printf '        .catch(function(){setTimeout(poll,1500);});\n'
-    printf '      }\n'
-    printf '      setTimeout(poll,800);\n'
+    printf '      pollJobProgress(d.id);\n'
     printf '    })\n'
     printf '    .catch(function(e){if(plog)plog.textContent="错误："+e;if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;});\n'
+    printf '  }\n'
+    printf '  function pollJobProgress(jobId){\n'
+    printf '    var polls=0;\n'
+    printf '    function poll(){\n'
+    printf '      polls++;\n'
+    printf '      var ptitle=document.getElementById("job-prog-title");\n'
+    printf '      var pstatus=document.getElementById("job-prog-status");\n'
+    printf '      var plog=document.getElementById("job-prog-log");\n'
+    printf '      var pdone=document.getElementById("btn-job-done");\n'
+    printf '      var pclose=document.getElementById("btn-job-close");\n'
+    printf '      if(polls>120){if(plog)plog.textContent+="\\n[超时]";if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}\n'
+    printf '      fetch("/cgi-bin/mgate.cgi?action=job-log-text&id="+jobId)\n'
+    printf '      .then(function(r){return r.text();})\n'
+    printf '      .then(function(txt){\n'
+    printf '        var nl=txt.indexOf("\\n");\n'
+    printf '        var status=nl>=0?txt.substring(7,nl).trim():"unknown";\n'
+    printf '        var log=nl>=0?txt.substring(nl+1):txt;\n'
+    printf '        if(plog){plog.textContent=log;plog.scrollTop=plog.scrollHeight;}\n'
+    printf '        if(status==="success"||status==="failed"){\n'
+    printf '          var ok=status==="success";\n'
+    printf '          if(pstatus){pstatus.style.cssText=ok?"color:#22c55e;font-weight:700;padding:12px 20px 0":"color:#ef4444;font-weight:700;padding:12px 20px 0";pstatus.textContent=ok?"✓ 成功":"✗ 失败";}\n'
+    printf '          if(ptitle)ptitle.textContent=ok?"操作完成":"操作失败";\n'
+    printf '          if(pdone)pdone.disabled=false;\n'
+    printf '          if(pclose)pclose.disabled=false;\n'
+    printf '        }else{setTimeout(poll,1000);}\n'
+    printf '      })\n'
+    printf '      .catch(function(){setTimeout(poll,1500);});\n'
+    printf '    }\n'
+    printf '    setTimeout(poll,800);\n'
+    printf '  }\n'
+    printf '  // 切换订阅组\n'
+    printf '  document.addEventListener("click",function(ev){\n'
+    printf '    if(!ev.target.closest("#btn-group-switch-ok"))return;\n'
+    printf '    ev.stopPropagation();\n'
+    printf '    var inp=document.getElementById("act-name-input");\n'
+    printf '    var gname=inp?inp.value:"";\n'
+    printf '    startJobModal("modal-activate","action=group-switch-modal-do&group_name="+encodeURIComponent(gname),"正在切换到："+gname);\n'
+    printf '  });\n'
+    printf '  // 更新订阅\n'
+    printf '  document.addEventListener("click",function(ev){\n'
+    printf '    if(!ev.target.closest("#btn-sub-update-ok"))return;\n'
+    printf '    ev.stopPropagation();\n'
+    printf '    var inp=document.getElementById("upd-name-input");\n'
+    printf '    var gname=inp?inp.value:"";\n'
+    printf '    startJobModal("modal-update","action=sub-update-modal-do&group_name="+encodeURIComponent(gname),"正在更新订阅："+gname);\n'
     printf '  });\n'
     printf '})();\n'
     printf '</script>\n'
@@ -3604,6 +3617,29 @@ else
                 _jltstatus="$(cat "$_jltbase.status" 2>/dev/null | head -1 | tr -d '[:space:]')"
             printf 'STATUS:%s\n' "$_jltstatus"
             [ -f "$_jltbase.log" ] && cat "$_jltbase.log" 2>/dev/null
+            ;;
+        sub-update-modal-do)
+            _sumd_grp="$(url_decode "$(param_get "$post_body" group_name)")"
+            _CGI_CONTENT_TYPE="application/json"
+            if ! mkdir -p "$WEB_JOB_DIR" 2>/dev/null; then
+                printf '{"ok":false,"error":"cannot create job dir"}'
+            else
+                job_cleanup 19
+                _sumd_id="$(job_id_new)"
+                _sumd_base="$WEB_JOB_DIR/$_sumd_id"
+                printf 'running\n' > "$_sumd_base.status"
+                printf '更新订阅 %s\n' "$_sumd_grp" > "$_sumd_base.meta"
+                (
+                    printf '[STEP] 开始执行：更新订阅 %s\n' "$_sumd_grp"
+                    printf '[INFO] 命令：mgate sub-update %s\n' "$_sumd_grp"
+                    "$MGATE" sub-update "$_sumd_grp"
+                    _rc=$?
+                    printf '[INFO] exit code: %s\n' "$_rc"
+                    if [ "$_rc" -eq 0 ]; then printf 'success\n' > "$_sumd_base.status"
+                    else printf 'failed\n' > "$_sumd_base.status"; fi
+                ) </dev/null >> "$_sumd_base.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
+                printf '{"ok":true,"id":"%s"}' "$_sumd_id"
+            fi
             ;;
         sub-add-do)
             sname="$(url_decode "$(param_get "$post_body" sub_name)")"
@@ -10628,7 +10664,16 @@ cmd_sub_update() {
     fi
 
     # 指定 group 名：只更新该 group 的缓存，如果是激活状态则同时应用
-    if [ -n "$_supd_target" ] && [ "$_supd_target" != "default" ]; then
+    if [ -n "$_supd_target" ]; then
+        if [ "$_supd_target" = "default" ]; then
+            [ -s "$SUB_URL_FILE" ] || die "default 组未设置订阅链接，请先执行：mgate sub-set <url>"
+            _supd_url="$(cat "$SUB_URL_FILE" 2>/dev/null)"
+            sub_download_to_group "default" "$_supd_url" || return 1
+            _supd_active="$(group_active)"
+            [ "$_supd_active" = "default" ] && group_apply_from_cache "default"
+            return 0
+        fi
+        [ "$_supd_target" = "custom" ] && { warn "custom 组无订阅 URL，直接编辑节点文件：$CUSTOM_PROVIDER_FILE"; return 1; }
         _supd_uf="$GROUPS_DIR/${_supd_target}.url"
         [ -f "$_supd_uf" ] || { err "Group '$_supd_target' 不存在"; return 1; }
         _supd_url="$(cat "$_supd_uf" 2>/dev/null)"
