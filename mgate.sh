@@ -3851,9 +3851,13 @@ else
             _CGI_CONTENT_TYPE="application/json"
             _aem_ssid="$(url_decode "$(param_get "$post_body" ap_ssid)")"
             _aem_pass="$(url_decode "$(param_get "$post_body" ap_password)")"
-            run_job_json "修改热点设置" ap-edit \
-                ${_aem_ssid:+--ssid="$_aem_ssid"} \
-                ${_aem_pass:+--password="$_aem_pass"} --yes
+            if [ -z "$_aem_ssid" ] && [ -z "$_aem_pass" ]; then
+                printf '{"ok":false,"error":"SSID 和密码均为空，未做任何修改"}'
+            else
+                run_job_json "修改热点设置" ap-edit \
+                    ${_aem_ssid:+--ssid="$_aem_ssid"} \
+                    ${_aem_pass:+--password="$_aem_pass"} --yes
+            fi
             ;;
         tproxy-start-modal-do)
             _CGI_CONTENT_TYPE="application/json"
@@ -10833,6 +10837,14 @@ sub_download_to_group() {
     rm -rf "$_gdl_work"
 }
 
+_validate_group_name() {
+    case "${1:-}" in
+        */*|*..*)  err "无效的组名（不允许包含 / 或 ..）：$1"; return 1 ;;
+        *[[:space:]]*)  err "无效的组名（不允许包含空格）：$1"; return 1 ;;
+    esac
+    return 0
+}
+
 cmd_group() {
     _grp_target="${1:-}"
     _grp_active="$(group_active)"
@@ -10868,6 +10880,7 @@ cmd_group() {
         return 0
     fi
 
+    _validate_group_name "$_grp_target" || return 1
     [ "$_grp_target" = "$_grp_active" ] && { info "当前已是 group '$_grp_target'"; return 0; }
     need_root
 
@@ -10943,6 +10956,7 @@ cmd_sub_add() {
     [ -n "$_sadd_name" ] && [ -n "$_sadd_url" ] || {
         err "用法：mgate sub-add <名称> <url>"; return 1
     }
+    _validate_group_name "$_sadd_name" || return 1
     case "$_sadd_name" in
         custom|default|.*) err "保留名称，不可用：$_sadd_name"; return 1 ;;
     esac
