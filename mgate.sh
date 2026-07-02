@@ -1481,9 +1481,10 @@ param_get() {
 }
 
 url_decode() {
-    # Decode application/x-www-form-urlencoded. Uses awk for byte-level hex conversion
-    # to avoid busybox printf's lack of \xHH support (only \NNN octal).
-    printf '%s' "$1" | awk '
+    # Decode application/x-www-form-urlencoded.
+    # LC_ALL=C 确保 awk 的 sprintf("%c",n) 对 n>127 输出原始单字节，
+    # 而非 UTF-8 locale 下的多字节编码（否则中文等多字节字符会二次编码变乱码）
+    printf '%s' "$1" | LC_ALL=C awk '
     BEGIN {
         for (i = 0; i < 256; i++) {
             D[sprintf("%02x",i)] = sprintf("%c",i)
