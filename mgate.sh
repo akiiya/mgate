@@ -1655,7 +1655,7 @@ function startJobModal(closeId,postBody,titleText){
     if(ptitle)ptitle.textContent=titleText;
     if(pstatus){pstatus.innerHTML='';pstatus.style.cssText='';}
     if(plog)plog.textContent='正在提交任务...';
-    if(pdone)pdone.disabled=true;
+    if(pdone){pdone.disabled=true;pdone.textContent='完成';pdone.className='btn primary';pdone.onclick=smCloseJob;}
     if(pclose)pclose.disabled=true;
     var m=document.getElementById('modal-job-progress');if(m)m.style.display='flex';
     fetch('/cgi-bin/mgate.cgi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:postBody})
@@ -1688,9 +1688,23 @@ function pollJobProgress(jobId,tok){
             if(plog){plog.textContent=log;plog.scrollTop=plog.scrollHeight;}
             if(status==='success'||status==='failed'){
                 var ok=status==='success';
-                if(pstatus){pstatus.style.cssText=ok?'color:#22c55e;font-weight:700;margin-bottom:6px':'color:#ef4444;font-weight:700;margin-bottom:6px';pstatus.innerHTML=(ok?'✓ 操作成功':'✗ 操作失败')+'&nbsp;&nbsp;<a href="'+location.href+'" style="font-size:13px;font-weight:400">刷新页面</a>';}
-                if(ptitle)ptitle.textContent=ok?'完成':'失败';
-                if(pdone)pdone.disabled=false;
+                if(pstatus){
+                    pstatus.style.cssText=ok?'color:#22c55e;font-weight:700;padding:14px 20px 2px':'color:#ef4444;font-weight:700;padding:14px 20px 2px';
+                    pstatus.textContent=ok?'✓ 操作成功':'✗ 操作失败';
+                }
+                if(ptitle)ptitle.textContent=ok?'完成':'操作失败';
+                if(pdone){
+                    pdone.disabled=false;
+                    if(ok){
+                        pdone.textContent='完成并刷新';
+                        pdone.className='btn primary';
+                        pdone.onclick=function(){smCloseJob();location.reload();};
+                    }else{
+                        pdone.textContent='关闭';
+                        pdone.className='btn';
+                        pdone.onclick=smCloseJob;
+                    }
+                }
                 if(pclose)pclose.disabled=false;
             }else{setTimeout(poll,1000);}
         })
