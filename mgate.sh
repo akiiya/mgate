@@ -1379,7 +1379,8 @@ body.auth-body{align-items:center;justify-content:center;display:flex;min-height
 [data-theme="dark"] pre{background:#020617}
 [data-theme="dark"] input[type=text],[data-theme="dark"] input[type=password],[data-theme="dark"] select{background:#0f172a;color:var(--text);border-color:var(--border)}
 [data-theme="dark"] .warn-box{background:#451a03;border-color:#92400e;color:#fde68a}
-[data-theme="dark"] .table tr:hover td{background:#243347}
+[data-theme="dark"] .table tr:hover td{background:rgba(255,255,255,.055)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .table tr:hover td{background:rgba(255,255,255,.055)}}
 [data-theme="dark"] .btn:hover,[data-theme="dark"] button:hover{background:#2d3748;border-color:#475569}
 [data-theme="dark"] .code{background:#2d3748;color:#e2e8f0}
 [data-theme="dark"] .pill{background:#2d3748;color:var(--muted);border-color:var(--border)}
