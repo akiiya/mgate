@@ -10426,6 +10426,50 @@ generate_accounts_file() {
     done < "$countries_file"
 }
 
+generate_empty_config_file() {
+    # 生成无节点的最简配置：TPROXY-OUT 指向 DIRECT，无国别代理组
+    out="$1"; accounts_file="$2"
+    cat > "$out" <<EOF_EMPTY
+mode: rule
+log-level: warning
+ipv6: false
+allow-lan: true
+bind-address: '*'
+tproxy-port: $TPROXY_PORT
+external-controller: 127.0.0.1:$DEFAULT_MIHOMO_API_PORT
+
+profile:
+  store-selected: true
+
+authentication:
+EOF_EMPTY
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf '  - "%s"\n' "$line" >> "$out"
+    done < "$accounts_file"
+    cat >> "$out" <<EOF_EMPTY
+
+listeners:
+  - name: mixed-users
+    type: mixed
+    listen: 0.0.0.0
+    port: $DEFAULT_MIXED_PORT
+    udp: true
+
+proxies: []
+
+proxy-groups:
+  - name: $TPROXY_OUT_GROUP
+    type: select
+    proxies:
+      - DIRECT
+
+rules:
+  - IN-TYPE,TPROXY,$TPROXY_OUT_GROUP
+  - MATCH,REJECT
+EOF_EMPTY
+}
+
 generate_sub_config_file() {
     out="$1"
     provider_path="$2"
@@ -10773,18 +10817,40 @@ cmd_group() {
 
     case "$_grp_target" in
         custom)
-            if [ ! -f "$CUSTOM_PROVIDER_FILE" ]; then
-                mkdir -p "$SUB_PROVIDER_DIR"
-                printf 'proxies: []\n' > "$CUSTOM_PROVIDER_FILE"
-                warn "custom.yaml 尚为空，请编辑后再切换：$CUSTOM_PROVIDER_FILE"
-                return 1
-            fi
+            mkdir -p "$SUB_PROVIDER_DIR"
+            [ -f "$CUSTOM_PROVIDER_FILE" ] || printf 'proxies: []\n' > "$CUSTOM_PROVIDER_FILE"
             step "切换到自定义节点组"
-            cp "$CUSTOM_PROVIDER_FILE" "$SUB_PROVIDER_FILE"
-            mkdir -p "$GROUPS_DIR"
-            printf '%s\n' "custom" > "$ACTIVE_GROUP_FILE"
-            service_restart
-            ok "已切换到 custom 组"
+            # 统计 custom.yaml 中的节点数
+            _cust_nc="$(grep -c '^  - name:' "$CUSTOM_PROVIDER_FILE" 2>/dev/null || printf '0')"
+            if [ "${_cust_nc:-0}" -gt 0 ] 2>/dev/null; then
+                # 有节点：完整走 group_apply_from_cache 重建配置（含国别代理组）
+                group_apply_from_cache "custom"
+            else
+                # 无节点：生成空配置（TPROXY-OUT→DIRECT，无国别代理组）
+                warn "custom 组当前无节点，将生成无节点配置（代理功能不可用）"
+                _cust_work="$TMP_DIR/group-custom-empty.$$"
+                mkdir -p "$_cust_work" || return 1
+                generate_accounts_file /dev/null "$SUB_ACCOUNTS_FILE" "$_cust_work/accounts.txt"
+                generate_empty_config_file "$_cust_work/config.yaml" "$_cust_work/accounts.txt"
+                if ! "$CORE_BIN" -t -d "$_cust_work" -f "$_cust_work/config.yaml" >/dev/null 2>&1; then
+                    err "空配置测试失败"; rm -rf "$_cust_work"; return 1
+                fi
+                cp "$CUSTOM_PROVIDER_FILE" "$SUB_PROVIDER_FILE"
+                cp "$_cust_work/accounts.txt" "$SUB_ACCOUNTS_FILE"
+                cp "$_cust_work/config.yaml" "$CONFIG_FILE"
+                chmod 600 "$CONFIG_FILE" "$SUB_ACCOUNTS_FILE" 2>/dev/null || true
+                printf '' > "$SUB_COUNTRIES_FILE" 2>/dev/null || true
+                printf '' > "$SUB_STATUS_FILE"    2>/dev/null || true
+                printf '' > "$SUB_NODES_FILE"     2>/dev/null || true
+                printf '' > "$SUB_UNMATCHED_FILE" 2>/dev/null || true
+                mkdir -p "$GROUPS_DIR"
+                printf '%s\n' "custom" > "$ACTIVE_GROUP_FILE"
+                _ts="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)"
+                [ -n "$_ts" ] && printf '%s\n' "$_ts" > "$GROUPS_DIR/custom.updated" || true
+                rm -rf "$_cust_work"
+                service_restart
+                ok "已切换到 custom 组（当前无节点）"
+            fi
             hint "编辑节点：$CUSTOM_PROVIDER_FILE  然后重新切换：mgate group custom"
             ;;
         default)
