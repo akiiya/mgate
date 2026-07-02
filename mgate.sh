@@ -1297,9 +1297,11 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans
 .sidebar::-webkit-scrollbar-track{background:transparent}
 .sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:4px}
 .sidebar::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.35)}
-.sb-logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
-.sb-mark{width:32px;height:32px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900;color:#fff;flex-shrink:0}
-.sb-name{font-size:18px;font-weight:700;color:#f1f5f9;letter-spacing:-.3px}
+.sb-logo{display:flex;align-items:center;gap:11px;padding:20px 16px 18px;border-bottom:1px solid rgba(255,255,255,.07)}
+.sb-mark{width:34px;height:34px;background:linear-gradient(135deg,#3b82f6 0%,#6366f1 100%);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;box-shadow:0 2px 8px rgba(99,102,241,.45)}
+.sb-brand{display:flex;flex-direction:column;gap:2px;min-width:0}
+.sb-name{font-size:16px;font-weight:700;color:#f1f5f9;letter-spacing:.01em;line-height:1.1}
+.sb-tagline{font-size:11px;color:#64748b;letter-spacing:.04em;line-height:1;font-weight:400;white-space:nowrap}
 .sb-nav{padding:10px 0;flex:1}
 .sb-sec{padding:14px 16px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--sb-sec)}
 .nav-link{display:flex;align-items:center;gap:8px;padding:8px 12px;margin:1px 8px;border-radius:7px;text-decoration:none;color:var(--sb-txt);font-size:15px;transition:background .12s,color .12s}
@@ -1554,7 +1556,10 @@ page_start() {
 <aside class="sidebar" id="sidebar">
 <div class="sb-logo">
 <div class="sb-mark">M</div>
+<div class="sb-brand">
 <span class="sb-name">mgate</span>
+<span class="sb-tagline">随身网关管理</span>
+</div>
 </div>
 <nav class="sb-nav">
 <div class="sb-sec">主页</div>
@@ -1762,7 +1767,7 @@ login_page() {
 <div class="auth-wrap">
 <div class="card">
 <div style="text-align:center;margin:0 0 20px">
-<div class="sb-mark" style="margin:0 auto 10px;width:48px;height:48px;font-size:22px">M</div>
+<div class="sb-mark" style="margin:0 auto 12px;width:48px;height:48px;font-size:22px;border-radius:14px">M</div>
 <div style="font-size:22px;font-weight:700;color:var(--text)">mgate</div>
 <div style="font-size:13px;color:var(--muted);margin-top:4px">管理后台</div>
 </div>
