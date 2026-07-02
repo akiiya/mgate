@@ -2658,17 +2658,38 @@ service_page() {
         printf '</div></div>\n'
     fi
     printf '</div>\n'
-    cat <<'EOF'
-<div class="card">
-<h2>其他操作</h2>
-<div class="btn-group">
-<a class="btn" href="?action=test">测试配置</a>
-<a class="btn" href="?action=doctor&src=service-page">系统诊断</a>
-<a class="btn" href="?action=logs&lines=100">查看日志</a>
-<a class="btn" href="?action=version">版本信息</a>
-</div>
-</div>
-EOF
+    printf '<div class="card">\n'
+    printf '<h2>其他操作</h2>\n'
+    printf '<div class="btn-group">\n'
+    printf '<button type="button" class="btn" onclick="loadOutput('"'"'测试配置'"'"','"'"'test-text'"'"')">测试配置</button>\n'
+    printf '<button type="button" class="btn" onclick="loadOutput('"'"'系统诊断'"'"','"'"'doctor-text'"'"')">系统诊断</button>\n'
+    printf '<button type="button" class="btn" onclick="loadOutput('"'"'查看日志（最近 100 行）'"'"','"'"'logs-text&lines=100'"'"')">查看日志</button>\n'
+    printf '<button type="button" class="btn" onclick="loadOutput('"'"'版本信息'"'"','"'"'version-text'"'"')">版本信息</button>\n'
+    printf '</div></div>\n'
+
+    # 输出弹窗（共用）
+    printf '<div id="modal-output" class="modal-overlay"><div class="modal-box" style="max-width:700px;width:95vw">\n'
+    printf '<div class="modal-head"><h3 id="modal-output-title">输出</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-output'"'"')">&#x2715;</button></div>\n'
+    printf '<div class="modal-body" style="padding:0">\n'
+    printf '<pre id="modal-output-body" style="margin:0;padding:20px;background:var(--bg);max-height:65vh;overflow:auto;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-all">正在加载...</pre>\n'
+    printf '</div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-output'"'"')">关闭</button></div>\n'
+    printf '</div></div>\n'
+
+    printf '<script>\n'
+    printf 'function loadOutput(title,action){\n'
+    printf '  var el=document.getElementById("modal-output-body");\n'
+    printf '  var ttl=document.getElementById("modal-output-title");\n'
+    printf '  if(ttl)ttl.textContent=title;\n'
+    printf '  if(el)el.textContent="正在加载...";\n'
+    printf '  openModal("modal-output");\n'
+    printf '  fetch("/cgi-bin/mgate.cgi?action="+action)\n'
+    printf '    .then(function(r){return r.text();})\n'
+    printf '    .then(function(t){if(el)el.textContent=t;})\n'
+    printf '    .catch(function(e){if(el)el.textContent="加载失败："+e;});\n'
+    printf '}\n'
+    printf '</script>\n'
+
     # 停止/重启确认弹窗
     printf '<div id="modal-svc-stop" class="modal-overlay"><div class="modal-box">\n'
     printf '<div class="modal-head"><h3>⚠️ 确认停止 Mihomo</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-svc-stop'"'"')">&#x2715;</button></div>\n'
@@ -3481,6 +3502,22 @@ else
             ;;
         start) run_job_page "启动服务" start ;;
         test) run_output_page "测试配置" test ;;
+        test-text)
+            _CGI_CONTENT_TYPE="text/plain; charset=utf-8"
+            "$MGATE" test 2>&1
+            ;;
+        doctor-text)
+            _CGI_CONTENT_TYPE="text/plain; charset=utf-8"
+            "$MGATE" doctor 2>&1
+            ;;
+        logs-text)
+            _CGI_CONTENT_TYPE="text/plain; charset=utf-8"
+            "$MGATE" logs "${lines:-100}" 2>&1
+            ;;
+        version-text)
+            _CGI_CONTENT_TYPE="text/plain; charset=utf-8"
+            "$MGATE" version 2>&1
+            ;;
         logs) logs_page "$lines" ;;
         config) run_output_page "当前配置" config ;;
         backups) run_output_page "备份列表" backups ;;
@@ -10784,6 +10821,7 @@ menu_mihomo() {
         say "   7.  编辑配置"
         say "   8.  查看配置"
         say "   9.  系统诊断"
+        say "  10.  版本信息"
         say ""
         say "   0.  返回  ( Enter 也可 )"
         say ""
@@ -10800,6 +10838,7 @@ menu_mihomo() {
             7) cmd_edit; pause_enter ;;
             8) cmd_config; pause_enter ;;
             9) cmd_doctor; pause_enter ;;
+            10) cmd_version; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
