@@ -3321,9 +3321,22 @@ subscription_page() {
     _sub_modal "modal-activate" "切换订阅组"
     printf '<div class="modal-body"><p>切换到订阅组 <strong id="act-name-show"></strong>？</p><p class="muted">切换后将重载 mihomo，有本地缓存时无需重新下载。</p></div>\n'
     printf '<div class="modal-foot"><button type="button" class="btn" data-sm-close="modal-activate">取消</button>\n'
-    printf '<form method="POST" action="/cgi-bin/mgate.cgi" style="display:inline">\n'
-    printf '<input type="hidden" name="action" value="group-switch-do"><input type="hidden" id="act-name-input" name="group_name" value="">\n'
-    printf '<button type="submit" class="btn primary">确认切换</button></form></div></div></div>\n'
+    printf '<input type="hidden" id="act-name-input" value="">\n'
+    printf '<button type="button" id="btn-group-switch-ok" class="btn primary">确认切换</button></div></div></div>\n'
+
+    # 切换进度弹窗（自包含，无跳转）
+    printf '<div id="modal-job-progress" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:1001;padding:16px">\n'
+    printf '<div class="modal-box" style="max-width:580px;width:95vw">\n'
+    printf '<div class="modal-head">\n'
+    printf '<h3 id="job-prog-title">正在切换...</h3>\n'
+    printf '<button class="modal-close" type="button" id="btn-job-close" data-sm-close="modal-job-progress" disabled>&#x2715;</button>\n'
+    printf '</div>\n'
+    printf '<div class="modal-body" style="padding:0">\n'
+    printf '<div id="job-prog-status" style="padding:12px 20px 0"></div>\n'
+    printf '<pre id="job-prog-log" style="margin:0;padding:16px 20px;background:var(--bg);max-height:55vh;overflow:auto;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all">正在提交任务...</pre>\n'
+    printf '</div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn primary" id="btn-job-done" disabled data-sm-close="modal-job-progress">完成</button></div>\n'
+    printf '</div></div>\n'
 
     # 节点管理 modal（带实际 YAML 内容）
     printf '<div id="modal-nodes" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:1000;padding:16px">\n'
@@ -3375,6 +3388,59 @@ subscription_page() {
     printf '  });\n'
     printf '  // Esc 关闭\n'
     printf '  document.addEventListener("keydown",function(e){if(e.key==="Escape"){document.querySelectorAll(".modal-overlay").forEach(function(m){m.style.display="none";});document.body.style.overflow="";}});\n'
+    printf '  // ── 切换订阅组：fetch 异步，进度弹窗 ──\n'
+    printf '  document.addEventListener("click",function(ev){\n'
+    printf '    if(!ev.target.closest("#btn-group-switch-ok"))return;\n'
+    printf '    ev.stopPropagation();\n'
+    printf '    var inp=document.getElementById("act-name-input");\n'
+    printf '    var gname=inp?inp.value:"";\n'
+    printf '    smClose("modal-activate");\n'
+    printf '    var ptitle=document.getElementById("job-prog-title");\n'
+    printf '    var pstatus=document.getElementById("job-prog-status");\n'
+    printf '    var plog=document.getElementById("job-prog-log");\n'
+    printf '    var pdone=document.getElementById("btn-job-done");\n'
+    printf '    var pclose=document.getElementById("btn-job-close");\n'
+    printf '    if(ptitle)ptitle.textContent="正在切换到："+gname;\n'
+    printf '    if(pstatus)pstatus.textContent="";\n'
+    printf '    if(plog)plog.textContent="正在提交任务...";\n'
+    printf '    if(pdone){pdone.disabled=true;}\n'
+    printf '    if(pclose){pclose.disabled=true;}\n'
+    printf '    smOpen("modal-job-progress");\n'
+    printf '    fetch("/cgi-bin/mgate.cgi",{\n'
+    printf '      method:"POST",\n'
+    printf '      headers:{"Content-Type":"application/x-www-form-urlencoded"},\n'
+    printf '      body:"action=group-switch-modal-do&group_name="+encodeURIComponent(gname)\n'
+    printf '    })\n'
+    printf '    .then(function(r){return r.json();})\n'
+    printf '    .then(function(d){\n'
+    printf '      if(!d.ok){if(plog)plog.textContent="提交失败";if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}\n'
+    printf '      var polls=0;\n'
+    printf '      function poll(){\n'
+    printf '        polls++;\n'
+    printf '        if(polls>120){if(plog&&plog.textContent)plog.textContent+="\\n[超时]";if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;return;}\n'
+    printf '        fetch("/cgi-bin/mgate.cgi?action=job-log-text&id="+d.id)\n'
+    printf '        .then(function(r){return r.text();})\n'
+    printf '        .then(function(txt){\n'
+    printf '          var nl=txt.indexOf("\\n");\n'
+    printf '          var status=nl>=0?txt.substring(7,nl).trim():"unknown";\n'
+    printf '          var log=nl>=0?txt.substring(nl+1):txt;\n'
+    printf '          if(plog){plog.textContent=log;plog.scrollTop=plog.scrollHeight;}\n'
+    printf '          if(status==="success"||status==="failed"){\n'
+    printf '            if(pstatus){\n'
+    printf '              pstatus.style.cssText=status==="success"?"color:#22c55e;font-weight:700;padding:12px 20px 0":"color:#ef4444;font-weight:700;padding:12px 20px 0";\n'
+    printf '              pstatus.textContent=status==="success"?"✓ 切换成功":"✗ 切换失败";\n'
+    printf '            }\n'
+    printf '            if(ptitle)ptitle.textContent=status==="success"?"切换完成":"切换失败";\n'
+    printf '            if(pdone)pdone.disabled=false;\n'
+    printf '            if(pclose)pclose.disabled=false;\n'
+    printf '          }else{setTimeout(poll,1000);}\n'
+    printf '        })\n'
+    printf '        .catch(function(){setTimeout(poll,1500);});\n'
+    printf '      }\n'
+    printf '      setTimeout(poll,800);\n'
+    printf '    })\n'
+    printf '    .catch(function(e){if(plog)plog.textContent="错误："+e;if(pdone)pdone.disabled=false;if(pclose)pclose.disabled=false;});\n'
+    printf '  });\n'
     printf '})();\n'
     printf '</script>\n'
     page_end
@@ -3500,6 +3566,44 @@ else
         group-switch-do)
             gname="$(url_decode "$(param_get "$post_body" group_name)")"
             run_job_page "切换 Group $gname" group "$gname"
+            ;;
+        group-switch-modal-do)
+            # 返回 JSON job_id，由前端 fetch 调用，不跳转页面
+            gname="$(url_decode "$(param_get "$post_body" group_name)")"
+            _CGI_CONTENT_TYPE="application/json"
+            if ! mkdir -p "$WEB_JOB_DIR" 2>/dev/null; then
+                printf '{"ok":false,"error":"cannot create job dir"}'
+            else
+                job_cleanup 19
+                _smjid="$(job_id_new)"
+                _smbase="$WEB_JOB_DIR/$_smjid"
+                printf 'running\n' > "$_smbase.status"
+                printf '切换 Group %s\n' "$gname" > "$_smbase.meta"
+                (
+                    printf '[STEP] 开始执行：切换订阅组 %s\n' "$gname"
+                    printf '[INFO] 命令：mgate group %s\n' "$gname"
+                    "$MGATE" group "$gname"
+                    _smrc=$?
+                    printf '[INFO] exit code: %s\n' "$_smrc"
+                    if [ "$_smrc" -eq 0 ]; then
+                        printf 'success\n' > "$_smbase.status"
+                    else
+                        printf 'failed\n' > "$_smbase.status"
+                    fi
+                ) </dev/null >> "$_smbase.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
+                printf '{"ok":true,"id":"%s"}' "$_smjid"
+            fi
+            ;;
+        job-log-text)
+            # 返回纯文本：第一行 STATUS:running|success|failed，其余为日志
+            _CGI_CONTENT_TYPE="text/plain; charset=utf-8"
+            _jltid="$(param_get "${QUERY_STRING:-}" id)"
+            _jltbase="$WEB_JOB_DIR/$_jltid"
+            _jltstatus="unknown"
+            [ -f "$_jltbase.status" ] && \
+                _jltstatus="$(cat "$_jltbase.status" 2>/dev/null | head -1 | tr -d '[:space:]')"
+            printf 'STATUS:%s\n' "$_jltstatus"
+            [ -f "$_jltbase.log" ] && cat "$_jltbase.log" 2>/dev/null
             ;;
         sub-add-do)
             sname="$(url_decode "$(param_get "$post_body" sub_name)")"
