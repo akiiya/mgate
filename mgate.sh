@@ -1643,8 +1643,9 @@ document.querySelectorAll('.modal-overlay').forEach(function(m){m.addEventListen
 // Global job progress modal system
 var _pt=0;
 function smCloseJob(){var m=document.getElementById('modal-job-progress');if(m)m.style.display='none';document.body.style.overflow='';}
-function startJobModal(closeId,postBody,titleText){
+function startJobModal(closeId,postBody,titleText,afterUrl){
     _pt++;var tok=_pt;
+    window._jobAfterUrl=afterUrl||null;
     var ptitle=document.getElementById('job-prog-title');
     var pstatus=document.getElementById('job-prog-status');
     var plog=document.getElementById('job-prog-log');
@@ -1696,9 +1697,10 @@ function pollJobProgress(jobId,tok){
                 if(pdone){
                     pdone.disabled=false;
                     if(ok){
-                        pdone.textContent='完成并刷新';
+                        var dest=window._jobAfterUrl||null;
+                        pdone.textContent=dest?'完成并刷新':'完成';
                         pdone.className='btn primary';
-                        pdone.onclick=function(){smCloseJob();location.reload();};
+                        pdone.onclick=function(){smCloseJob();if(dest)location.href=dest;else location.reload();};
                     }else{
                         pdone.textContent='关闭';
                         pdone.className='btn';
@@ -3421,9 +3423,9 @@ subscription_page() {
     printf '</tbody></table>\n</div>\n'
 
     # ── 手动接入（折叠）──
-    printf '<details style="margin:0 0 16px">\n'
+    printf '<details id="proxy-info" style="margin:0 0 16px">\n'
     printf '<summary style="cursor:pointer;font-weight:600;padding:14px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);list-style:none;display:flex;align-items:center;justify-content:space-between">'
-    printf '<span>&#x1F4F2; 手动接入代理（其他设备使用 HTTP/SOCKS5 代理时查看）</span>'
+    printf '<span>&#x1F4F2; 手动接入代理（切换订阅组后在此查看最新可用节点）</span>'
     printf '<span style="color:var(--muted)">点击展开</span></summary>\n'
     printf '<div class="card" style="border-top-left-radius:0;border-top-right-radius:0;border-top:none;margin-top:0">\n'
     printf '<p class="muted">将以下地址填入设备的代理设置，即可让该设备通过本机上网。</p>\n'
@@ -3534,21 +3536,23 @@ subscription_page() {
     printf '    else if(mid==="modal-del"){setEl("del-name-show","textContent",gname);setEl("del-name-input","value",gname);}\n'
     printf '    smOpen(mid);\n'
     printf '  });\n'
-    printf '  // 切换订阅组\n'
+    printf '  // 切换订阅组 → 成功后返回本页并展开手动接入代理区块\n'
     printf '  document.addEventListener("click",function(ev){\n'
     printf '    if(!ev.target.closest("#btn-group-switch-ok"))return;\n'
     printf '    ev.stopPropagation();\n'
     printf '    var inp=document.getElementById("act-name-input");\n'
     printf '    var gname=inp?inp.value:"";\n'
-    printf '    startJobModal("modal-activate","action=group-switch-modal-do&group_name="+encodeURIComponent(gname),"正在切换到："+gname);\n'
+    printf '    var dest=location.pathname+"?action=subscription#proxy-info";\n'
+    printf '    startJobModal("modal-activate","action=group-switch-modal-do&group_name="+encodeURIComponent(gname),"正在切换到："+gname,dest);\n'
     printf '  });\n'
-    printf '  // 更新订阅\n'
+    printf '  // 更新订阅 → 成功后同样展开手动接入代理\n'
     printf '  document.addEventListener("click",function(ev){\n'
     printf '    if(!ev.target.closest("#btn-sub-update-ok"))return;\n'
     printf '    ev.stopPropagation();\n'
     printf '    var inp=document.getElementById("upd-name-input");\n'
     printf '    var gname=inp?inp.value:"";\n'
-    printf '    startJobModal("modal-update","action=sub-update-modal-do&group_name="+encodeURIComponent(gname),"正在更新："+gname);\n'
+    printf '    var dest=location.pathname+"?action=subscription#proxy-info";\n'
+    printf '    startJobModal("modal-update","action=sub-update-modal-do&group_name="+encodeURIComponent(gname),"正在更新："+gname,dest);\n'
     printf '  });\n'
     printf '  // 添加订阅组（拦截表单提交）\n'
     printf '  document.addEventListener("submit",function(ev){\n'
@@ -3577,8 +3581,17 @@ subscription_page() {
     printf '    ev.preventDefault();\n'
     printf '    var ta=f.querySelector("[name=custom_yaml]");\n'
     printf '    var yaml=ta?ta.value:"";\n'
-    printf '    startJobModal("modal-nodes","action=custom-nodes-modal-do&custom_yaml="+encodeURIComponent(yaml),"保存并重载节点");\n'
+    printf '    var dest=location.pathname+"?action=subscription#proxy-info";\n'
+    printf '    startJobModal("modal-nodes","action=custom-nodes-modal-do&custom_yaml="+encodeURIComponent(yaml),"保存并重载节点",dest);\n'
     printf '  });\n'
+    printf '  // 从 #proxy-info hash 跳转过来时，自动展开"手动接入代理"区块并滚动\n'
+    printf '  (function(){\n'
+    printf '    if(location.hash!=="#proxy-info")return;\n'
+    printf '    var d=document.getElementById("proxy-info");\n'
+    printf '    if(!d)return;\n'
+    printf '    d.open=true;\n'
+    printf '    setTimeout(function(){d.scrollIntoView({behavior:"smooth",block:"start"});},200);\n'
+    printf '  })();\n'
     printf '})();\n'
     printf '</script>\n'
     page_end
