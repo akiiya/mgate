@@ -1292,7 +1292,11 @@ generate_web_style() {
 *,*::before,*::after{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);font-size:18px;line-height:1.6}
 .layout{display:flex;min-height:100vh}
-.sidebar{width:var(--sb-w);background:var(--sb);color:var(--sb-txt);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:100;transition:transform .2s ease}
+.sidebar{width:var(--sb-w);background:var(--sb);color:var(--sb-txt);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:100;transition:transform .2s ease;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent}
+.sidebar::-webkit-scrollbar{width:4px}
+.sidebar::-webkit-scrollbar-track{background:transparent}
+.sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:4px}
+.sidebar::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.35)}
 .sb-logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
 .sb-mark{width:32px;height:32px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:900;color:#fff;flex-shrink:0}
 .sb-name{font-size:18px;font-weight:700;color:#f1f5f9;letter-spacing:-.3px}
