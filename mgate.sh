@@ -11666,9 +11666,13 @@ menu_sub() {
         say "   6.  更新当前订阅"
         say "   7.  管理自定义节点（custom 组）"
         say ""
-        say "   8.  查看代理连接信息"
-        say "   9.  查看账号密码"
-        say "  10.  修改账号密码"
+        say "   8.  查看节点识别结果"
+        say "   9.  查看未识别节点"
+        say "  10.  清除所有订阅（危险）"
+        say ""
+        say "  11.  查看代理连接信息"
+        say "  12.  查看账号密码"
+        say "  13.  修改账号密码"
         say ""
         say "   0.  返回  ( Enter 也可 )"
         say ""
@@ -11720,9 +11724,18 @@ menu_sub() {
                 fi
                 pause_enter
                 ;;
-            8) cmd_proxy_info; pause_enter ;;
-            9) cmd_account_password; pause_enter ;;
-            10) cmd_account_password set; pause_enter ;;
+            8) cmd_sub_nodes; pause_enter ;;
+            9) cmd_sub_unmatched; pause_enter ;;
+            10)
+                warn "将清除全部订阅配置、缓存和账号信息，此操作不可恢复！"
+                if tui_confirm "确认要清除所有订阅吗？"; then
+                    cmd_sub_clear
+                fi
+                pause_enter
+                ;;
+            11) cmd_proxy_info; pause_enter ;;
+            12) cmd_account_password; pause_enter ;;
+            13) cmd_account_password set; pause_enter ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
@@ -11806,6 +11819,8 @@ menu_wifi() {
         say "   5.  当前状态"
         say "   6.  扫描附近 WiFi"
         say "   7.  WiFi 诊断"
+        say "   8.  重新连接当前 WiFi"
+        say "   9.  断开当前 WiFi（慎用）"
         say ""
         say "   0.  返回  ( Enter 也可 )"
         say ""
@@ -11838,6 +11853,24 @@ menu_wifi() {
             5) cmd_wifi_status; pause_enter ;;
             6) cmd_wifi_scan; pause_enter ;;
             7) cmd_wifi_doctor; pause_enter ;;
+            8)
+                if tui_confirm "重新连接当前 WiFi？可能导致短暂断线，继续吗？"; then
+                    cmd_wifi_reconnect
+                fi
+                pause_enter
+                ;;
+            9)
+                warn "断开后 SSH/Web 连接将中断，需要在物理上重新连接 WiFi 才能恢复管理。"
+                say "输入 YES 确认断开，或直接回车取消："
+                printf '>>> '
+                read -r _disc_confirm || _disc_confirm=""
+                if [ "$_disc_confirm" = "YES" ]; then
+                    cmd_wifi_disconnect
+                else
+                    info "已取消"
+                fi
+                pause_enter
+                ;;
             *) warn "无效选项"; pause_enter ;;
         esac
     done
