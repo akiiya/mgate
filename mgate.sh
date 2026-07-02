@@ -1297,6 +1297,15 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans
 .sidebar::-webkit-scrollbar-track{background:transparent}
 .sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:4px}
 .sidebar::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.35)}
+.modal-body,.modal-box pre{scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.18) transparent}
+.modal-body::-webkit-scrollbar,.modal-box pre::-webkit-scrollbar{width:5px;height:5px}
+.modal-body::-webkit-scrollbar-track,.modal-box pre::-webkit-scrollbar-track{background:transparent}
+.modal-body::-webkit-scrollbar-thumb,.modal-box pre::-webkit-scrollbar-thumb{background:rgba(0,0,0,.18);border-radius:4px}
+.modal-body::-webkit-scrollbar-thumb:hover,.modal-box pre::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.32)}
+[data-theme="dark"] .modal-body,[data-theme="dark"] .modal-box pre{scrollbar-color:rgba(255,255,255,.2) transparent}
+[data-theme="dark"] .modal-body::-webkit-scrollbar-thumb,[data-theme="dark"] .modal-box pre::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2)}
+[data-theme="dark"] .modal-body::-webkit-scrollbar-thumb:hover,[data-theme="dark"] .modal-box pre::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.38)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .modal-body::-webkit-scrollbar-thumb,:root:not([data-theme="light"]) .modal-box pre::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2)}}
 .sb-logo{display:flex;align-items:center;gap:11px;padding:20px 16px 18px;border-bottom:1px solid rgba(255,255,255,.07)}
 .sb-mark{width:34px;height:34px;background:linear-gradient(135deg,#3b82f6 0%,#6366f1 100%);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;flex-shrink:0;box-shadow:0 2px 8px rgba(99,102,241,.45)}
 .sb-brand{display:flex;flex-direction:column;gap:3px;min-width:0}
@@ -2892,7 +2901,7 @@ EOF
 EOF
     else
         cat <<'EOF'
-<button type="button" class="btn primary" onclick="startJobModal(null,'action=ap-start-modal-do','开启热点')">开启热点</button>
+<button type="button" class="btn primary" onclick="openModal('modal-ap-start')">开启热点</button>
 EOF
     fi
     cat <<'EOF'
@@ -2945,6 +2954,14 @@ EOF
 </div>
 </div>
 EOF
+    # ap-start 确认弹窗
+    printf '<div id="modal-ap-start" class="modal-overlay">\n'
+    printf '<div class="modal-box"><div class="modal-head">\n'
+    printf '<h3>确认开启热点</h3><button class="modal-close" type="button" onclick="closeModal('"'"'modal-ap-start'"'"')">&#x2715;</button></div>\n'
+    printf '<div class="modal-body"><p>将在 <strong>ap0</strong> 接口上启动 hostapd / dnsmasq，热点开启后附近设备可扫描到 SSID 并连接。</p></div>\n'
+    printf '<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('"'"'modal-ap-start'"'"')">取消</button>'
+    printf '<button type="button" class="btn primary" onclick="startJobModal('"'"'modal-ap-start'"'"','"'"'action=ap-start-modal-do'"'"','"'"'开启热点'"'"')">确认开启</button></div>\n'
+    printf '</div></div>\n'
     # ap-stop 确认弹窗
     cat <<'EOF'
 <div id="modal-ap-stop" class="modal-overlay">
