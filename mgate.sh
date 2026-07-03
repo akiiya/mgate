@@ -6857,10 +6857,10 @@ tproxy_fetch_nodes() {
     # 输出：每行一个节点名。失败返回非零。
     result="$(mihomo_api_call GET "/proxies/$TPROXY_OUT_GROUP" || true)"
     [ -n "$result" ] || return 1
-    # 先截到 "all":[ 之后，再用 "\][,}] 定位数组结尾，避免读到后续 JSON 字段
+    # 截到 "all":[ 之后，再匹配 ][,} 定位数组结尾（不含末尾节点的闭合引号）
     printf '%s' "$result" | \
         sed 's/.*"all"[[:space:]]*:[[:space:]]*\[//' | \
-        sed 's/"\][,}].*//' | \
+        sed 's/\][,}].*//' | \
         grep -o '"[^"]*"' | \
         sed 's/^"//;s/"$//' | \
         grep -v '^$'
