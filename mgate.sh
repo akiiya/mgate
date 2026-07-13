@@ -9785,7 +9785,8 @@ cmd_agent_enroll() {
 
     # 从 payload 解码 gateway URL（base64url → base64 → json）
     _pl_b64="$(printf '%s' "$_dc" | cut -d. -f2)"
-    _pl_std="$(printf '%s' "$_pl_b64" | tr '-_' '+/')"
+    # BusyBox tr 会将开头的 - 识别为选项，调整字符顺序以兼容 Base64URL 转换。
+    _pl_std="$(printf '%s' "$_pl_b64" | tr '_-' '/+')"
     # 补 base64 padding
     case "$(( ${#_pl_std} % 4 ))" in
         2) _pl_std="${_pl_std}==" ;;
