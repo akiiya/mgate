@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.0"
+MGATE_VERSION="0.5.1"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1129,8 +1129,10 @@ cmd_self_update() {
     ok "mgate 管理脚本已更新：$SCRIPT_PATH"
     info "当前版本：$new_version"
     step "自动执行 migrate 同步配置和生成文件"
-    "$SCRIPT_PATH" migrate || warn "migrate 未完全成功，请手动执行：mgate migrate"
-    hint "执行 mgate version 查看版本信息"
+    # 当前脚本已被替换，直接切换到新版进程，避免 BusyBox sh 继续读取旧文件。
+    exec "$SCRIPT_PATH" migrate
+    err "无法切换到新版脚本执行 migrate"
+    return 1
 }
 
 cmd_install() {
@@ -9316,9 +9318,12 @@ agent_warn_legacy_config() {
     fi
 }
 
-agent_migrate_legacy_endpoints() {
+agent_migrate_legacy_config() {
     [ -f "$MGATE_AGENT_CONFIG_FILE" ] || return 0
-    grep -q '/api/agent/v1/' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || return 0
+    _amc_legacy=0
+    grep -q '/api/agent/v1/' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null && _amc_legacy=1
+    grep -q '^[[:space:]]*mgate_snapshot_command[[:space:]]*:' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null && _amc_legacy=1
+    [ "$_amc_legacy" = "1" ] || return 0
     _ame_bak="${MGATE_AGENT_CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S 2>/dev/null || printf endpoints)"
     _ame_tmp="${MGATE_AGENT_CONFIG_FILE}.tmp.$$"
     cp "$MGATE_AGENT_CONFIG_FILE" "$_ame_bak" || return 1
@@ -9327,19 +9332,21 @@ agent_migrate_legacy_endpoints() {
         -e 's#/api/agent/v1/pull#/api/agent/pull#g' \
         -e 's#/api/agent/v1/result#/api/agent/pull#g' \
         -e 's#/api/agent/v1/status#/api/agent/pull#g' \
+        -e '/^[[:space:]]*mgate_snapshot_command[[:space:]]*:/d' \
         "$MGATE_AGENT_CONFIG_FILE" > "$_ame_tmp" || {
         rm -f "$_ame_tmp" 2>/dev/null || true
         return 1
     }
     chmod 644 "$_ame_tmp" 2>/dev/null || true
     mv "$_ame_tmp" "$MGATE_AGENT_CONFIG_FILE" || return 1
-    ok "已迁移 agent API 端点（备份：$_ame_bak）"
+    ok "已迁移旧版 agent 配置（备份：$_ame_bak）"
 }
 
 agent_check_ready() {
     [ -x "$MGATE_AGENT_BIN" ] || { err "binary 不存在：$MGATE_AGENT_BIN"; return 1; }
     [ -f "$MGATE_AGENT_CONFIG_FILE" ] || { err "配置不存在：$MGATE_AGENT_CONFIG_FILE"; return 1; }
     [ -f "$MGATE_AGENT_CREDS_FILE" ] || { err "credentials 不存在：$MGATE_AGENT_CREDS_FILE"; return 1; }
+    agent_migrate_legacy_config || { err "旧版 agent 配置迁移失败"; return 1; }
     step "检查 mgate-agent 配置、凭证和本机依赖"
     "$MGATE_AGENT_BIN" check --config "$MGATE_AGENT_CONFIG_FILE"
 }
@@ -9358,7 +9365,7 @@ agent_install_config() {
     _force="${2:-0}"
     if [ -f "$MGATE_AGENT_CONFIG_FILE" ] && [ "$_force" = "0" ]; then
         info "保留现有配置：$MGATE_AGENT_CONFIG_FILE"
-        agent_migrate_legacy_endpoints || return 1
+        agent_migrate_legacy_config || return 1
         if grep -Eq '^[[:space:]]*mgate_path[[:space:]]*:[[:space:]]*"?/usr/local/bin/mgate\.sh"?[[:space:]]*$' \
             "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null; then
             _mig_bak="${MGATE_AGENT_CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S 2>/dev/null || printf migration)"
@@ -9551,7 +9558,7 @@ cmd_agent_update() {
     agent_install_service || return 1
     systemctl daemon-reload 2>/dev/null || true
     _au_pkg_dir="$(dirname "$AGENT_DOWNLOAD_BIN_PATH")"
-    agent_install_config "$_au_pkg_dir" 0 || return 1
+    agent_install_config "$_au_pkg_dir" "$_au_force" || return 1
     for _p in "$_au_pkg_dir/configs/agent.example.yaml" \
               "$_au_pkg_dir/agent.yaml.example" "$_au_pkg_dir/agent.example.yaml" \
               "$_au_pkg_dir/config/agent.yaml.example"; do
