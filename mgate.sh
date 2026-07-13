@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.4"
+MGATE_VERSION="0.5.5"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -8565,10 +8565,9 @@ cmd_agent_snapshot() {
     [ "$_ap_exists" = "true" ] && [ "$_ap_hostapd" = "true" ] && \
         [ "$_ap_dnsmasq" = "true" ] && _ap_healthy="true"
 
-    # Gateway (iptables -S is faster than -L)
+    # 网关状态必须与 gateway-status 复用同一套完整规则校验。
     _gw_nat="false"
-    ( iptables -t nat -n -S "$GATEWAY_NAT_CHAIN" 2>/dev/null | \
-        grep -q "MASQUERADE" ) && _gw_nat="true"
+    gateway_rules_active && _gw_nat="true"
     _gw_fwd="false"
     [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ] && _gw_fwd="true"
 
