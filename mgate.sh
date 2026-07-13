@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.2"
+MGATE_VERSION="0.5.3"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -9918,10 +9918,28 @@ CREDS_EOF
             err "设备已绑定，但 agent check 未通过；修复后再执行 mgate agent start"
             return 1
         }
+        if [ -f "$MGATE_AGENT_SERVICE_FILE" ] && have systemctl; then
+            if systemctl is-active mgate-agent >/dev/null 2>&1; then
+                step "新凭据已写入，重启 mgate-agent 使其生效"
+                systemctl restart mgate-agent 2>&1 || { err "mgate-agent 重启失败"; return 1; }
+            else
+                step "启动 mgate-agent"
+                systemctl enable mgate-agent 2>&1 || true
+                systemctl start mgate-agent 2>&1 || { err "mgate-agent 启动失败"; return 1; }
+            fi
+            sleep 1
+            if systemctl is-active mgate-agent >/dev/null 2>&1; then
+                ok "mgate-agent 已启动并使用新凭据"
+            else
+                err "mgate-agent 未保持运行，请执行：mgate agent status"
+                return 1
+            fi
+        else
+            warn "agent 服务文件或 systemd 不可用，请手动执行：mgate agent start"
+        fi
     else
         warn "agent binary 或配置尚未安装，暂未运行完整检查"
     fi
-    hint "下一步：mgate agent start"
 }
 
 cmd_agent_enroll_status() {
