@@ -161,6 +161,13 @@ have() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# mgate-agent sets this for cloud Action subprocesses. It is a call-context
+# hint only; authorization still belongs to cloud/agent allowlists and local
+# argument validation.
+is_agent_context() {
+    [ "${MGATE_AGENT_CONTEXT:-0}" = "1" ]
+}
+
 check_no_crlf_file() {
     file="$1"
     [ -f "$file" ] || return 0
@@ -7725,6 +7732,7 @@ cmd_ap_json() {
     printf '  "type": '; json_string "$JSON_AP_TYPE"; printf ',\n'
     printf '  "hostapd_running": %s,\n' "$JSON_AP_HOSTAPD_RUNNING"
     printf '  "dnsmasq_running": %s,\n' "$JSON_AP_DNSMASQ_RUNNING"
+    printf '  "running": %s,\n' "$JSON_AP_RUNNING"
     printf '  "healthy": %s\n' "$JSON_AP_HEALTHY"
     printf '}\n'
 }
@@ -7738,6 +7746,7 @@ cmd_gateway_json() {
     printf '  "limited": %s,\n' "$JSON_GATEWAY_LIMITED"
     printf '  "warnings": '; json_root_warnings; printf ',\n'
     printf '  "mode": '; json_string "$JSON_GATEWAY_MODE"; printf ',\n'
+    printf '  "interface": '; json_string "$AP_IF"; printf ',\n'
     printf '  "ap_interface": '; json_string "$AP_IF"; printf ',\n'
     printf '  "upstream_interface": '; json_string "$AP_UPSTREAM"; printf ',\n'
     printf '  "subnet": '; json_string "$(gateway_subnet)"; printf ',\n'
@@ -7824,7 +7833,7 @@ cmd_status_json() {
     printf '    "final_health": '; json_string "$JSON_TPROXY_FINAL_HEALTH"; printf '\n'
     printf '  },\n'
     printf '  "subscription": {\n'
-    printf '    "active_group": "%s",\n' "$(group_active 2>/dev/null || printf 'default')"
+    printf '    "active_group": '; json_string "$(group_active 2>/dev/null || printf 'default')"; printf ',\n'
     printf '    "url_configured": %s\n' "$([ -s "$SUB_URL_FILE" ] && printf 'true' || printf 'false')"
     printf '  },\n'
     printf '  "summary": {\n'
@@ -8467,12 +8476,12 @@ cmd_wifi_json() {
     printf '  "ok": true,\n'
     printf '  "schema_version": 1,\n'
     printf '  "component": "wifi",\n'
-    printf '  "interface": "%s",\n' "$WIFI_IF"
-    printf '  "manager": "%s",\n' "$mgr"
+    printf '  "interface": '; json_string "$WIFI_IF"; printf ',\n'
+    printf '  "manager": '; json_string "$mgr"; printf ',\n'
     printf '  "connected": %s,\n' "$connected"
-    printf '  "ssid": "%s",\n' "${ssid:-}"
-    printf '  "ip": "%s",\n' "${ip_addr:-}"
-    printf '  "channel": %s,\n' "${channel:-0}"
+    printf '  "ssid": '; json_string "${ssid:-}"; printf ',\n'
+    printf '  "ip": '; json_string "${ip_addr:-}"; printf ',\n'
+    printf '  "channel": '; json_number_or_null "${channel:-}"; printf ',\n'
     printf '  "default_route": %s,\n' "$default_route"
     printf '  "dns": %s,\n' "$dns_json"
     printf '  "ap_running": %s,\n' "$ap_running"
@@ -8484,6 +8493,18 @@ cmd_wifi_json() {
 # -----------------------------
 # Agent interfaces (read-only, no ping, no sleep, no service changes)
 # -----------------------------
+agent_json_group_array() {
+    printf '['
+    json_string default
+    [ -d "$GROUPS_DIR" ] && for _ajga_file in "$GROUPS_DIR"/*.url; do
+        [ -f "$_ajga_file" ] || continue
+        _ajga_name="${_ajga_file##*/}"; _ajga_name="${_ajga_name%.url}"
+        printf ','; json_string "$_ajga_name"
+    done
+    printf ','; json_string custom
+    printf ']'
+}
+
 cmd_agent_snapshot() {
     # Fast: all checks are non-blocking; always emits valid JSON
     ap_load_config 2>/dev/null || true
@@ -8599,33 +8620,33 @@ cmd_agent_snapshot() {
     printf '  "ok": true,\n'
     printf '  "schema_version": 1,\n'
     printf '  "component": "agent_snapshot",\n'
-    printf '  "version": "%s",\n' "$MGATE_VERSION"
+    printf '  "version": '; json_string "$MGATE_VERSION"; printf ',\n'
     if [ -n "$_ts" ]; then
         printf '  "timestamp": %s,\n' "$_ts"
     else
         printf '  "timestamp": null,\n'
     fi
     if [ -n "$_host" ]; then
-        printf '  "hostname": "%s",\n' "$_host"
+        printf '  "hostname": '; json_string "$_host"; printf ',\n'
     else
         printf '  "hostname": null,\n'
     fi
-    printf '  "mode": "%s",\n' "$_mode"
-    printf '  "overall_health": "%s",\n' "$_health"
+    printf '  "mode": '; json_string "$_mode"; printf ',\n'
+    printf '  "overall_health": '; json_string "$_health"; printf ',\n'
     printf '  "wifi": {\n'
-    printf '    "interface": "%s",\n' "$WIFI_IF"
-    printf '    "manager": "%s",\n' "$_wifi_mgr"
+    printf '    "interface": '; json_string "$WIFI_IF"; printf ',\n'
+    printf '    "manager": '; json_string "$_wifi_mgr"; printf ',\n'
     printf '    "exists": %s,\n' "$_wifi_exists"
     printf '    "connected": %s,\n' "$_wifi_conn"
-    printf '    "ssid": "%s",\n' "${_wifi_ssid:-}"
-    printf '    "ip": "%s",\n' "${_wifi_ip:-}"
-    printf '    "channel": %s,\n' "${_wifi_ch:-0}"
+    printf '    "ssid": '; json_string "$_wifi_ssid"; printf ',\n'
+    printf '    "ip": '; json_string "$_wifi_ip"; printf ',\n'
+    printf '    "channel": '; json_number_or_null "$_wifi_ch"; printf ',\n'
     printf '    "default_route": %s\n' "$_wifi_route"
     printf '  },\n'
     printf '  "ap": {\n'
-    printf '    "interface": "%s",\n' "$_ap_if"
+    printf '    "interface": '; json_string "$_ap_if"; printf ',\n'
     printf '    "exists": %s,\n' "$_ap_exists"
-    printf '    "ip": "%s",\n' "${_ap_ip:-}"
+    printf '    "ip": '; json_string "$_ap_ip"; printf ',\n'
     printf '    "hostapd_running": %s,\n' "$_ap_hostapd"
     printf '    "dnsmasq_running": %s,\n' "$_ap_dnsmasq"
     printf '    "healthy": %s\n' "$_ap_healthy"
@@ -8646,11 +8667,11 @@ cmd_agent_snapshot() {
     printf '    "token_exists": %s\n' "$_web_token"
     printf '  },\n'
     printf '  "subscription": {\n'
-    printf '    "active_group": "%s",\n' "$_sub_active"
-    printf '    "groups": %s,\n' "$_sub_groups"
+    printf '    "active_group": '; json_string "$_sub_active"; printf ',\n'
+    printf '    "groups": '; agent_json_group_array; printf ',\n'
     printf '    "url_configured": %s,\n' "$_sub_url"
     if [ -n "$_sub_last" ]; then
-        printf '    "last_update": "%s",\n' "$_sub_last"
+        printf '    "last_update": '; json_string "$_sub_last"; printf ',\n'
     else
         printf '    "last_update": null,\n'
     fi
@@ -8683,7 +8704,7 @@ cmd_agent_snapshot() {
     fi
 
     printf '  "last_errors": {\n'
-    printf '    "tproxy": %s,\n' "$_err_tproxy"
+    printf '    "tproxy": '; json_string_or_null "$_err_tproxy"; printf ',\n'
     printf '    "gateway": null,\n'
     printf '    "wifi": null\n'
     printf '  },\n'
@@ -8692,9 +8713,9 @@ cmd_agent_snapshot() {
     printf '    "service_exists": %s,\n' "$_ag_svc"
     printf '    "running": %s,\n' "$_ag_running"
     printf '    "enabled": %s,\n' "$_ag_enabled"
-    printf '    "version": "%s",\n' "${_ag_ver:-unknown}"
+    printf '    "version": '; json_string "$_ag_ver"; printf ',\n'
     printf '    "enrolled": %s,\n' "$_ag_enrolled"
-    printf '    "device_id": "%s"\n' "${_ag_device_id:-}"
+    printf '    "device_id": '; json_string "$_ag_device_id"; printf '\n'
     printf '  },\n'
     printf '  "warnings": []\n'
     printf '}\n'
@@ -8752,6 +8773,370 @@ cmd_capabilities_json() {
     printf '    "dangerous_actions_require_dedicated_action_api": true\n'
     printf '  }\n'
     printf '}\n'
+}
+
+# Agent-only Action results. Normal terminal and Web commands keep their
+# existing behavior; this dispatcher is used only by mgate-agent.
+agent_service_running() {
+    case "$(detect_service_mode)" in
+        systemd) systemctl is-active --quiet mgate.service 2>/dev/null ;;
+        openwrt) /etc/init.d/mgate status >/dev/null 2>&1 ;;
+        *) pgrep -f "$CORE_BIN" >/dev/null 2>&1 ;;
+    esac
+}
+
+agent_service_enabled() {
+    case "$(detect_service_mode)" in
+        systemd) systemctl is-enabled mgate.service >/dev/null 2>&1 ;;
+        openwrt) [ -x /etc/rc.d/S99mgate ] ;;
+        *) return 1 ;;
+    esac
+}
+
+agent_uptime_seconds() {
+    awk '{printf "%d", $1}' /proc/uptime 2>/dev/null || true
+}
+
+cmd_agent_system_status_json() {
+    json_collect_gateway_state
+    json_collect_tproxy_state
+    _asr=false; agent_service_running && _asr=true
+    _ase=false; agent_service_enabled && _ase=true
+    _mode="$JSON_GATEWAY_MODE"
+    [ "$JSON_TPROXY_ENABLED" = true ] && _mode=tproxy
+    _aver=unknown
+    [ -x "$MGATE_AGENT_BIN" ] && _aver="$("$MGATE_AGENT_BIN" version 2>/dev/null || printf unknown)"
+    printf '{"mgate_version":'; json_string "$MGATE_VERSION"
+    printf ',"agent_version":'; json_string "$_aver"
+    printf ',"mode":'; json_string "$_mode"
+    printf ',"uptime_sec":'; json_number_or_null "$(agent_uptime_seconds)"
+    printf ',"service_running":%s,"service_enabled":%s}\n' "$_asr" "$_ase"
+}
+
+cmd_agent_system_version_json() {
+    _aver=unknown
+    [ -x "$MGATE_AGENT_BIN" ] && _aver="$("$MGATE_AGENT_BIN" version 2>/dev/null || printf unknown)"
+    printf '{"mgate_version":'; json_string "$MGATE_VERSION"
+    printf ',"agent_version":'; json_string "$_aver"; printf '}\n'
+}
+
+cmd_agent_preflight_json() {
+    _ok=true
+    check_no_crlf_file "$0" >/dev/null 2>&1 || _ok=false
+    printf '{"ok":%s,"checks":[' "$_ok"; json_string "POSIX shell"; printf ','
+    if [ "$_ok" = true ]; then
+        json_string "LF line endings"
+    else
+        json_string "CRLF line endings detected"
+    fi
+    printf ']}\n'
+}
+
+cmd_agent_ap_check_json() {
+    ap_load_config
+    _ok=false
+    interface_exists "$AP_UPSTREAM" && have hostapd && have dnsmasq && _ok=true
+    printf '{"ok":%s,"supports_ap":%s,"interface":' "$_ok" "$_ok"
+    json_string "$AP_IF"; printf '}\n'
+}
+
+cmd_agent_ap_config_json() {
+    ap_load_config
+    printf '{"ssid":'; json_string "$AP_SSID"
+    printf ',"channel":'; json_number_or_null "$AP_CHANNEL"
+    printf ',"interface":'; json_string "$AP_IF"
+    printf ',"ip":'; json_string "$AP_IPADDR"
+    printf ',"wpa":"WPA2-PSK","password_configured":'
+    [ -n "$AP_PASSWORD" ] && printf true || printf false
+    printf '}\n'
+}
+
+cmd_agent_gateway_check_json() {
+    json_collect_gateway_state
+    _ipt=false; gateway_have_iptables && _ipt=true
+    _ok=false
+    [ "$JSON_GATEWAY_IPV4_FORWARDING" = true ] && [ "$_ipt" = true ] && _ok=true
+    printf '{"ok":%s,"ip_forward":%s,"iptables_ok":%s}\n' "$_ok" "$JSON_GATEWAY_IPV4_FORWARDING" "$_ipt"
+}
+
+cmd_agent_gateway_doctor_json() {
+    json_collect_gateway_state
+    _dns=false; [ -f "$AP_DNSMASQ_CONF" ] && _dns=true
+    _ok=false
+    [ "$JSON_GATEWAY_NAT_ACTIVE" = true ] && [ "$JSON_GATEWAY_IPV4_FORWARDING" = true ] && [ "$_dns" = true ] && _ok=true
+    printf '{"ok":%s,"nat_rules":%s,"forwarding":%s,"dns_ok":%s}\n' "$_ok" "$JSON_GATEWAY_NAT_ACTIVE" "$JSON_GATEWAY_IPV4_FORWARDING" "$_dns"
+}
+
+cmd_agent_tproxy_check_json() {
+    _ipt=false; gateway_have_iptables && _ipt=true
+    _target=false; iptables -j TPROXY -h >/dev/null 2>&1 && _target=true
+    _kernel="$(uname -r 2>/dev/null || printf unknown)"
+    _ok=false; [ "$_ipt" = true ] && [ "$_target" = true ] && _ok=true
+    printf '{"ok":%s,"iptables_tproxy":%s,"kernel_version":' "$_ok" "$_target"
+    json_string "$_kernel"; printf '}\n'
+}
+
+cmd_agent_tproxy_health_json() {
+    json_collect_tproxy_state
+    _node="$(tproxy_fetch_now 2>/dev/null || true)"
+    printf '{"ok":%s,"node":' "$JSON_TPROXY_HEALTHY"; json_string "$_node"
+    printf ',"latency_ms":null,"tcp_ok":%s,"udp_ok":%s}\n' "$JSON_TPROXY_TCP_RULE_EXISTS" "$JSON_TPROXY_UDP_RULE_EXISTS"
+}
+
+cmd_agent_tproxy_doctor_json() {
+    json_collect_tproxy_state
+    _node="$(tproxy_fetch_now 2>/dev/null || true)"
+    _dns=false; [ -f "$AP_DNSMASQ_CONF" ] && _dns=true
+    printf '{"ok":%s,"node":' "$JSON_TPROXY_HEALTHY"; json_string "$_node"
+    printf ',"port":'; json_number_or_null "$TPROXY_PORT"
+    printf ',"rules_ok":%s,"dns_ok":%s}\n' "$JSON_TPROXY_HEALTHY" "$_dns"
+}
+
+cmd_agent_tproxy_nodes_json() {
+    _now="$(tproxy_fetch_now 2>/dev/null || true)"
+    printf '{"current":'; json_string "$_now"; printf ',"nodes":['
+    _first=1
+    tproxy_fetch_nodes 2>/dev/null | while IFS= read -r _node; do
+        [ -n "$_node" ] || continue
+        [ "$_first" = 1 ] || printf ','
+        printf '{"name":'; json_string "$_node"; printf '}'
+        _first=0
+    done
+    printf ']}\n'
+}
+
+cmd_agent_sub_status_json() {
+    _count=0; [ -s "$SUB_NODES_FILE" ] && _count="$(wc -l < "$SUB_NODES_FILE" | tr -d ' ')"
+    printf '{"url_configured":'
+    [ -s "$SUB_URL_FILE" ] && printf true || printf false
+    printf ',"active_group":'; json_string "$(group_active 2>/dev/null || printf default)"
+    printf ',"node_count":'; json_number_or_null "$_count"
+    printf ',"last_update":'
+    [ -s "$SUB_LAST_UPDATE_FILE" ] && json_string "$(head -1 "$SUB_LAST_UPDATE_FILE")" || printf null
+    printf '}\n'
+}
+
+cmd_agent_sub_nodes_json() {
+    printf '{"nodes":['; _first=1
+    [ -f "$SUB_NODES_FILE" ] && while IFS='	' read -r _idx _country _name; do
+        [ -n "$_name" ] || continue
+        [ "$_first" = 1 ] || printf ','
+        printf '{"name":'; json_string "$_name"; printf ',"country":'; json_string "$_country"; printf '}'
+        _first=0
+    done < "$SUB_NODES_FILE"
+    printf ']}\n'
+}
+
+cmd_agent_sub_unmatched_json() {
+    printf '{"nodes":['; _first=1
+    [ -f "$SUB_UNMATCHED_FILE" ] && while IFS='	' read -r _idx _name; do
+        [ -n "$_name" ] || continue
+        [ "$_first" = 1 ] || printf ','
+        json_string "$_name"; _first=0
+    done < "$SUB_UNMATCHED_FILE"
+    printf ']}\n'
+}
+
+cmd_agent_group_list_json() {
+    printf '{"active":'; json_string "$(group_active 2>/dev/null || printf default)"
+    printf ',"groups":['; json_string default
+    [ -d "$GROUPS_DIR" ] && for _file in "$GROUPS_DIR"/*.url; do
+        [ -f "$_file" ] || continue
+        _name="${_file##*/}"; _name="${_name%.url}"
+        printf ','; json_string "$_name"
+    done
+    printf ','; json_string custom; printf ']}\n'
+}
+
+cmd_agent_proxy_info_json() {
+    _mixed="$(config_listener_port mixed-users "$DEFAULT_MIXED_PORT")"
+    _tproxy="$(tproxy_mihomo_port 2>/dev/null || true)"
+    [ -n "$_tproxy" ] || _tproxy="$TPROXY_PORT"
+    printf '{"mixed_port":'; json_number_or_null "$_mixed"
+    printf ',"tproxy_port":'; json_number_or_null "$_tproxy"
+    printf ',"socks_port":'; json_number_or_null "$_mixed"
+    printf ',"mode":'; json_string "$(detect_service_mode)"; printf '}\n'
+}
+
+cmd_agent_backup_list_json() {
+    printf '{"backups":['; _first=1
+    for _dir in "$BACKUP_DIR"/*; do
+        [ -d "$_dir" ] && [ -f "$_dir/manifest.txt" ] || continue
+        _id="$(basename "$_dir")"
+        _time="$(sed -n 's/^time=//p' "$_dir/manifest.txt" | head -1)"
+        _label="$(sed -n 's/^label=//p' "$_dir/manifest.txt" | head -1)"
+        [ "$_first" = 1 ] || printf ','
+        printf '{"id":'; json_string "$_id"; printf ',"name":'; json_string "${_label:-manual}"
+        printf ',"created_at":'; json_string "${_time:-unknown}"
+        printf ',"size":'; json_string "$(du -sh "$_dir" 2>/dev/null | awk '{print $1}')"; printf '}'
+        _first=0
+    done
+    printf ']}\n'
+}
+
+cmd_agent_wifi_scan_json() {
+    printf '{"networks":['; _first=1
+    if have nmcli; then
+        nmcli -t -f SSID,SIGNAL,CHAN,SECURITY device wifi list 2>/dev/null | while IFS=: read -r _ssid _signal _channel _security; do
+            [ -n "$_ssid" ] || continue
+            [ "$_first" = 1 ] || printf ','
+            printf '{"ssid":'; json_string "$_ssid"
+            printf ',"signal":'; json_number_or_null "$_signal"
+            printf ',"channel":'; json_number_or_null "$_channel"
+            printf ',"security":'; json_string "${_security:-open}"; printf '}'
+            _first=0
+        done
+    fi
+    printf ']}\n'
+}
+
+cmd_agent_wifi_list_json() {
+    printf '{"saved":['; _first=1
+    if have nmcli; then
+        nmcli -t -f NAME,TYPE connection show 2>/dev/null | while IFS=: read -r _name _type; do
+            [ "$_type" = wifi ] || continue
+            [ "$_first" = 1 ] || printf ','
+            json_string "$_name"; _first=0
+        done
+    fi
+    printf ']}\n'
+}
+
+cmd_agent_wifi_doctor_json() {
+    _ssid="$(wifi_connected_ssid 2>/dev/null || true)"
+    _dns=false; [ -s /etc/resolv.conf ] && _dns=true
+    _gw=false; wifi_has_default_route && _gw=true
+    _ok=false; wifi_is_connected 2>/dev/null && [ "$_dns" = true ] && [ "$_gw" = true ] && _ok=true
+    printf '{"ok":%s,"ssid":' "$_ok"; json_string "$_ssid"
+    printf ',"signal":null,"dns_ok":%s,"gateway_ok":%s}\n' "$_dns" "$_gw"
+}
+
+cmd_agent_doctor_json() {
+    json_collect_ap_state
+    json_collect_gateway_state
+    json_collect_tproxy_state
+    _wifi=false; wifi_is_connected 2>/dev/null && _wifi=true
+    _service=false; agent_service_running && _service=true
+    _sub=false; [ -s "$SUB_URL_FILE" ] && _sub=true
+    _ok=false; [ "$_service" = true ] && [ "$_wifi" = true ] && _ok=true
+    printf '{"ok":%s,"checks":[' "$_ok"
+    printf '{"name":"service","ok":%s,"detail":"mgate service"}' "$_service"
+    printf ',{"name":"ap","ok":%s,"detail":"AP hotspot"}' "$JSON_AP_HEALTHY"
+    printf ',{"name":"tproxy","ok":%s,"detail":"transparent proxy"}' "$JSON_TPROXY_HEALTHY"
+    printf ',{"name":"gateway","ok":%s,"detail":"NAT gateway"}' "$JSON_GATEWAY_HEALTHY"
+    printf ',{"name":"wifi","ok":%s,"detail":"upstream WiFi"}' "$_wifi"
+    printf ',{"name":"subscription","ok":%s,"detail":"subscription configured"}]}\n' "$_sub"
+}
+
+cmd_agent_tproxy_plan_json() {
+    printf '{"steps":['
+    json_string "Ensure mihomo is running and the TProxy port is listening"
+    printf ','; json_string "Install TPROXY mangle, policy-route and NAT fallback rules"
+    printf ','; json_string "Verify rules, then keep NAT fallback available for rollback"
+    printf ']}\n'
+}
+
+cmd_agent_logs_json() {
+    # Logs may contain provider URLs, credentials or controller secrets. Cloud
+    # receives no raw log lines; use the local mgate Web page for privileged logs.
+    printf '{"lines":[]}\n'
+}
+
+agent_is_read_action() {
+    _read_cmd="$1"
+    shift
+    case "$_read_cmd" in
+        status|version|preflight|logs|doctor|ap-status|ap-check|ap-config|wifi-status|wifi-scan|wifi-list|wifi-doctor|gateway-status|gateway-check|gateway-doctor|tproxy-status|tproxy-check|tproxy-health|tproxy-doctor|tproxy-nodes|tproxy-plan|sub-status|sub-nodes|sub-unmatched|proxy-info|backups) return 0 ;;
+        group) [ "$#" -eq 0 ] ;;
+        *) return 1 ;;
+    esac
+}
+
+cmd_agent_action_json() {
+    _action_cmd="$1"
+    case "$_action_cmd" in
+        status) cmd_agent_system_status_json ;;
+        version) cmd_agent_system_version_json ;;
+        preflight) cmd_agent_preflight_json ;;
+        logs) cmd_agent_logs_json ;;
+        doctor) cmd_agent_doctor_json ;;
+        ap-status) cmd_ap_json ;;
+        ap-check) cmd_agent_ap_check_json ;;
+        ap-config) cmd_agent_ap_config_json ;;
+        wifi-status) cmd_wifi_json ;;
+        wifi-scan) cmd_agent_wifi_scan_json ;;
+        wifi-list) cmd_agent_wifi_list_json ;;
+        wifi-doctor) cmd_agent_wifi_doctor_json ;;
+        gateway-status) cmd_gateway_json ;;
+        gateway-check) cmd_agent_gateway_check_json ;;
+        gateway-doctor) cmd_agent_gateway_doctor_json ;;
+        tproxy-status) cmd_tproxy_json ;;
+        tproxy-check) cmd_agent_tproxy_check_json ;;
+        tproxy-health) cmd_agent_tproxy_health_json ;;
+        tproxy-doctor) cmd_agent_tproxy_doctor_json ;;
+        tproxy-nodes) cmd_agent_tproxy_nodes_json ;;
+        tproxy-plan) cmd_agent_tproxy_plan_json ;;
+        sub-status) cmd_agent_sub_status_json ;;
+        sub-nodes) cmd_agent_sub_nodes_json ;;
+        sub-unmatched) cmd_agent_sub_unmatched_json ;;
+        proxy-info) cmd_agent_proxy_info_json ;;
+        group)
+            if [ "$#" -eq 1 ]; then
+                cmd_agent_group_list_json
+            else
+                return 1
+            fi
+            ;;
+        backups) cmd_agent_backup_list_json ;;
+        *) return 1 ;;
+    esac
+    return 0
+}
+
+cmd_agent_mutation_json() {
+    # Run cloud-approved mutations without exposing their human-oriented
+    # output.  Some underlying commands may print provider URLs, controller
+    # errors or local paths; cloud only needs an acknowledged outcome.
+    AGENT_MUTATION_HANDLED=1
+    _mutation_cmd="$1"
+    shift
+    case "$_mutation_cmd" in
+        self-update|update) _mutation_fn=cmd_self_update ;;
+        start) _mutation_fn=service_start ;;
+        stop) _mutation_fn=service_stop ;;
+        restart) _mutation_fn=service_restart ;;
+        enable) _mutation_fn=service_enable ;;
+        disable) _mutation_fn=service_disable ;;
+        ap-start) _mutation_fn=cmd_ap_start ;;
+        ap-stop) _mutation_fn=cmd_ap_stop ;;
+        ap-restart) _mutation_fn=cmd_ap_restart ;;
+        wifi-connect) _mutation_fn=cmd_wifi_connect ;;
+        wifi-reconnect) _mutation_fn=cmd_wifi_reconnect ;;
+        wifi-disconnect) _mutation_fn=cmd_wifi_disconnect ;;
+        wifi-delete) _mutation_fn=cmd_wifi_delete ;;
+        tproxy-start) _mutation_fn=cmd_tproxy_start ;;
+        tproxy-stop) _mutation_fn=cmd_tproxy_stop ;;
+        tproxy-select) _mutation_fn=cmd_tproxy_select ;;
+        gateway-start) _mutation_fn=cmd_gateway_start ;;
+        gateway-stop) _mutation_fn=cmd_gateway_stop ;;
+        sub-set) _mutation_fn=cmd_sub_set ;;
+        sub-update) _mutation_fn=cmd_sub_update ;;
+        sub-add) _mutation_fn=cmd_sub_add ;;
+        sub-del) _mutation_fn=cmd_sub_del ;;
+        sub-clear) _mutation_fn=cmd_sub_clear ;;
+        group) _mutation_fn=cmd_group ;;
+        backup) _mutation_fn=cmd_backup ;;
+        restore) _mutation_fn=cmd_restore ;;
+        *) AGENT_MUTATION_HANDLED=0; return 1 ;;
+    esac
+    "$_mutation_fn" "$@" >/dev/null 2>&1
+    _mutation_rc=$?
+    if [ "$_mutation_rc" -eq 0 ]; then
+        printf '{"ok":true,"message":"operation completed"}\n'
+    else
+        printf '{"ok":false,"message":"operation failed"}\n'
+    fi
+    return "$_mutation_rc"
 }
 
 # -----------------------------
@@ -8855,9 +9240,10 @@ agent_get_installed_version() {
 }
 
 agent_create_dirs() {
-    mkdir -p "$MGATE_AGENT_CONFIG_DIR" "$MGATE_AGENT_DATA_DIR" "$MGATE_AGENT_LOG_DIR" \
+    mkdir -p "$MGATE_AGENT_CONFIG_DIR" "$MGATE_AGENT_DATA_DIR/outbox" "$MGATE_AGENT_LOG_DIR" \
         2>/dev/null || true
-    chmod 750 "$MGATE_AGENT_CONFIG_DIR" "$MGATE_AGENT_DATA_DIR" 2>/dev/null || true
+    chmod 755 "$MGATE_AGENT_CONFIG_DIR" "$MGATE_AGENT_LOG_DIR" 2>/dev/null || true
+    chmod 700 "$MGATE_AGENT_DATA_DIR" "$MGATE_AGENT_DATA_DIR/outbox" 2>/dev/null || true
     ok "目录就绪：$MGATE_AGENT_CONFIG_DIR / $MGATE_AGENT_DATA_DIR / $MGATE_AGENT_LOG_DIR"
 }
 
@@ -8866,18 +9252,29 @@ agent_install_service() {
     mkdir -p "$(dirname "$MGATE_AGENT_SERVICE_FILE")" 2>/dev/null || true
     cat > "$MGATE_AGENT_SERVICE_FILE" <<EOF
 [Unit]
-Description=mgate Agent
-After=network.target
+Description=MGate Agent
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$MGATE_AGENT_BIN --config $MGATE_AGENT_CONFIG_FILE
+ExecStart=$MGATE_AGENT_BIN run --config $MGATE_AGENT_CONFIG_FILE
 WorkingDirectory=$MGATE_AGENT_DATA_DIR
-Restart=on-failure
-RestartSec=10
+Restart=always
+RestartSec=5
+User=root
+Group=root
+Environment=MGATE_AGENT_ENV=production
+StateDirectory=mgate-agent
+LogsDirectory=mgate-agent
+RuntimeDirectory=mgate-agent
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+MemoryMax=80M
+TasksMax=64
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=mgate-agent
 
 [Install]
 WantedBy=multi-user.target
@@ -8885,11 +9282,92 @@ EOF
     ok "已写入：$MGATE_AGENT_SERVICE_FILE"
 }
 
+agent_patch_config_mgate_path() {
+    _apc_file="$1"
+    _apc_tmp="${_apc_file}.tmp.$$"
+    awk -v path="$GLOBAL_BIN" '
+        /^[[:space:]]*mgate_path[[:space:]]*:/ {
+            indent=$0
+            sub(/[^[:space:]].*$/, "", indent)
+            print indent "mgate_path: " path
+            found=1
+            next
+        }
+        { print }
+        END { if (!found) exit 3 }
+    ' "$_apc_file" > "$_apc_tmp" || {
+        rm -f "$_apc_tmp" 2>/dev/null || true
+        err "agent 配置缺少 agent.mgate_path：$_apc_file"
+        return 1
+    }
+    chmod 644 "$_apc_tmp" 2>/dev/null || true
+    mv "$_apc_tmp" "$_apc_file"
+}
+
+agent_warn_legacy_config() {
+    [ -f "$MGATE_AGENT_CONFIG_FILE" ] || return 0
+    grep -q '/api/agent/v1/' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null && \
+        warn "agent.yaml 仍使用旧 /api/agent/v1/* 端点，请迁移到 /api/agent/ws 和 /api/agent/pull"
+    grep -q 'mgate_snapshot_command' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null && \
+        warn "agent.yaml 使用已废弃的 mgate_snapshot_command 格式，需要重新生成最新 YAML 配置"
+    _alc_line="$(grep '^[[:space:]]*mgate_path[[:space:]]*:' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null | head -1)"
+    if [ -n "$_alc_line" ] && ! printf '%s\n' "$_alc_line" | grep -Fq "$GLOBAL_BIN"; then
+        warn "agent.yaml 的 mgate_path 未指向本机入口 $GLOBAL_BIN"
+    fi
+}
+
+agent_migrate_legacy_endpoints() {
+    [ -f "$MGATE_AGENT_CONFIG_FILE" ] || return 0
+    grep -q '/api/agent/v1/' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || return 0
+    _ame_bak="${MGATE_AGENT_CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S 2>/dev/null || printf endpoints)"
+    _ame_tmp="${MGATE_AGENT_CONFIG_FILE}.tmp.$$"
+    cp "$MGATE_AGENT_CONFIG_FILE" "$_ame_bak" || return 1
+    sed \
+        -e 's#/api/agent/v1/ws#/api/agent/ws#g' \
+        -e 's#/api/agent/v1/pull#/api/agent/pull#g' \
+        -e 's#/api/agent/v1/result#/api/agent/pull#g' \
+        -e 's#/api/agent/v1/status#/api/agent/pull#g' \
+        "$MGATE_AGENT_CONFIG_FILE" > "$_ame_tmp" || {
+        rm -f "$_ame_tmp" 2>/dev/null || true
+        return 1
+    }
+    chmod 644 "$_ame_tmp" 2>/dev/null || true
+    mv "$_ame_tmp" "$MGATE_AGENT_CONFIG_FILE" || return 1
+    ok "已迁移 agent API 端点（备份：$_ame_bak）"
+}
+
+agent_check_ready() {
+    [ -x "$MGATE_AGENT_BIN" ] || { err "binary 不存在：$MGATE_AGENT_BIN"; return 1; }
+    [ -f "$MGATE_AGENT_CONFIG_FILE" ] || { err "配置不存在：$MGATE_AGENT_CONFIG_FILE"; return 1; }
+    [ -f "$MGATE_AGENT_CREDS_FILE" ] || { err "credentials 不存在：$MGATE_AGENT_CREDS_FILE"; return 1; }
+    step "检查 mgate-agent 配置、凭证和本机依赖"
+    "$MGATE_AGENT_BIN" check --config "$MGATE_AGENT_CONFIG_FILE"
+}
+
+agent_check_if_enrolled() {
+    if [ -f "$MGATE_AGENT_CREDS_FILE" ]; then
+        agent_check_ready
+    else
+        info "尚未 enroll，暂不运行完整 agent check"
+        hint "绑定后执行：mgate agent enroll <device_code>"
+    fi
+}
+
 agent_install_config() {
-    _xdir="$1"
+    _pkg_dir="$1"
     _force="${2:-0}"
     if [ -f "$MGATE_AGENT_CONFIG_FILE" ] && [ "$_force" = "0" ]; then
-        info "保留现有配置：$MGATE_AGENT_CONFIG_FILE"; return 0
+        info "保留现有配置：$MGATE_AGENT_CONFIG_FILE"
+        agent_migrate_legacy_endpoints || return 1
+        if grep -Eq '^[[:space:]]*mgate_path[[:space:]]*:[[:space:]]*"?/usr/local/bin/mgate\.sh"?[[:space:]]*$' \
+            "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null; then
+            _mig_bak="${MGATE_AGENT_CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S 2>/dev/null || printf migration)"
+            cp "$MGATE_AGENT_CONFIG_FILE" "$_mig_bak" || return 1
+            agent_patch_config_mgate_path "$MGATE_AGENT_CONFIG_FILE" || return 1
+            ok "已迁移 agent.mgate_path 到 $GLOBAL_BIN（备份：$_mig_bak）"
+        fi
+        agent_warn_legacy_config
+        return 0
     fi
     if [ -f "$MGATE_AGENT_CONFIG_FILE" ] && [ "$_force" = "1" ]; then
         _bak="${MGATE_AGENT_CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S 2>/dev/null || printf 'backup')"
@@ -8897,19 +9375,25 @@ agent_install_config() {
     fi
     _ex=""
     for _p in \
-        "$_xdir/agent.yaml.example" "$_xdir/agent.example.yaml" \
-        "$_xdir/config/agent.yaml.example" "$_xdir/config.yaml.example"; do
+        "$_pkg_dir/configs/agent.example.yaml" \
+        "$_pkg_dir/agent.yaml.example" "$_pkg_dir/agent.example.yaml" \
+        "$_pkg_dir/config/agent.yaml.example" "$_pkg_dir/config.yaml.example"; do
         [ -f "$_p" ] && { _ex="$_p"; break; }
     done
     if [ -n "$_ex" ]; then
-        cp "$_ex" "$MGATE_AGENT_CONFIG_FILE"
+        cp "$_ex" "$MGATE_AGENT_CONFIG_FILE" || return 1
         ok "已生成配置（来自 release 示例）：$MGATE_AGENT_CONFIG_FILE"
     else
-        printf '# mgate-agent configuration\n# 请参考 mgate-agent 文档完善此配置\nmgate_snapshot_command: "mgate agent-snapshot"\n' \
-            > "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || true
-        warn "release 包中无示例配置，已生成最小占位配置"
-        hint "请参考 mgate-agent 文档完善：$MGATE_AGENT_CONFIG_FILE"
+        "$MGATE_AGENT_BIN" config default > "$MGATE_AGENT_CONFIG_FILE" || {
+            rm -f "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || true
+            err "release 包中无示例配置，且无法通过 mgate-agent config default 生成"
+            return 1
+        }
+        warn "release 包中无示例配置，已通过 mgate-agent config default 生成"
     fi
+    agent_patch_config_mgate_path "$MGATE_AGENT_CONFIG_FILE" || return 1
+    chmod 644 "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || true
+    ok "agent.mgate_path 已对齐：$GLOBAL_BIN"
 }
 
 agent_download_and_verify() {
@@ -8997,9 +9481,20 @@ cmd_agent_install() {
     cp "$AGENT_DOWNLOAD_BIN_PATH" "$MGATE_AGENT_BIN" || { err "安装 binary 失败"; rm -rf "$_ai_tmp"; return 1; }
     chmod 755 "$MGATE_AGENT_BIN"
     ok "已安装：$MGATE_AGENT_BIN"
-    agent_install_config "$_ai_tmp" "$_ai_force"
-    agent_install_service
+    _ai_pkg_dir="$(dirname "$AGENT_DOWNLOAD_BIN_PATH")"
+    agent_install_config "$_ai_pkg_dir" "$_ai_force" || {
+        rm -rf "$_ai_tmp" 2>/dev/null || true
+        return 1
+    }
+    agent_install_service || {
+        rm -rf "$_ai_tmp" 2>/dev/null || true
+        return 1
+    }
     systemctl daemon-reload 2>/dev/null || true
+    agent_check_if_enrolled || {
+        rm -rf "$_ai_tmp" 2>/dev/null || true
+        return 1
+    }
     rm -rf "$_ai_tmp" 2>/dev/null || true
     MGATE_AGENT_ACTIVE_TOKEN=""
     ok "mgate-agent $_ai_ver 安装完成"
@@ -9053,10 +9548,13 @@ cmd_agent_update() {
         return 1; }
     chmod 755 "$MGATE_AGENT_BIN"
     ok "binary 已更新：$MGATE_AGENT_BIN"
-    agent_install_service
+    agent_install_service || return 1
     systemctl daemon-reload 2>/dev/null || true
-    for _p in "$_au_tmp/agent.yaml.example" "$_au_tmp/agent.example.yaml" \
-              "$_au_tmp/config/agent.yaml.example"; do
+    _au_pkg_dir="$(dirname "$AGENT_DOWNLOAD_BIN_PATH")"
+    agent_install_config "$_au_pkg_dir" 0 || return 1
+    for _p in "$_au_pkg_dir/configs/agent.example.yaml" \
+              "$_au_pkg_dir/agent.yaml.example" "$_au_pkg_dir/agent.example.yaml" \
+              "$_au_pkg_dir/config/agent.yaml.example"; do
         [ -f "$_p" ] && {
             cp "$_p" "${MGATE_AGENT_CONFIG_FILE}.new-example" 2>/dev/null && \
                 hint "新示例配置：${MGATE_AGENT_CONFIG_FILE}.new-example（可与现有配置对比）"
@@ -9064,6 +9562,8 @@ cmd_agent_update() {
     done
     rm -rf "$_au_tmp" 2>/dev/null || true
     MGATE_AGENT_ACTIVE_TOKEN=""
+    agent_warn_legacy_config
+    agent_check_if_enrolled || return 1
     [ "$_au_was_running" = "1" ] && {
         step "重启服务..."
         systemctl start mgate-agent 2>/dev/null && ok "服务已重启" || \
@@ -9078,9 +9578,15 @@ cmd_agent_start() {
         { err "service 文件不存在，请先安装：mgate agent install"; return 1; }
     [ -x "$MGATE_AGENT_BIN" ] || \
         { err "binary 不存在，请先安装：mgate agent install"; return 1; }
-    [ -f "$MGATE_AGENT_CONFIG_FILE" ] || warn "配置文件不存在：$MGATE_AGENT_CONFIG_FILE"
+    [ -f "$MGATE_AGENT_CONFIG_FILE" ] || \
+        { err "配置文件不存在：$MGATE_AGENT_CONFIG_FILE"; return 1; }
     [ -f "$MGATE_AGENT_CREDS_FILE" ] || \
-        warn "credentials 未配置：$MGATE_AGENT_CREDS_FILE（服务可能无法连接 cloud）"
+        { err "credentials 未配置：$MGATE_AGENT_CREDS_FILE"; return 1; }
+    agent_warn_legacy_config
+    agent_check_ready || {
+        err "agent check 未通过，拒绝启动"
+        return 1
+    }
     step "启动 mgate-agent"
     systemctl enable mgate-agent 2>&1 || true
     systemctl start mgate-agent 2>&1 || { err "启动失败"; return 1; }
@@ -9130,7 +9636,7 @@ cmd_agent_status() {
         info "credentials.json：存在"
         _sp="$(stat -c '%a' "$MGATE_AGENT_CREDS_FILE" 2>/dev/null || printf 'unknown')"
         case "$_sp" in
-            600|400) info "credentials.json 权限：$_sp（OK）" ;;
+            600) info "credentials.json 权限：$_sp（OK）" ;;
             unknown) warn "credentials.json 权限：无法读取" ;;
             *) warn "credentials.json 权限：$_sp（建议 600）" ;;
         esac
@@ -9177,7 +9683,7 @@ cmd_agent_doctor() {
         agent_dr_ok "credentials.json 存在"
         _cp="$(stat -c '%a' "$MGATE_AGENT_CREDS_FILE" 2>/dev/null || printf 'unknown')"
         case "$_cp" in
-            600|400) agent_dr_ok "credentials.json 权限：$_cp" ;;
+            600) agent_dr_ok "credentials.json 权限：$_cp" ;;
             unknown) agent_dr_warn "credentials.json 权限：无法读取" ;;
             *) agent_dr_warn "credentials.json 权限：$_cp（建议 600）" ;;
         esac
@@ -9367,6 +9873,14 @@ CREDS_EOF
     info "device_id：$_device_id"
     info "gateway：${_gw_resp:-$_gateway}"
     info "credentials 已写入：$MGATE_AGENT_CREDS_FILE（token 不显示）"
+    if [ -x "$MGATE_AGENT_BIN" ] && [ -f "$MGATE_AGENT_CONFIG_FILE" ]; then
+        agent_check_ready || {
+            err "设备已绑定，但 agent check 未通过；修复后再执行 mgate agent start"
+            return 1
+        }
+    else
+        warn "agent binary 或配置尚未安装，暂未运行完整检查"
+    fi
     hint "下一步：mgate agent start"
 }
 
@@ -9376,7 +9890,7 @@ cmd_agent_enroll_status() {
         ok "已绑定：$MGATE_AGENT_CREDS_FILE"
         _perm="$(stat -c '%a' "$MGATE_AGENT_CREDS_FILE" 2>/dev/null || printf 'unknown')"
         case "$_perm" in
-            600|400) info "文件权限：$_perm（OK）" ;;
+            600) info "文件权限：$_perm（OK）" ;;
             *) warn "文件权限：$_perm（建议 600）" ;;
         esac
         _did="$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -11360,6 +11874,10 @@ tui_header() {
 
 tui_confirm() {
     msg="$1"
+    if is_agent_context; then
+        info "agent context：自动确认 - $msg"
+        return 0
+    fi
     printf '%s [y/N] ' "$msg"
     read -r ans || ans=""
     case "$ans" in
@@ -11370,6 +11888,10 @@ tui_confirm() {
 
 tui_confirm_yes() {
     msg="$1"
+    if is_agent_context; then
+        info "agent context：自动确认 - $msg"
+        return 0
+    fi
     say "$msg"
     printf '请输入 yes 确认: '
     read -r ans || ans=""
@@ -11977,6 +12499,21 @@ main() {
 
     cmd="$1"
     shift
+    if is_agent_context; then
+        if agent_is_read_action "$cmd" "$@"; then
+            # A read-only Action may report ok:false in its JSON result.  It
+            # is still a successfully delivered Agent response, not a reason
+            # to fall back to the human-oriented command output.
+            cmd_agent_action_json "$cmd" "$@"
+            return 0
+        fi
+        AGENT_MUTATION_HANDLED=0
+        cmd_agent_mutation_json "$cmd" "$@"
+        _agent_mutation_rc=$?
+        if [ "$AGENT_MUTATION_HANDLED" = 1 ]; then
+            return "$_agent_mutation_rc"
+        fi
+    fi
     case "$cmd" in
         menu|tui) menu ;;
         install) cmd_install "$@" ;;
@@ -12075,5 +12612,7 @@ main() {
     esac
 }
 
-init_output
-main "$@"
+if [ "${MGATE_TEST_LIB_ONLY:-0}" != "1" ]; then
+    init_output
+    main "$@"
+fi
