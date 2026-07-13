@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.5"
+MGATE_VERSION="0.5.6"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -9006,12 +9006,39 @@ cmd_agent_wifi_scan_json() {
 }
 
 cmd_agent_wifi_list_json() {
+    if ! have nmcli; then
+        err "wifi-list 采集失败：未找到 nmcli"
+        return 1
+    fi
+
+    # 与普通 wifi-list 使用相同的 NetworkManager 数据来源和优先级排序。
+    if ! _wifi_raw="$(nmcli -t -f NAME,TYPE,AUTOCONNECT-PRIORITY connection show 2>/dev/null)"; then
+        err "wifi-list 采集失败：NetworkManager 不可用或 nmcli 命令执行失败"
+        return 1
+    fi
+    _wifi_data="$(printf '%s\n' "$_wifi_raw" | grep ':802-11-wireless\|:wifi' | sort -t: -k3 -rn || true)"
+    _wifi_current="$(wifi_current_profile 2>/dev/null || true)"
+
     printf '{"saved":['; _first=1
-    if have nmcli; then
-        nmcli -t -f NAME,TYPE connection show 2>/dev/null | while IFS=: read -r _name _type; do
-            [ "$_type" = wifi ] || continue
+    if [ -n "$_wifi_data" ]; then
+        printf '%s\n' "$_wifi_data" | while IFS=: read -r _wifi_name _wifi_type _wifi_priority; do
+            case "$_wifi_type" in
+                802-11-wireless|wifi) ;;
+                *) continue ;;
+            esac
+            case "$_wifi_priority" in
+                -*)
+                    _wifi_priority_abs="${_wifi_priority#-}"
+                    case "$_wifi_priority_abs" in ''|*[!0-9]*) _wifi_priority=0 ;; esac
+                    ;;
+                ''|*[!0-9]*) _wifi_priority=0 ;;
+            esac
             [ "$_first" = 1 ] || printf ','
-            json_string "$_name"; _first=0
+            printf '{"ssid":'; json_string "$_wifi_name"
+            printf ',"priority":%s,"connected":' "$_wifi_priority"
+            if [ "$_wifi_name" = "$_wifi_current" ]; then printf 'true'; else printf 'false'; fi
+            printf '}'
+            _first=0
         done
     fi
     printf ']}\n'
@@ -9080,7 +9107,10 @@ cmd_agent_action_json() {
         ap-config) cmd_agent_ap_config_json ;;
         wifi-status) cmd_wifi_json ;;
         wifi-scan) cmd_agent_wifi_scan_json ;;
-        wifi-list) cmd_agent_wifi_list_json ;;
+        wifi-list)
+            cmd_agent_wifi_list_json
+            return $?
+            ;;
         wifi-doctor) cmd_agent_wifi_doctor_json ;;
         gateway-status) cmd_gateway_json ;;
         gateway-check) cmd_agent_gateway_check_json ;;
@@ -12616,7 +12646,7 @@ main() {
             # is still a successfully delivered Agent response, not a reason
             # to fall back to the human-oriented command output.
             cmd_agent_action_json "$cmd" "$@"
-            return 0
+            return $?
         fi
         AGENT_MUTATION_HANDLED=0
         cmd_agent_mutation_json "$cmd" "$@"
