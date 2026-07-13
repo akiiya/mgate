@@ -272,11 +272,14 @@ mgate agent uninstall               # 卸载组件，保留原有配置
 ```sh
 mgate backup [名称]
 mgate backups
+mgate backup-delete <备份ID>
 mgate restore latest
 mgate restore <备份ID>
 ```
 
 恢复前自动创建 `pre-restore` 备份，误操作可回退。
+
+删除备份使用 `mgate backup-delete <备份ID>`，终端会要求确认；也可在 Web 的「备份」页面操作。
 
 ## 🔐 安全边界
 

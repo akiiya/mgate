@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.3"
+MGATE_VERSION="0.5.4"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -3247,7 +3247,8 @@ EOF
             _bk="$(printf '%s' "$_bk_line" | awk '{print $1}')"
             [ -n "$_bk" ] || continue
             _bk_count=$((_bk_count + 1))
-            printf '<tr><td><span class="code" style="font-size:12px">%s</span></td><td><button type="button" onclick="restoreBackup('"'"'%s'"'"')" class="btn btn-sm">恢复</button></td></tr>\n' \
+            printf '<tr><td><span class="code" style="font-size:12px">%s</span></td><td><button type="button" onclick="restoreBackup('"'"'%s'"'"')" class="btn btn-sm">恢复</button> <button type="button" onclick="deleteBackup('"'"'%s'"'"')" class="btn btn-sm danger">删除</button></td></tr>\n' \
+                "$(printf '%s' "$_bk" | html_escape)" \
                 "$(printf '%s' "$_bk" | html_escape)" \
                 "$(printf '%s' "$_bk" | html_escape)"
         done
@@ -3277,8 +3278,16 @@ EOF
 </div>
 </div>
 </div>
+<div id="modal-backup-delete" class="modal-overlay">
+<div class="modal-box">
+<div class="modal-head"><h3>确认删除备份</h3><button class="modal-close" type="button" onclick="closeModal('modal-backup-delete')">&#x2715;</button></div>
+<div class="modal-body"><div class="warn-box">⚠️ 删除后无法恢复。</div><p style="margin-top:12px">确定要删除备份 <strong id="delete-bk-id"></strong> 吗？</p></div>
+<div class="modal-foot"><button type="button" class="btn" onclick="closeModal('modal-backup-delete')">取消</button><input type="hidden" id="delete-bk-input" value=""><button type="button" class="btn danger" onclick="var id=document.getElementById('delete-bk-input').value;startJobModal('modal-backup-delete','action=backup-delete-modal-do&backup_id='+encodeURIComponent(id),'删除备份 '+id)">确认删除</button></div>
+</div>
+</div>
 <script>
 function restoreBackup(id){document.getElementById('restore-bk-id').textContent=id;document.getElementById('restore-bk-input').value=id;openModal('modal-restore');}
+function deleteBackup(id){document.getElementById('delete-bk-id').textContent=id;document.getElementById('delete-bk-input').value=id;openModal('modal-backup-delete');}
 function submitBackupCreate(){var lbl=document.getElementById('backup-label-input');var l=lbl?lbl.value:'';startJobModal(null,'action=backup-create-modal-do&backup_label='+encodeURIComponent(l),'创建备份');}
 </script>
 EOF
@@ -3917,6 +3926,11 @@ else
             _CGI_CONTENT_TYPE="application/json"
             _bcm_label="$(url_decode "$(param_get "$post_body" backup_label)")"
             run_job_json "创建备份" backup "${_bcm_label:-web}"
+            ;;
+        backup-delete-modal-do)
+            _CGI_CONTENT_TYPE="application/json"
+            _bdm_id="$(url_decode "$(param_get "$post_body" backup_id)")"
+            run_job_json "删除备份 $_bdm_id" backup-delete "$_bdm_id" --yes
             ;;
         restore-modal-do)
             _CGI_CONTENT_TYPE="application/json"
@@ -10045,6 +10059,13 @@ backup_exists() {
     [ -n "$id" ] && [ -d "$BACKUP_DIR/$id" ] && [ -f "$BACKUP_DIR/$id/manifest.txt" ]
 }
 
+backup_id_is_safe() {
+    case "$1" in
+        ''|.*|*/*|*'..'*|*[!A-Za-z0-9_.-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 cmd_backup() {
     need_root
     label="${1:-manual}"
@@ -10072,6 +10093,32 @@ cmd_backups() {
     if [ "$found" = "0" ]; then
         warn "暂无备份"
     fi
+}
+
+cmd_backup_delete() {
+    need_root
+    req="${1:-}"
+    yes_arg="${2:-}"
+    [ -n "$req" ] || die "请指定备份 ID，例如：mgate backup-delete <备份ID>"
+
+    if [ "$req" = "latest" ]; then
+        id="$(latest_backup_id || true)"
+        [ -n "$id" ] || die "没有可删除的备份"
+    else
+        id="$(printf '%s' "$req" | awk '{print $1}')"
+    fi
+
+    backup_id_is_safe "$id" || die "备份 ID 无效：$id"
+    backup_exists "$id" || die "备份不存在：$id"
+    if [ "${MGATE_ASSUME_YES:-0}" != "1" ] && [ "$yes_arg" != "--yes" ] && [ "$yes_arg" != "-y" ]; then
+        warn "即将永久删除备份：$id"
+        printf 'Type DELETE to continue: '
+        read -r ans
+        [ "$ans" = "DELETE" ] || die "已取消删除"
+    fi
+
+    rm -rf "$BACKUP_DIR/$id" || die "删除备份失败：$id"
+    ok "备份已删除：$id"
 }
 
 choose_backup_interactive() {
@@ -11874,6 +11921,7 @@ Agent 接口（只读，JSON，schema_version=1）：
 备份与恢复：
   mgate backup [label]      创建备份
   mgate backups             查看备份列表
+  mgate backup-delete <id>  删除指定备份（latest 表示最新备份）
   mgate restore [id|latest] 恢复备份
 
 代理来源 Group：
@@ -12486,7 +12534,8 @@ menu_system() {
         say "   10.  创建备份"
         say "   11.  查看备份列表"
         say "   12.  恢复备份"
-        say "   13.  完整卸载 mgate"
+        say "   13.  删除指定备份"
+        say "   14.  完整卸载 mgate"
         say ""
         say "    0.  返回  ( Enter 也可 )"
         say ""
@@ -12507,6 +12556,11 @@ menu_system() {
             11) cmd_backups; pause_enter ;;
             12) cmd_restore; pause_enter ;;
             13)
+                _ms_delete_id="$(choose_backup_interactive || true)"
+                [ -n "$_ms_delete_id" ] && cmd_backup_delete "$_ms_delete_id"
+                pause_enter
+                ;;
+            14)
                 if tui_confirm "将完整卸载 mgate，此操作不可逆，继续吗？"; then
                     cmd_uninstall; exit 0
                 fi
@@ -12638,6 +12692,7 @@ main() {
         _wifi-watchdog) cmd_wifi_watchdog_run "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
+        backup-delete) cmd_backup_delete "$@" ;;
         restore) cmd_restore "$@" ;;
         group) cmd_group "$@" ;;
         sub-add) cmd_sub_add "$@" ;;
