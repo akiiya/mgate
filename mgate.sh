@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.1"
+MGATE_VERSION="0.5.2"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -9318,8 +9318,35 @@ agent_warn_legacy_config() {
     fi
 }
 
+agent_config_has_current_schema() {
+    _achs_file="$1"
+    for _achs_section in cloud agent security logging; do
+        grep -Eq "^[[:space:]]*${_achs_section}[[:space:]]*:[[:space:]]*(#.*)?$" "$_achs_file" 2>/dev/null || return 1
+    done
+}
+
+agent_regenerate_config_from_binary() {
+    _arc_reason="$1"
+    _arc_bak="${MGATE_AGENT_CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S 2>/dev/null || printf legacy).$$"
+    _arc_tmp="${MGATE_AGENT_CONFIG_FILE}.regen.$$"
+    [ -f "$MGATE_AGENT_CONFIG_FILE" ] && cp "$MGATE_AGENT_CONFIG_FILE" "$_arc_bak" || return 1
+    "$MGATE_AGENT_BIN" config default > "$_arc_tmp" || {
+        rm -f "$_arc_tmp" 2>/dev/null || true
+        return 1
+    }
+    [ -s "$_arc_tmp" ] || { rm -f "$_arc_tmp" 2>/dev/null || true; return 1; }
+    agent_patch_config_mgate_path "$_arc_tmp" || return 1
+    chmod 644 "$_arc_tmp" 2>/dev/null || true
+    mv "$_arc_tmp" "$MGATE_AGENT_CONFIG_FILE" || return 1
+    ok "已重建不兼容的 agent 配置（$_arc_reason，备份：$_arc_bak）"
+}
+
 agent_migrate_legacy_config() {
     [ -f "$MGATE_AGENT_CONFIG_FILE" ] || return 0
+    if [ ! -s "$MGATE_AGENT_CONFIG_FILE" ]; then
+        agent_regenerate_config_from_binary "配置为空" || return 1
+        return 0
+    fi
     _amc_legacy=0
     grep -q '/api/agent/v1/' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null && _amc_legacy=1
     grep -q '^[[:space:]]*mgate_snapshot_command[[:space:]]*:' "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null && _amc_legacy=1
@@ -9337,9 +9364,14 @@ agent_migrate_legacy_config() {
         rm -f "$_ame_tmp" 2>/dev/null || true
         return 1
     }
-    chmod 644 "$_ame_tmp" 2>/dev/null || true
-    mv "$_ame_tmp" "$MGATE_AGENT_CONFIG_FILE" || return 1
-    ok "已迁移旧版 agent 配置（备份：$_ame_bak）"
+    if agent_config_has_current_schema "$_ame_tmp"; then
+        chmod 644 "$_ame_tmp" 2>/dev/null || true
+        mv "$_ame_tmp" "$MGATE_AGENT_CONFIG_FILE" || return 1
+        ok "已迁移旧版 agent 配置（备份：$_ame_bak）"
+    else
+        rm -f "$_ame_tmp" 2>/dev/null || true
+        agent_regenerate_config_from_binary "旧版配置结构不兼容" || return 1
+    fi
 }
 
 agent_check_ready() {
