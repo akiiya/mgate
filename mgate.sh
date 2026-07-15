@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.6"
+MGATE_VERSION="0.5.7"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -89,7 +89,7 @@ WIFI_IF="${MGATE_WIFI_IF:-wlan0}"
 WIFI_FALLBACK_TIMEOUT="${MGATE_WIFI_FALLBACK_TIMEOUT:-50}"
 WIFI_SWITCH_LOCK_DIR="$RUN_DIR/wifi-switch.lock"
 
-MGATE_AGENT_REPO="${MGATE_AGENT_REPO:-akiiya/mgate-agent}"
+MGATE_AGENT_REPO="${MGATE_AGENT_REPO:-akiiya/mgate-agent-install}"
 MGATE_AGENT_BIN="${MGATE_AGENT_BIN:-/usr/local/bin/mgate-agent}"
 MGATE_AGENT_SERVICE_FILE="/etc/systemd/system/mgate-agent.service"
 MGATE_AGENT_CONFIG_DIR="/etc/mgate-agent"
