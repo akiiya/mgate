@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.8"
+MGATE_VERSION="0.5.9"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -773,7 +773,7 @@ Common commands:
   mgate                 Enter TUI menu
   mgate install         Initialize/repair mgate workspace
   mgate self-update    Update mgate manager script from GitHub
-  mgate install-core    Install/update Mihomo core
+  mgate core-install    Install/update Mihomo core
   mgate core-start      Start Mihomo core service
   mgate core-stop       Stop Mihomo core service
   mgate core-status     Show Mihomo core service status
@@ -781,7 +781,7 @@ Common commands:
   mgate core-test       Test Mihomo core config
   mgate core-logs       Show Mihomo core logs
   mgate uninstall       Remove mgate completely
-  (start/stop/status/edit/test/logs still work as aliases of core-*)
+  (install-core/start/stop/status/edit/test/logs still work as aliases of core-*)
 
 Environment overrides:
   FORCE=1                         overwrite generated config after backup
@@ -872,7 +872,7 @@ fallback_status_quiet() {
 }
 
 fallback_start() {
-    [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在：$CORE_BIN，请先执行：mgate install-core"
+    [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在：$CORE_BIN，请先执行：mgate core-install"
     [ -f "$CONFIG_FILE" ] || die "配置文件不存在：$CONFIG_FILE，请先执行：mgate install"
     ensure_dirs
     if fallback_status_quiet; then
@@ -8951,7 +8951,7 @@ cmd_capabilities_json() {
     printf '      "wifi-connect","wifi-disconnect","wifi-reconnect","wifi-delete",\n'
     printf '      "ap-start","ap-stop","gateway-start","gateway-stop",\n'
     printf '      "tproxy-start","tproxy-stop","self-update","update",\n'
-    printf '      "install-core","migrate","sub-update","sub-add","sub-del","web-disable","uninstall",\n'
+    printf '      "core-install","migrate","sub-update","sub-add","sub-del","web-disable","uninstall",\n'
     printf '      "group <name>","agent install","agent update","agent start","agent stop","agent restart","agent uninstall"\n'
     printf '    ],\n'
     printf '    "interactive": [\n'
@@ -10480,7 +10480,7 @@ cmd_preflight() {
 }
 
 cmd_test() {
-    [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在：$CORE_BIN，请先执行：mgate install-core"
+    [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在：$CORE_BIN，请先执行：mgate core-install"
     [ -f "$CONFIG_FILE" ] || die "配置文件不存在：$CONFIG_FILE，请先执行：mgate install"
     step "正在测试配置"
     "$CORE_BIN" -t -f "$CONFIG_FILE"
@@ -11487,7 +11487,7 @@ EOF_RULES
 sub_update_from_url() {
     url="$1"
     [ -n "$url" ] || die "订阅链接为空"
-    [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在，请先执行：mgate install-core"
+    [ -x "$CORE_BIN" ] || die "Mihomo 内核不存在，请先执行：mgate core-install"
     ensure_sub_dirs
 
     sub_lock="$RUN_DIR/sub-update.lock"
@@ -12101,9 +12101,10 @@ $APP_NAME - $APP_DESC
   mgate install             初始化/修复 mgate 工作区
   mgate self-update         从 GitHub 更新 mgate 管理脚本
   mgate update              self-update 的别名
-  mgate install-core        安装/更新 Mihomo 内核
-  mgate uninstall-core      仅卸载 Mihomo 内核，保留配置和管理脚本
+  mgate core-install        安装/更新 Mihomo 内核
+  mgate core-uninstall      仅卸载 Mihomo 内核，保留配置和管理脚本
   mgate uninstall [--yes]   完整卸载 mgate
+  （install-core/uninstall-core 仍可用，是 core-install/core-uninstall 的旧别名）
 
 Mihomo 内核服务管理：
   mgate core-start          启动 Mihomo 内核服务
@@ -12894,8 +12895,8 @@ main() {
         menu|tui) menu ;;
         install) cmd_install "$@" ;;
         self-update|update) cmd_self_update "$@" ;;
-        install-core) install_core "$@" ;;
-        uninstall-core) cmd_uninstall_core "$@" ;;
+        core-install|install-core) install_core "$@" ;;
+        core-uninstall|uninstall-core) cmd_uninstall_core "$@" ;;
         uninstall) cmd_uninstall "$@" ;;
         core-start|start) service_start "$@" ;;
         core-stop|stop) service_stop "$@" ;;
