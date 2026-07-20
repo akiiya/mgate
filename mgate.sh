@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.7"
+MGATE_VERSION="0.5.8"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -72,6 +72,7 @@ TPROXY_MANGLE_CHAIN="${MGATE_TPROXY_MANGLE_CHAIN:-MGATE_TPROXY}"
 TPROXY_MARK="${MGATE_TPROXY_MARK:-0x1}"
 TPROXY_ROUTE_TABLE="${MGATE_TPROXY_ROUTE_TABLE:-100}"
 TPROXY_PORT="${MGATE_TPROXY_PORT:-31802}"
+TPROXY_DNS_PORT="${MGATE_TPROXY_DNS_PORT:-1053}"
 TPROXY_OUT_GROUP="${MGATE_TPROXY_OUT_GROUP:-TPROXY-OUT}"
 TPROXY_SOCKET_BYPASS="${MGATE_TPROXY_SOCKET_BYPASS:-0}"
 TPROXY_ENABLED_FILE="$DATA_DIR/tproxy.enabled"
@@ -578,6 +579,25 @@ bind-address: '*'
 tproxy-port: __TPROXY_PORT__
 external-controller: 127.0.0.1:__MIHOMO_API_PORT__
 
+# DNS server: fake-ip so TProxy-captured connections carry full domain info for
+# rule matching, and respect-rules/proxy-server-nameserver so DNS queries
+# themselves transit TPROXY-OUT instead of leaking out in plaintext.
+dns:
+  enable: true
+  listen: 127.0.0.1:__TPROXY_DNS_PORT__
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  default-nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  nameserver:
+    - https://1.1.1.1/dns-query
+  proxy-server-nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  respect-rules: true
+
 profile:
   store-selected: true
 
@@ -700,6 +720,7 @@ render_config_content() {
         -e "s/__SOCKS_PORT__/$DEFAULT_SOCKS_PORT/g" \
         -e "s/__HTTP_PORT__/$DEFAULT_HTTP_PORT/g" \
         -e "s/__TPROXY_PORT__/$TPROXY_PORT/g" \
+        -e "s/__TPROXY_DNS_PORT__/$TPROXY_DNS_PORT/g" \
         -e "s/__MIHOMO_API_PORT__/$DEFAULT_MIHOMO_API_PORT/g"
 }
 
@@ -753,13 +774,14 @@ Common commands:
   mgate install         Initialize/repair mgate workspace
   mgate self-update    Update mgate manager script from GitHub
   mgate install-core    Install/update Mihomo core
-  mgate start           Start service
-  mgate stop            Stop service
-  mgate status          Show service status
-  mgate edit            Edit config
-  mgate test            Test config
-  mgate logs            Show logs
+  mgate core-start      Start Mihomo core service
+  mgate core-stop       Stop Mihomo core service
+  mgate core-status     Show Mihomo core service status
+  mgate core-edit       Edit Mihomo core config
+  mgate core-test       Test Mihomo core config
+  mgate core-logs       Show Mihomo core logs
   mgate uninstall       Remove mgate completely
+  (start/stop/status/edit/test/logs still work as aliases of core-*)
 
 Environment overrides:
   FORCE=1                         overwrite generated config after backup
@@ -4766,19 +4788,88 @@ EOF_HOSTAPD
 }
 
 ap_write_dnsmasq_conf() {
-    cat > "$AP_DNSMASQ_CONF" <<EOF_DNSMASQ
+    # mode: "direct" (default) forwards via /etc/resolv.conf; "tproxy" forwards to
+    # mihomo's own DNS server so AP client DNS queries also transit the proxy tunnel.
+    # Written to a temp file and renamed into place (single write, atomic swap) so a
+    # kill/power-loss mid-write can never leave a partially-written conf on disk.
+    dns_mode="${1:-direct}"
+    _tmp="$AP_DNSMASQ_CONF.tmp.$$"
+    {
+        cat <<EOF_DNSMASQ
 interface=$AP_IF
 bind-interfaces
 listen-address=$AP_IPADDR
 port=53
+EOF_DNSMASQ
+        if [ "$dns_mode" = "tproxy" ]; then
+            cat <<EOF_DNSMASQ
+no-resolv
+server=127.0.0.1#$TPROXY_DNS_PORT
+EOF_DNSMASQ
+        else
+            cat <<EOF_DNSMASQ
 resolv-file=/etc/resolv.conf
+EOF_DNSMASQ
+        fi
+        cat <<EOF_DNSMASQ
 dhcp-range=$AP_DHCP_START,$AP_DHCP_END,$AP_NETMASK,$AP_DHCP_LEASE
 dhcp-option=3,$AP_IPADDR
 dhcp-option=6,$AP_IPADDR
 dhcp-authoritative
 log-facility=$AP_DNSMASQ_LOG_FILE
 EOF_DNSMASQ
-    chmod 600 "$AP_DNSMASQ_CONF" 2>/dev/null || true
+    } > "$_tmp" || { rm -f "$_tmp" 2>/dev/null || true; return 1; }
+    chmod 600 "$_tmp" 2>/dev/null || true
+    mv "$_tmp" "$AP_DNSMASQ_CONF" || { rm -f "$_tmp" 2>/dev/null || true; return 1; }
+}
+
+tproxy_dns_switch() {
+    # Rewrites dnsmasq's upstream DNS target and restarts it so the change takes
+    # effect immediately. mode: "tproxy" (route through mihomo) or "direct" (resolv.conf).
+    # Retries the restart once: the kill above can leave the port briefly unavailable,
+    # and callers treat a final failure here as "DNS is now broken", so it's worth a retry.
+    mode="$1"
+    ap_write_dnsmasq_conf "$mode" || return 1
+    if ap_pid_running "$AP_DNSMASQ_PID_FILE"; then
+        ap_stop_pid "$AP_DNSMASQ_PID_FILE" "dnsmasq"
+    fi
+    attempt=0
+    while [ "$attempt" -lt 2 ]; do
+        if dnsmasq -C "$AP_DNSMASQ_CONF" -x "$AP_DNSMASQ_PID_FILE" >> "$AP_DNSMASQ_LOG_FILE" 2>&1; then
+            sleep 1
+            if ap_pid_running "$AP_DNSMASQ_PID_FILE"; then
+                return 0
+            fi
+            rm -f "$AP_DNSMASQ_PID_FILE" 2>/dev/null || true
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    return 1
+}
+
+tproxy_dns_mode_current() {
+    grep -q '^no-resolv$' "$AP_DNSMASQ_CONF" 2>/dev/null && printf 'tproxy\n' || printf 'direct\n'
+}
+
+ap_dnsmasq_dns_mode() {
+    # What mode dnsmasq's DNS upstream *should* be in right now — used when
+    # (re)generating dnsmasq.conf outside of tproxy-start/stop (e.g. ap-start/
+    # ap-restart) so an AP restart never silently reverts DNS back to a leaking
+    # direct/resolv.conf setup while TProxy is active.
+    #
+    # Deliberately checks the LIVE iptables/ip-rule state (tproxy_core_rules_active),
+    # not just $TPROXY_ENABLED_FILE: that marker is a plain data file that survives a
+    # reboot, while the mangle chain/ip rule/route table do not (TProxy is never
+    # auto-restored on boot — it requires an explicit, confirmed tproxy-start). If we
+    # trusted the stale marker alone, a post-reboot ap-start could point dnsmasq at
+    # mihomo's DNS server while TProxy's rules (or mihomo itself) aren't actually up,
+    # trading the original plaintext leak for a total DNS outage — worse, not better.
+    if [ -f "$TPROXY_ENABLED_FILE" ] && tproxy_core_rules_active; then
+        printf 'tproxy\n'
+    else
+        printf 'direct\n'
+    fi
 }
 
 ap_remove_owned_iface() {
@@ -5067,7 +5158,10 @@ cmd_ap_start() {
     fi
 
     ap_write_hostapd_conf "$channel"
-    ap_write_dnsmasq_conf
+    if ! ap_write_dnsmasq_conf "$(ap_dnsmasq_dns_mode)"; then
+        ap_cleanup_owned_state
+        die "failed to write $AP_DNSMASQ_CONF"
+    fi
 
     hostapd_started=0
     if ap_pid_running "$AP_HOSTAPD_PID_FILE"; then
@@ -6710,6 +6804,16 @@ tproxy_rollback() {
     fi
 
     rm -f "$TPROXY_ENABLED_FILE" 2>/dev/null || true
+
+    if [ "$(tproxy_dns_mode_current)" = "tproxy" ]; then
+        if tproxy_dns_switch direct; then
+            tproxy_ok "dnsmasq DNS restored to direct resolv.conf during rollback"
+        else
+            tproxy_warn "failed to restore dnsmasq direct DNS during rollback; inspect mgate tproxy-debug"
+            rollback_failed=1
+        fi
+    fi
+
     if [ "$rollback_failed" -eq 0 ]; then
         tproxy_ok "rollback complete; NAT gateway fallback was preserved"
     else
@@ -6794,6 +6898,19 @@ cmd_tproxy_start() {
     fi
 
     tproxy_write_enabled || { tproxy_rollback "failed to write $TPROXY_ENABLED_FILE"; return 1; }
+
+    if [ "$(tproxy_dns_mode_current)" = "tproxy" ]; then
+        tproxy_ok "dnsmasq already forwards DNS to mihomo (127.0.0.1#$TPROXY_DNS_PORT)"
+    else
+        tproxy_info "switching AP DNS to route through mihomo (no leak)"
+        if tproxy_dns_switch tproxy; then
+            tproxy_ok "dnsmasq now forwards DNS to mihomo (127.0.0.1#$TPROXY_DNS_PORT)"
+        else
+            tproxy_rollback "failed to switch dnsmasq DNS to mihomo; DNS would leak in plaintext"
+            return 1
+        fi
+    fi
+
     tproxy_log "TProxy enabled on $AP_IF port $TPROXY_PORT mark $TPROXY_MARK table $TPROXY_ROUTE_TABLE"
     tproxy_ok "TProxy enabled; rollback command: mgate tproxy-stop"
     cmd_tproxy_status
@@ -6811,9 +6928,26 @@ cmd_tproxy_stop() {
         tproxy_warn "some TProxy rules may remain; inspect mgate tproxy-debug"
     fi
     rm -f "$TPROXY_ENABLED_FILE" 2>/dev/null || true
+
+    dns_restore_failed=0
+    if [ "$(tproxy_dns_mode_current)" = "tproxy" ]; then
+        tproxy_info "restoring dnsmasq direct DNS (NAT fallback)"
+        if tproxy_dns_switch direct; then
+            tproxy_ok "dnsmasq DNS restored to direct resolv.conf"
+        else
+            # tproxy_dns_switch already stopped the old dnsmasq before the failed
+            # restart, so AP clients now have no DNS at all — this is a hard failure,
+            # not a cosmetic warning, and must not be reported as a successful stop.
+            err "failed to restore dnsmasq direct DNS; dnsmasq may now be stopped and AP clients have no DNS"
+            hint "run: mgate ap-restart"
+            dns_restore_failed=1
+        fi
+    fi
+
     tproxy_log "TProxy stopped; NAT gateway fallback preserved"
     cmd_tproxy_status
     cmd_gateway_status
+    [ "$dns_restore_failed" = "0" ]
 }
 
 config_mihomo_api_addr() {
@@ -7127,6 +7261,15 @@ tproxy_print_nat_counters() {
     iptables -L "$GATEWAY_FORWARD_CHAIN" -n -v -x 2>/dev/null | sed -n '1,7p' || say "cannot read $GATEWAY_FORWARD_CHAIN"
 }
 
+tproxy_config_dns_enabled() {
+    awk '
+        /^dns:[[:space:]]*$/ { in_dns=1; next }
+        in_dns && /^[^[:space:]]/ { in_dns=0 }
+        in_dns && /^[[:space:]]*enable:[[:space:]]*true[[:space:]]*$/ { found=1 }
+        END { exit (found ? 0 : 1) }
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
 tproxy_dns_safety_check() {
     if [ -f "$AP_DNSMASQ_CONF" ]; then
         listen_addr="$(sed -n 's/^listen-address=//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
@@ -7141,8 +7284,26 @@ tproxy_dns_safety_check() {
         else
             tproxy_doctor_fail "DHCP DNS option is ${dns_opt:-missing}, expected $AP_IPADDR"
         fi
+        if [ -f "$TPROXY_ENABLED_FILE" ]; then
+            if grep -q '^no-resolv$' "$AP_DNSMASQ_CONF" 2>/dev/null && grep -q "^server=127.0.0.1#$TPROXY_DNS_PORT$" "$AP_DNSMASQ_CONF" 2>/dev/null; then
+                tproxy_doctor_ok "dnsmasq forwards DNS through mihomo (127.0.0.1#$TPROXY_DNS_PORT), no leak"
+            else
+                tproxy_doctor_fail "dnsmasq is not forwarding DNS through mihomo; DNS queries may leak in plaintext"
+            fi
+        else
+            if grep -q '^resolv-file=' "$AP_DNSMASQ_CONF" 2>/dev/null; then
+                tproxy_doctor_ok "dnsmasq uses direct resolv.conf (NAT fallback)"
+            else
+                tproxy_doctor_warn "dnsmasq is not using direct resolv.conf; unexpected in NAT fallback mode"
+            fi
+        fi
     else
         tproxy_doctor_fail "dnsmasq config missing: $AP_DNSMASQ_CONF"
+    fi
+    if tproxy_config_dns_enabled; then
+        tproxy_doctor_ok "mihomo config dns.enable: true"
+    else
+        tproxy_doctor_warn "mihomo config missing dns.enable: true"
     fi
 }
 
@@ -7262,8 +7423,26 @@ cmd_tproxy_health() {
         dns_opt="$(sed -n 's/^dhcp-option=6,//p' "$AP_DNSMASQ_CONF" 2>/dev/null | tail -n 1)"
         [ "$listen_addr" = "$AP_IPADDR" ] && tproxy_health_ok "dnsmasq listens on $AP_IPADDR:53: yes" || tproxy_health_warn "dnsmasq listens on $AP_IPADDR:53: no"
         [ "$dns_opt" = "$AP_IPADDR" ] && tproxy_health_ok "DHCP DNS option points to $AP_IPADDR: yes" || tproxy_health_warn "DHCP DNS option points to $AP_IPADDR: no"
+        if [ "$enabled" = "yes" ] || [ "$enabled" = "partial" ]; then
+            if grep -q '^no-resolv$' "$AP_DNSMASQ_CONF" 2>/dev/null && grep -q "^server=127.0.0.1#$TPROXY_DNS_PORT$" "$AP_DNSMASQ_CONF" 2>/dev/null; then
+                tproxy_health_ok "dnsmasq forwards DNS through mihomo (no leak): yes"
+            else
+                tproxy_health_fail "dnsmasq forwards DNS through mihomo (no leak): no"
+            fi
+        else
+            if grep -q '^resolv-file=' "$AP_DNSMASQ_CONF" 2>/dev/null; then
+                tproxy_health_ok "dnsmasq uses direct resolv.conf (NAT fallback): yes"
+            else
+                tproxy_health_warn "dnsmasq uses direct resolv.conf (NAT fallback): no"
+            fi
+        fi
     else
         tproxy_health_warn "dnsmasq config missing: $AP_DNSMASQ_CONF"
+    fi
+    if tproxy_config_dns_enabled; then
+        tproxy_health_ok "mihomo dns.enable: true"
+    else
+        tproxy_health_warn "mihomo dns.enable: true not found"
     fi
     tproxy_skip_rule_for "$AP_IPADDR/32" && tproxy_health_ok "TProxy rules skip $AP_IPADDR: yes" || tproxy_health_warn "TProxy rules skip $AP_IPADDR: no"
     ap_cidr="$(ap_network_cidr)"
@@ -9147,11 +9326,11 @@ cmd_agent_mutation_json() {
     shift
     case "$_mutation_cmd" in
         self-update|update) _mutation_fn=cmd_self_update ;;
-        start) _mutation_fn=service_start ;;
-        stop) _mutation_fn=service_stop ;;
-        restart) _mutation_fn=service_restart ;;
-        enable) _mutation_fn=service_enable ;;
-        disable) _mutation_fn=service_disable ;;
+        core-start) _mutation_fn=service_start ;;
+        core-stop) _mutation_fn=service_stop ;;
+        core-restart) _mutation_fn=service_restart ;;
+        core-enable) _mutation_fn=service_enable ;;
+        core-disable) _mutation_fn=service_disable ;;
         ap-start) _mutation_fn=cmd_ap_start ;;
         ap-stop) _mutation_fn=cmd_ap_stop ;;
         ap-restart) _mutation_fn=cmd_ap_restart ;;
@@ -10620,6 +10799,28 @@ migrate_patch_config() {
         ok "migrate: 已添加 profile.store-selected"
     fi
 
+    if ! grep -q "^dns:" "$CONFIG_FILE" 2>/dev/null; then
+        {
+            printf '\ndns:\n'
+            printf '  enable: true\n'
+            printf '  listen: 127.0.0.1:%s\n' "$TPROXY_DNS_PORT"
+            printf '  ipv6: false\n'
+            printf '  enhanced-mode: fake-ip\n'
+            printf '  fake-ip-range: 198.18.0.0/16\n'
+            printf '  default-nameserver:\n'
+            printf '    - 1.1.1.1\n'
+            printf '    - 8.8.8.8\n'
+            printf '  nameserver:\n'
+            printf '    - https://1.1.1.1/dns-query\n'
+            printf '  proxy-server-nameserver:\n'
+            printf '    - https://1.1.1.1/dns-query\n'
+            printf '    - https://8.8.8.8/dns-query\n'
+            printf '  respect-rules: true\n'
+        } >> "$CONFIG_FILE"
+        MIGRATE_CONFIG_CHANGED=1
+        ok "migrate: 已添加 dns 配置块（fake-ip + respect-rules，防止 DNS 泄露）"
+    fi
+
     if ! tproxy_config_has_out_group 2>/dev/null; then
         tproxy_config_insert_group && {
             MIGRATE_CONFIG_CHANGED=1
@@ -11146,6 +11347,22 @@ bind-address: '*'
 tproxy-port: $TPROXY_PORT
 external-controller: 127.0.0.1:$DEFAULT_MIHOMO_API_PORT
 
+dns:
+  enable: true
+  listen: 127.0.0.1:$TPROXY_DNS_PORT
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  default-nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  nameserver:
+    - https://1.1.1.1/dns-query
+  proxy-server-nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  respect-rules: true
+
 profile:
   store-selected: true
 
@@ -11192,6 +11409,22 @@ allow-lan: true
 bind-address: '*'
 tproxy-port: $TPROXY_PORT
 external-controller: 127.0.0.1:$DEFAULT_MIHOMO_API_PORT
+
+dns:
+  enable: true
+  listen: 127.0.0.1:$TPROXY_DNS_PORT
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  default-nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  nameserver:
+    - https://1.1.1.1/dns-query
+  proxy-server-nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  respect-rules: true
 
 profile:
   store-selected: true
@@ -11872,19 +12105,21 @@ $APP_NAME - $APP_DESC
   mgate uninstall-core      仅卸载 Mihomo 内核，保留配置和管理脚本
   mgate uninstall [--yes]   完整卸载 mgate
 
-服务管理：
-  mgate start               启动服务
-  mgate stop                停止服务
-  mgate restart             重启服务
-  mgate status              查看服务状态
-  mgate enable              设置开机启动
-  mgate disable             关闭开机启动
+Mihomo 内核服务管理：
+  mgate core-start          启动 Mihomo 内核服务
+  mgate core-stop           停止 Mihomo 内核服务
+  mgate core-restart        重启 Mihomo 内核服务
+  mgate core-status         查看 Mihomo 内核服务状态
+  mgate core-enable         设置 Mihomo 内核开机启动
+  mgate core-disable        关闭 Mihomo 内核开机启动
+  （start/stop/restart/status/enable/disable 仍可用，是 core-* 的旧别名）
 
-配置与诊断：
-  mgate config              查看配置
-  mgate edit                编辑配置
-  mgate test                测试配置
-  mgate logs [50|100|200]   查看日志
+Mihomo 内核配置与诊断：
+  mgate core-config         查看 Mihomo 配置
+  mgate core-edit           编辑 Mihomo 配置
+  mgate core-test           测试 Mihomo 配置
+  mgate core-logs [50|100|200]  查看 Mihomo 日志
+  （config/edit/test/logs 仍可用，是 core-* 的旧别名）
   mgate doctor              系统诊断
   mgate preflight [file]    检查脚本 LF 行尾和 POSIX sh 语法
 
@@ -12662,17 +12897,17 @@ main() {
         install-core) install_core "$@" ;;
         uninstall-core) cmd_uninstall_core "$@" ;;
         uninstall) cmd_uninstall "$@" ;;
-        start) service_start "$@" ;;
-        stop) service_stop "$@" ;;
-        restart) service_restart "$@" ;;
-        status) service_status "$@" ;;
+        core-start|start) service_start "$@" ;;
+        core-stop|stop) service_stop "$@" ;;
+        core-restart|restart) service_restart "$@" ;;
+        core-status|status) service_status "$@" ;;
         status-json) cmd_status_json "$@" ;;
-        enable) service_enable "$@" ;;
-        disable) service_disable "$@" ;;
-        config) cmd_config "$@" ;;
-        edit) cmd_edit "$@" ;;
-        test) cmd_test "$@" ;;
-        logs) cmd_logs "$@" ;;
+        core-enable|enable) service_enable "$@" ;;
+        core-disable|disable) service_disable "$@" ;;
+        core-config|config) cmd_config "$@" ;;
+        core-edit|edit) cmd_edit "$@" ;;
+        core-test|test) cmd_test "$@" ;;
+        core-logs|logs) cmd_logs "$@" ;;
         doctor) cmd_doctor "$@" ;;
         preflight) cmd_preflight "$@" ;;
         ap-check) cmd_ap_check "$@" ;;
