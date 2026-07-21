@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.9"
+MGATE_VERSION="0.5.10"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -1171,7 +1171,7 @@ cmd_install() {
     service_start
     ok "mgate 工作区初始化/修复完成"
     say ""
-    hint "下一步：mgate edit && mgate test && mgate restart"
+    hint "下一步：mgate core-edit && mgate core-test && mgate core-restart"
     hint "如需更新 mgate 管理脚本：mgate self-update"
 }
 
@@ -2546,7 +2546,7 @@ EOF
 <tr><td>端口</td><td><span class="code">$tproxy_port</span></td></tr>
 <tr><td>协议覆盖</td><td>TCP + UDP（含游戏、视频通话等 UDP 流量）</td></tr>
 <tr><td>监听地址</td><td><span class="code">0.0.0.0:$tproxy_port</span></td></tr>
-<tr><td>状态</td><td>mgate start → 端口自动监听；mgate tproxy-start → iptables 重定向生效</td></tr>
+<tr><td>状态</td><td>mgate core-start → 端口自动监听；mgate tproxy-start → iptables 重定向生效</td></tr>
 </tbody></table>
 </div>
 <div class="card">
@@ -4843,7 +4843,7 @@ tproxy_dns_switch() {
             rm -f "$AP_DNSMASQ_PID_FILE" 2>/dev/null || true
         fi
         attempt=$((attempt + 1))
-        sleep 1
+        [ "$attempt" -lt 2 ] && sleep 1
     done
     return 1
 }
@@ -6231,7 +6231,7 @@ cmd_tproxy_dry_run() {
 
     tproxy_plan_section "dry-run commands not executed"
     say "# tproxy-port $TPROXY_PORT is always in mihomo config; no config modification at runtime"
-    say "# prerequisite: mgate start (mihomo must be running and port $TPROXY_PORT listening)"
+    say "# prerequisite: mgate core-start (mihomo must be running and port $TPROXY_PORT listening)"
     say "ip rule add fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
     say "ip route add local 0.0.0.0/0 dev lo table $TPROXY_ROUTE_TABLE"
     say "iptables -t mangle -N $TPROXY_MANGLE_CHAIN"
@@ -6856,7 +6856,7 @@ cmd_tproxy_start() {
     tproxy_start_preflight || return 1
 
     if ! tproxy_mihomo_running; then
-        tproxy_save_error "mihomo is not running; run: mgate start"
+        tproxy_save_error "mihomo is not running; run: mgate core-start"
         return 1
     fi
     tproxy_ok "mihomo running"
@@ -6922,14 +6922,20 @@ cmd_tproxy_stop() {
     ap_load_config
     tproxy_info "stopping mgate TProxy rules"
 
+    # Mirrors tproxy_rollback's single stop_failed flag: overall success requires
+    # both the mangle/ip-rule cleanup and the DNS restore to have actually
+    # succeeded — either one failing means tproxy-stop did not fully return the
+    # system to a clean NAT-fallback state, and callers (including the agent
+    # JSON wrapper) must see that as a failure.
+    stop_failed=0
     if tproxy_remove_rules; then
         tproxy_ok "TProxy rules removed"
     else
         tproxy_warn "some TProxy rules may remain; inspect mgate tproxy-debug"
+        stop_failed=1
     fi
     rm -f "$TPROXY_ENABLED_FILE" 2>/dev/null || true
 
-    dns_restore_failed=0
     if [ "$(tproxy_dns_mode_current)" = "tproxy" ]; then
         tproxy_info "restoring dnsmasq direct DNS (NAT fallback)"
         if tproxy_dns_switch direct; then
@@ -6940,14 +6946,14 @@ cmd_tproxy_stop() {
             # not a cosmetic warning, and must not be reported as a successful stop.
             err "failed to restore dnsmasq direct DNS; dnsmasq may now be stopped and AP clients have no DNS"
             hint "run: mgate ap-restart"
-            dns_restore_failed=1
+            stop_failed=1
         fi
     fi
 
     tproxy_log "TProxy stopped; NAT gateway fallback preserved"
     cmd_tproxy_status
     cmd_gateway_status
-    [ "$dns_restore_failed" = "0" ]
+    [ "$stop_failed" = "0" ]
 }
 
 config_mihomo_api_addr() {
@@ -7284,7 +7290,11 @@ tproxy_dns_safety_check() {
         else
             tproxy_doctor_fail "DHCP DNS option is ${dns_opt:-missing}, expected $AP_IPADDR"
         fi
-        if [ -f "$TPROXY_ENABLED_FILE" ]; then
+        # Deliberately live-only (no $TPROXY_ENABLED_FILE check): unlike
+        # ap_dnsmasq_dns_mode's "should it be tproxy mode" question, this is
+        # "is dnsmasq's config consistent with the rules that are actually live
+        # right now" — the stale marker file has no business in that answer.
+        if tproxy_core_rules_active; then
             if grep -q '^no-resolv$' "$AP_DNSMASQ_CONF" 2>/dev/null && grep -q "^server=127.0.0.1#$TPROXY_DNS_PORT$" "$AP_DNSMASQ_CONF" 2>/dev/null; then
                 tproxy_doctor_ok "dnsmasq forwards DNS through mihomo (127.0.0.1#$TPROXY_DNS_PORT), no leak"
             else
@@ -9353,7 +9363,11 @@ cmd_agent_mutation_json() {
         restore) _mutation_fn=cmd_restore ;;
         *) AGENT_MUTATION_HANDLED=0; return 1 ;;
     esac
-    "$_mutation_fn" "$@" >/dev/null 2>&1
+    # Run in a subshell: several mutation functions (e.g. cmd_ap_start) call
+    # die(), which does exit(1). Without a subshell that exit would terminate
+    # the whole mgate process here, skipping the JSON response below entirely
+    # and leaving the agent with no output at all instead of {"ok":false,...}.
+    ( "$_mutation_fn" "$@" ) >/dev/null 2>&1
     _mutation_rc=$?
     if [ "$_mutation_rc" -eq 0 ]; then
         printf '{"ok":true,"message":"operation completed"}\n'
@@ -10430,7 +10444,7 @@ cmd_restore() {
     fi
 
     ok "备份已恢复：$id"
-    hint "建议执行：mgate test && mgate restart"
+    hint "建议执行：mgate core-test && mgate core-restart"
 }
 
 cmd_config() {
@@ -10446,7 +10460,7 @@ cmd_edit() {
     if [ -z "$editor" ]; then
         err "未找到可用编辑器"
         say "请先安装 vi / vim / nano / micro，或手动编辑：$CONFIG_FILE"
-        say "也可以临时指定编辑器，例如：EDITOR=/path/to/editor mgate edit"
+        say "也可以临时指定编辑器，例如：EDITOR=/path/to/editor mgate core-edit"
         return 1
     fi
 
@@ -10902,7 +10916,7 @@ cmd_migrate() {
 
     if [ "$MIGRATE_CONFIG_CHANGED" -eq 1 ]; then
         step "配置已更新，重启 mihomo 使其生效"
-        service_restart || warn "重启 mihomo 失败，请手动执行：mgate restart"
+        service_restart || warn "重启 mihomo 失败，请手动执行：mgate core-restart"
     else
         ok "配置无需变更"
     fi
@@ -12069,7 +12083,7 @@ cmd_proxy_info() {
     step "TProxy 透明代理端口"
     info "端口：$tproxy_port"
     info "用途：AP 客户端流量由 iptables mangle/TPROXY 规则自动重定向至此端口"
-    info "前提：mgate start 后端口即监听；mgate tproxy-start 后流量才实际进入"
+    info "前提：mgate core-start 后端口即监听；mgate tproxy-start 后流量才实际进入"
 }
 
 cmd_version() {
