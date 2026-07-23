@@ -269,6 +269,10 @@ mgate agent uninstall               # 卸载组件，保留原有配置
 
 > 💡 如果安装后无法启动，先执行 `mgate agent doctor`；确认设备已绑定后，再执行 `mgate agent start`。
 
+`mgate agent-snapshot` 额外带一个 `modules` 字段，逐个报告 core/ap/tproxy/gateway/subscription/wifi 六个模块是否就绪（`ready`/`missing_dependencies`/`not_configured`/`unsupported`/`blocked`）。云端确认后可下发对应的 `*-prepare` 动作，让设备无人值守地装好固定、可审计的缺失依赖并复检——这些 prepare 动作只在 agent 上下文里生效，不会启动服务、不改路由规则、不写用户配置，也不能在设备终端上直接敲出来。字段和动作的具体细节见 `mgate.sh` 源码里 `cmd_agent_snapshot`/`cmd_capabilities_json` 的注释。
+
+云端下发 self-update 时，设备会把 `mgate.sh` 自升级和 `mgate-agent` 自升级合并成一个组合升级任务，调度到独立的 systemd transient unit 里执行固定的内部 worker（避免 mgate-agent 在升级自己时把发起升级的进程连带杀死）；worker 依次执行 migrate、Web 管理若升级前在运行则自动重启一次（人工执行 `mgate migrate`/`mgate self-update` 时仍和以前一样只提示手动 `mgate web-restart`，自动重启只在这个无人值守 worker 里发生）、再更新 mgate-agent。这时返回成功只代表任务已安全调度，实际完成状态记录在 `agent-snapshot` 的 `agent.upgrade` 字段（`idle`/`scheduled`/`running`/`succeeded`/`failed`），供云端轮询确认。人工在设备上直接执行 `mgate self-update` 行为不受影响。`agent.version` 会自动规范化为纯发布版本号（如 `v0.2.0`），不会带上 `mgate-agent ` 前缀。
+
 ### 💾 备份与恢复
 
 ```sh

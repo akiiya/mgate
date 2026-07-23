@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.5.10"
+MGATE_VERSION="0.6.0"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -100,6 +100,9 @@ MGATE_AGENT_LOG_DIR="/var/log/mgate-agent"
 MGATE_AGENT_CREDS_FILE="/var/lib/mgate-agent/credentials.json"
 MGATE_AGENT_TOKEN_FILE_DEFAULT="/etc/mgate-agent/install-token"
 MGATE_AGENT_ACTIVE_TOKEN=""
+MGATE_AGENT_UPGRADE_UNIT="mgate-agent-upgrade"
+MGATE_AGENT_UPGRADE_STATUS_FILE="$MGATE_AGENT_DATA_DIR/combined-upgrade-status.json"
+MGATE_AGENT_UPGRADE_LOCK_DIR="$RUN_DIR/agent-upgrade-schedule.lock"
 
 REPO="MetaCubeX/mihomo"
 GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
@@ -160,6 +163,33 @@ die() {
 
 have() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# Shared, non-interactive package-manager helpers for the agent "*-prepare"
+# commands. Deliberately no read/tty/confirmation gate here — that belongs to
+# the human-interactive commands (e.g. ap_confirm_install); callers running
+# under agent context must never block on stdin. Debian/Ubuntu only, matching
+# every other install path in this script.
+pkg_manager_detect() {
+    if have apt-get; then
+        PKG_MANAGER_CMD="apt-get"
+    elif have apt; then
+        PKG_MANAGER_CMD="apt"
+    else
+        PKG_MANAGER_CMD=""
+        return 1
+    fi
+}
+
+pkg_manager_install_available() {
+    pkg_manager_detect >/dev/null 2>&1
+}
+
+pkg_manager_install() {
+    pkg_list="$1"
+    pkg_manager_detect || return 1
+    "$PKG_MANAGER_CMD" update >/dev/null 2>&1 || return 1
+    "$PKG_MANAGER_CMD" install -y $pkg_list >/dev/null 2>&1 || return 1
 }
 
 # mgate-agent sets this for cloud Action subprocesses. It is a call-context
@@ -1074,6 +1104,101 @@ service_status() {
     esac
 }
 
+agent_module_check_core() {
+    module_check_reset
+
+    if [ -x "$CORE_BIN" ] && "$CORE_BIN" -v >/dev/null 2>&1; then
+        module_check_add "mihomo_binary" "ready" "false" "mihomo binary present and runnable"
+    elif [ -x "$CORE_BIN" ]; then
+        module_check_add "mihomo_binary" "missing_dependencies" "false" "mihomo binary present but failed to run"
+    else
+        module_check_add "mihomo_binary" "missing_dependencies" "true" "mihomo binary not installed"
+    fi
+
+    if [ -f "$CONFIG_FILE" ]; then
+        if [ -x "$CORE_BIN" ] && "$CORE_BIN" -t -f "$CONFIG_FILE" >/dev/null 2>&1; then
+            module_check_add "config_exists" "ready" "false" "config.yaml present and valid"
+        elif [ -x "$CORE_BIN" ]; then
+            module_check_add "config_exists" "missing_dependencies" "false" "config.yaml present but failed validation"
+        else
+            module_check_add "config_exists" "ready" "false" "config.yaml present"
+        fi
+    else
+        module_check_add "config_exists" "missing_dependencies" "true" "config.yaml not present"
+    fi
+
+    _core_dirs_ok=1
+    for _d in "$RUN_DIR" "$DATA_DIR" "$LOG_DIR"; do
+        [ -d "$_d" ] && [ -w "$_d" ] || _core_dirs_ok=0
+    done
+    if [ "$_core_dirs_ok" -eq 1 ]; then
+        module_check_add "run_dirs_writable" "ready" "false" "run/data/log directories writable"
+    else
+        module_check_add "run_dirs_writable" "missing_dependencies" "true" "run/data/log directories missing or not writable"
+    fi
+
+    module_check_add "service_management" "ready" "false" "service mode: $(detect_service_mode)"
+}
+
+cmd_agent_core_prepare_json() {
+    agent_prepare_require_root "core" || return 1
+
+    agent_module_check_core
+    _before_state_json="$(module_check_state_only)"
+    _remediable="$MODULE_REMEDIABLE_IDS"
+
+    if [ "$MODULE_ROLLUP_STATE" = "ready" ]; then
+        agent_prepare_already_ready_json "core"
+        return 0
+    elif [ "$MODULE_ROLLUP_STATE" != "missing_dependencies" ]; then
+        agent_prepare_failure_json "core" "$MODULE_ROLLUP_STATE" "nothing installable for core module"
+        return 1
+    elif [ -z "$_remediable" ]; then
+        agent_prepare_failure_json "core" "missing_dependencies" "no remediable items available for core module"
+        return 1
+    fi
+
+    _changed=""
+    _fail=0
+    for _id in $_remediable; do
+        case "$_id" in
+            mihomo_binary)
+                if ( install_core ) >/dev/null 2>&1; then
+                    _changed="${_changed} mihomo_binary"
+                else
+                    _fail=1
+                fi
+                ;;
+            config_exists)
+                if ( generate_config ) >/dev/null 2>&1; then
+                    _changed="${_changed} config.yaml"
+                else
+                    _fail=1
+                fi
+                ;;
+            run_dirs_writable)
+                if ( ensure_dirs ) >/dev/null 2>&1; then
+                    _changed="${_changed} run_dirs"
+                else
+                    _fail=1
+                fi
+                ;;
+        esac
+    done
+    _changed="${_changed# }"
+
+    agent_module_check_core
+    _after_state_json="$(module_check_state_only)"
+
+    if [ "$_fail" -eq 0 ]; then
+        agent_prepare_success_json "core" "dependencies prepared" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 0
+    else
+        agent_prepare_partial_failure_json "core" "install_failed" "one or more prepare steps failed" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 1
+    fi
+}
+
 remove_service_files() {
     mode="$(detect_service_mode)"
     case "$mode" in
@@ -1105,6 +1230,550 @@ validate_mgate_script() {
     grep -q 'APP_NAME="mgate"' "$file" || die "下载内容不是有效 mgate 脚本：缺少 APP_NAME"
     grep -q '^MGATE_VERSION=' "$file" || die "下载内容不是有效 mgate 脚本：缺少 MGATE_VERSION"
     grep -q 'main "\$@"' "$file" || die "下载内容不是有效 mgate 脚本：缺少入口调用"
+}
+
+agent_upgrade_status_write() {
+    # $1=state $2=message $3=exit_code(empty -> null) $4=updated_at(empty -> now)
+    # Atomic write (temp file + mv) of a small, fixed-shape JSON status blob.
+    # Every field here is either a hardcoded literal from this file or a
+    # numeric exit code / timestamp — never cloud input, tokens, URLs, or raw
+    # command output, since cmd_agent_snapshot() re-exposes this verbatim.
+    # Returns non-zero if the write itself failed -- callers must not assume
+    # success just because a best-effort cleanup afterward happens to succeed.
+    _aus_state="$1"; _aus_msg="$2"; _aus_ec="${3:-}"; _aus_ts="${4:-}"
+    [ -n "$_aus_ts" ] || _aus_ts="$(date +%s 2>/dev/null || printf '0')"
+    mkdir -p "$MGATE_AGENT_DATA_DIR" 2>/dev/null || true
+    _aus_tmp="${MGATE_AGENT_UPGRADE_STATUS_FILE}.tmp.$$"
+    printf '{"state":%s,"message":%s,"exit_code":%s,"updated_at":%s}\n' \
+        "$(json_string "$_aus_state")" \
+        "$(json_string "$_aus_msg")" \
+        "$(json_number_or_null "$_aus_ec")" \
+        "$(json_number_or_null "$_aus_ts")" \
+        > "$_aus_tmp" 2>/dev/null
+    _aus_rc=$?
+    if [ "$_aus_rc" -eq 0 ]; then
+        mv "$_aus_tmp" "$MGATE_AGENT_UPGRADE_STATUS_FILE" 2>/dev/null
+        _aus_rc=$?
+    fi
+    [ "$_aus_rc" -eq 0 ] || rm -f "$_aus_tmp" 2>/dev/null
+    return "$_aus_rc"
+}
+
+AGENT_UPGRADE_STATE="idle"
+AGENT_UPGRADE_MESSAGE=""
+AGENT_UPGRADE_EXIT_CODE=""
+AGENT_UPGRADE_UPDATED_AT=""
+
+agent_upgrade_status_read() {
+    # Populates AGENT_UPGRADE_* globals. Never trusts the file's raw bytes:
+    # each scalar is pulled out individually, and the FULL combination of
+    # state+message+exit_code+updated_at must match one of the exact shapes
+    # agent_upgrade_status_write()/the worker ever actually produce — any
+    # single missing, mismatched, or malformed field downgrades the WHOLE
+    # record to "idle", never a partially-trusted mix. This can never inject
+    # arbitrary content into cmd_agent_snapshot()'s JSON.
+    AGENT_UPGRADE_STATE="idle"
+    AGENT_UPGRADE_MESSAGE=""
+    AGENT_UPGRADE_EXIT_CODE=""
+    AGENT_UPGRADE_UPDATED_AT=""
+    [ -f "$MGATE_AGENT_UPGRADE_STATUS_FILE" ] || return 0
+    _aur_raw="$(cat "$MGATE_AGENT_UPGRADE_STATUS_FILE" 2>/dev/null || true)"
+    [ -n "$_aur_raw" ] || return 0
+
+    _aur_state="$(printf '%s' "$_aur_raw" | \
+        sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    _aur_msg="$(printf '%s' "$_aur_raw" | \
+        sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    # exit_code/updated_at are bare JSON tokens (a number or the literal
+    # null), never quoted -- capture up to the next `,`/`}` and classify.
+    _aur_ec_raw="$(printf '%s' "$_aur_raw" | \
+        sed -n 's/.*"exit_code"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p' | head -1)"
+    _aur_ts_raw="$(printf '%s' "$_aur_raw" | \
+        sed -n 's/.*"updated_at"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p' | head -1)"
+
+    case "$_aur_ec_raw" in
+        null) _aur_ec="null" ;;
+        ''|*[!0-9]*) _aur_ec="INVALID" ;;
+        *) _aur_ec="$_aur_ec_raw" ;;
+    esac
+    case "$_aur_ts_raw" in
+        ''|0|*[!0-9]*) _aur_ts="INVALID" ;;
+        *) _aur_ts="$_aur_ts_raw" ;;
+    esac
+    [ "$_aur_ts" != "INVALID" ] || return 0
+
+    # Whitelist the exact combination each state is ever written with. A
+    # message that doesn't match one of the fixed literals this file itself
+    # produces, or an exit_code shape that doesn't fit the state, is treated
+    # as tampered/stale-schema and falls back to idle rather than partially
+    # trusted.
+    case "$_aur_state" in
+        scheduled)
+            [ "$_aur_msg" = "combined upgrade scheduled" ] || return 0
+            [ "$_aur_ec" = "null" ] || return 0
+            ;;
+        running)
+            [ "$_aur_msg" = "combined upgrade running" ] || return 0
+            [ "$_aur_ec" = "null" ] || return 0
+            ;;
+        succeeded)
+            [ "$_aur_msg" = "combined upgrade succeeded" ] || return 0
+            [ "$_aur_ec" = "0" ] || return 0
+            ;;
+        failed)
+            case "$_aur_msg" in
+                "systemd-run not available"|"systemd-run scheduling failed"| \
+                "migrate step failed"|"web restart step failed"| \
+                "agent update step failed"|"combined upgrade interrupted") : ;;
+                *) return 0 ;;
+            esac
+            case "$_aur_ec" in
+                INVALID|0) return 0 ;;
+            esac
+            ;;
+        *) return 0 ;;
+    esac
+
+    AGENT_UPGRADE_STATE="$_aur_state"
+    AGENT_UPGRADE_MESSAGE="$_aur_msg"
+    [ "$_aur_ec" = "null" ] && AGENT_UPGRADE_EXIT_CODE="" || AGENT_UPGRADE_EXIT_CODE="$_aur_ec"
+    AGENT_UPGRADE_UPDATED_AT="$_aur_ts"
+    return 0
+}
+
+# Deliberately generous, not a short timeout: only ever used ALONGSIDE
+# confirming the transient unit is not active (see
+# agent_upgrade_status_reconcile_for_snapshot below), and large enough to
+# never misjudge a real worker still downloading a large mgate-agent release
+# over a slow/metered connection as abandoned.
+AGENT_UPGRADE_STALE_GRACE_SECONDS=1800
+
+agent_upgrade_status_reconcile_for_snapshot() {
+    # Wraps agent_upgrade_status_read() with ONE extra, read-only safety net
+    # that ONLY cmd_agent_snapshot() applies -- never the scheduler's or the
+    # worker's own internal signal-handling re-reads (agent_upgrade_
+    # signal_abort / agent_upgrade_worker_finalize_interrupted), whose "did
+    # my own write already land" logic must not be second-guessed by this.
+    #
+    # SIGKILL and power loss are the one class of failure no trap can ever
+    # catch, so neither the scheduler nor the worker gets a chance to update
+    # the status file when either happens mid-flight. Left alone, a
+    # "scheduled" or "running" record from that dead attempt would sit there
+    # forever, and Cloud (which treats both states as "upgrade in progress")
+    # would refuse every future self-update retry permanently.
+    #
+    # Recovery requires BOTH independent signals before treating a
+    # scheduled/running record as abandoned, not either alone:
+    #   1. the transient unit is confirmed NOT active right now -- if it
+    #      were, the scheduler/worker inside it is still legitimately alive
+    #      and will move the status forward itself; and
+    #   2. the record is older than AGENT_UPGRADE_STALE_GRACE_SECONDS -- a
+    #      generously long grace period, since "scheduled but not active
+    #      yet" is also the perfectly normal state in the brief window
+    #      between writing "scheduled" and systemd-run's own registration
+    #      completing, and a genuinely still-running worker can legitimately
+    #      take a while (downloading a release tarball). Elapsed time alone,
+    #      even a long one, is never sufficient by itself -- only the
+    #      combination with "confirmed not active" is.
+    #
+    # Never writes anything back to disk -- cmd_agent_snapshot() stays
+    # read-only/side-effect-free; the next real self-update attempt's own
+    # writes naturally supersede whatever is reported here.
+    agent_upgrade_status_read
+    case "$AGENT_UPGRADE_STATE" in
+        scheduled|running) : ;;
+        *) return 0 ;;
+    esac
+    systemctl is-active "${MGATE_AGENT_UPGRADE_UNIT}.service" >/dev/null 2>&1 && return 0
+
+    [ -n "$AGENT_UPGRADE_UPDATED_AT" ] || return 0
+    case "$AGENT_UPGRADE_UPDATED_AT" in ''|*[!0-9]*) return 0 ;; esac
+    _ausrs_now="$(date +%s 2>/dev/null || printf '0')"
+    _ausrs_age=$((_ausrs_now - AGENT_UPGRADE_UPDATED_AT))
+    [ "$_ausrs_age" -ge "$AGENT_UPGRADE_STALE_GRACE_SECONDS" ] || return 0
+
+    AGENT_UPGRADE_STATE="failed"
+    AGENT_UPGRADE_MESSAGE="combined upgrade interrupted"
+    AGENT_UPGRADE_EXIT_CODE=""
+    AGENT_UPGRADE_UPDATED_AT="$_ausrs_now"
+}
+
+agent_upgrade_lock_release() {
+    rm -rf "$MGATE_AGENT_UPGRADE_LOCK_DIR" 2>/dev/null || true
+}
+
+agent_upgrade_lock_finish_acquire() {
+    # $1 = a lock dir this process just created via mkdir, called as the
+    # IMMEDIATE next statement after that mkdir succeeds (both call sites in
+    # agent_upgrade_lock_try_acquire below). Ownership (_aslu_acquired) is
+    # recorded here, as the very first thing this function does -- BEFORE
+    # attempting the pid marker write, not after. mkdir succeeding is what
+    # actually grants ownership of the directory; if a signal lands during
+    # (or right after) the pid-marker write that follows, the EXIT trap in
+    # agent_schedule_combined_upgrade_locked() must still see ownership as
+    # true so it cleans up. Setting the flag any later -- e.g. back in the
+    # caller, only after this whole function has returned -- would leave a
+    # window where a signal arriving right then leaks the lock forever,
+    # which is exactly the bug this ordering closes.
+    #
+    # If the pid marker write itself fails, the lock this process just
+    # created is released immediately and ownership is reset back to false:
+    # a marker-less dir is indistinguishable from "a legitimate acquisition
+    # mid-flight" (see the no-pid-file == busy rule below), so silently
+    # tolerating a write failure here would create a permanent, unrecoverable
+    # ambiguous lock that nothing could ever safely reclaim -- and the EXIT
+    # trap must not think it still owns a lock that was just torn down.
+    _aslu_acquired=1
+    if printf '%s\n' "$$" > "$1/pid" 2>/dev/null; then
+        return 0
+    fi
+    logger -t mgate "combined upgrade: failed to persist lock pid marker, releasing lock"
+    rm -rf "$1" 2>/dev/null
+    _aslu_acquired=0
+    return 1
+}
+
+agent_upgrade_lock_try_acquire() {
+    # Atomically acquires MGATE_AGENT_UPGRADE_LOCK_DIR (mkdir is the same
+    # atomic, BusyBox-compatible primitive already used by
+    # sub_update_from_url()'s lock), or safely reclaims it if the pid its
+    # previous holder recorded is provably no longer running.
+    #
+    # Boundary / why this is race-free: the lock dir can only be reclaimed
+    # when it contains a pid marker whose content is a well-formed positive
+    # integer AND that pid is confirmed dead via `kill -0`. A dead pid can
+    # never itself release the lock, so reclaiming is always safe. If the
+    # dir exists but has no pid marker, or the marker is not a clean positive
+    # integer, this is treated as busy, never auto-reclaimed -- a brand-new
+    # holder may simply not have finished writing its own marker yet (a
+    # narrow window right after its own mkdir), and there is no way to tell
+    # that apart from a corrupt/ancient leftover without a trustworthy pid to
+    # check; wrongly reclaiming here would defeat the entire point of the
+    # lock.
+    #
+    # Reclaiming itself uses an atomic rename, not rm -rf + mkdir: two
+    # callers can both observe the very same dead pid and both decide to
+    # reclaim. rm -rf + mkdir is NOT safe here -- both could "succeed" in
+    # some interleaving (A creates a fresh lock, then B's rm -rf, having
+    # already been in flight, deletes A's fresh lock instead of the stale
+    # one it thought it was removing), breaking mutual exclusion entirely.
+    # `mv` (rename) is atomic: once one caller's mv moves the stale dir into
+    # its own uniquely-named quarantine path, the source no longer exists,
+    # so every other caller's mv on that same source fails outright. The
+    # loser MUST back off without touching $MGATE_AGENT_UPGRADE_LOCK_DIR
+    # again in this attempt -- it may already belong to the winner (or an
+    # unrelated fresh caller) by the time the loser would otherwise act.
+    #
+    # The one thing this cannot ever protect against is SIGKILL/power loss
+    # happening in the instant between mkdir succeeding and the pid marker
+    # being written -- an inherently unavoidable, astronomically narrow gap
+    # for any pid-file-based lock, documented here rather than engineered
+    # around.
+    if mkdir "$MGATE_AGENT_UPGRADE_LOCK_DIR" 2>/dev/null; then
+        agent_upgrade_lock_finish_acquire "$MGATE_AGENT_UPGRADE_LOCK_DIR"
+        return $?
+    fi
+
+    _aula_holder="$(cat "$MGATE_AGENT_UPGRADE_LOCK_DIR/pid" 2>/dev/null || true)"
+    case "$_aula_holder" in
+        ''|*[!0-9]*|0) return 1 ;;
+    esac
+    kill -0 "$_aula_holder" 2>/dev/null && return 1
+
+    _aula_quarantine="${MGATE_AGENT_UPGRADE_LOCK_DIR}.stale.$$"
+    if mv "$MGATE_AGENT_UPGRADE_LOCK_DIR" "$_aula_quarantine" 2>/dev/null; then
+        logger -t mgate "combined upgrade: reclaiming stale schedule lock (holder pid $_aula_holder is no longer running)"
+        rm -rf "$_aula_quarantine" 2>/dev/null
+        if mkdir "$MGATE_AGENT_UPGRADE_LOCK_DIR" 2>/dev/null; then
+            agent_upgrade_lock_finish_acquire "$MGATE_AGENT_UPGRADE_LOCK_DIR"
+            return $?
+        fi
+        return 1
+    fi
+    # Lost the race to claim the stale lock -- someone else's mv won, or the
+    # lock changed underneath us. Never touch it further in this attempt.
+    return 1
+}
+
+agent_upgrade_signal_abort() {
+    # $1 = signal name (for logging) $2 = conventional 128+signal exit code.
+    # Called by the INT/TERM/HUP traps below. Touching the status file here
+    # is ONLY permitted when THIS invocation genuinely holds the lock
+    # ($_aslu_acquired) -- otherwise (busy/still racing for the lock) this
+    # invocation has no legitimate claim on whatever's currently in the
+    # status file, and must not touch it no matter what it contains.
+    if [ "$_aslu_acquired" != "1" ]; then
+        logger -t mgate "combined upgrade: aborted by $1 before this attempt owned the schedule lock, leaving status untouched"
+        exit "$2"
+    fi
+
+    # $_aslu_scheduled_written tracks whether THIS invocation's own
+    # "scheduled" write is known to have completed -- but there is an
+    # inherent gap between agent_upgrade_status_write() returning success and
+    # the very next statement setting that flag, and a signal can land in
+    # that gap too. Trusting the in-memory flag alone there would see
+    # _aslu_scheduled_written still "0" while the persisted status has
+    # ALREADY become "scheduled" on disk, and do nothing -- leaving Cloud
+    # stuck seeing "in progress" forever, the exact bug this function exists
+    # to prevent. So when the flag says "not yet written", re-read the
+    # persisted, strictly-validated state instead of assuming nothing
+    # happened: if it legitimately reads back as "scheduled", the write DID
+    # land (nobody else could have written it while we hold the lock, so it
+    # can only be our own write, or a stale leftover from a previous crashed
+    # attempt -- both need the exact same resolution here) and must be
+    # converted the same way the already-confirmed-written case is. Any
+    # other state (idle/succeeded/failed from an unrelated attempt, or an
+    # invalid/corrupt record) means our own write genuinely hasn't happened
+    # yet, and must be left alone.
+    _ausa_is_scheduled=0
+    if [ "$_aslu_scheduled_written" = "1" ]; then
+        _ausa_is_scheduled=1
+    else
+        agent_upgrade_status_read
+        [ "$AGENT_UPGRADE_STATE" = "scheduled" ] && _ausa_is_scheduled=1
+    fi
+
+    if [ "$_ausa_is_scheduled" = "1" ]; then
+        # Cloud treats agent.upgrade.state in {scheduled, running} as
+        # "upgrade in progress" and refuses to let the operator retry
+        # self-update -- if this process is aborting and nothing else is
+        # going to move the status forward, leaving it at "scheduled"
+        # forever would lock them out permanently. Re-check reality before
+        # deciding: if the transient unit is confirmed active despite the
+        # signal (systemd-run got far enough that the worker is genuinely
+        # running), trust the worker to report running/succeeded/failed
+        # itself and leave the status alone; otherwise write a definitive,
+        # retriable failure now.
+        if systemctl is-active "${MGATE_AGENT_UPGRADE_UNIT}.service" >/dev/null 2>&1; then
+            logger -t mgate "combined upgrade: aborted by $1 mid-schedule, but ${MGATE_AGENT_UPGRADE_UNIT} is active -- leaving status to the worker"
+        else
+            agent_upgrade_status_write "failed" "combined upgrade interrupted" "$2" ""
+            logger -t mgate "combined upgrade: aborted by $1 mid-schedule, status set to failed (interrupted)"
+        fi
+    else
+        logger -t mgate "combined upgrade: aborted by $1 before this attempt wrote its schedule status, leaving status untouched"
+    fi
+    exit "$2"
+}
+
+agent_schedule_combined_upgrade_locked() {
+    # The scheduling critical section proper. ALWAYS invoked as
+    # `( agent_schedule_combined_upgrade_locked )` by
+    # agent_schedule_combined_upgrade() below, never called directly or in
+    # the caller's own shell -- the `trap`s here must be scoped strictly to
+    # that dedicated subshell's lifetime, so a signal mid-schedule (e.g. a
+    # service manager stopping mgate.sh while this runs) still cleans up
+    # without ever touching the calling process's own traps.
+    #
+    # EXIT does cleanup only (releasing the lock if THIS invocation actually
+    # acquired it -- never someone else's, if agent_upgrade_lock_try_acquire
+    # refused because it's genuinely busy). INT/TERM/HUP each explicitly
+    # `exit` via agent_upgrade_signal_abort right after logging/status
+    # handling: a bare trap that only cleans up and RETURNS would let
+    # execution fall through to whatever this subshell was doing when the
+    # signal arrived (e.g. still waiting on systemd-run) and keep going --
+    # reporting a spurious success, or worse, writing "failed" AFTER the lock
+    # was already released, or even attempting a second systemd-run call
+    # unlocked. Calling `exit` there terminates the subshell immediately;
+    # that `exit` itself still triggers the EXIT trap above for the actual
+    # lock release.
+    _aslu_acquired=0
+    _aslu_scheduled_written=0
+    trap '[ "$_aslu_acquired" = "1" ] && agent_upgrade_lock_release; true' EXIT
+    trap 'agent_upgrade_signal_abort HUP 129' HUP
+    trap 'agent_upgrade_signal_abort INT 130' INT
+    trap 'agent_upgrade_signal_abort TERM 143' TERM
+
+    agent_upgrade_lock_try_acquire || {
+        logger -t mgate "combined upgrade: a schedule attempt is already in progress, refusing duplicate"
+        return 1
+    }
+    # Ownership (_aslu_acquired) is set by agent_upgrade_lock_try_acquire's
+    # own agent_upgrade_lock_finish_acquire helper, as the immediate next
+    # statement after its mkdir succeeds -- not here, after this whole call
+    # has already returned. See that helper's comment for why the ordering
+    # matters: a signal landing in the gap between "helper returns" and "this
+    # line runs" would otherwise leak the lock forever. (Note: mkdir
+    # succeeding and the helper actually running are still two separate
+    # shell statements -- a plain mkdir lock cannot close that gap down to
+    # zero using shell variable assignments alone. That residual,
+    # astronomically narrow window is a documented boundary, not something
+    # this design claims to eliminate entirely.)
+
+    if systemctl is-active "${MGATE_AGENT_UPGRADE_UNIT}.service" >/dev/null 2>&1; then
+        # A prior upgrade is still in flight -- its own status is authoritative;
+        # do not clobber it just because a duplicate schedule was refused.
+        logger -t mgate "combined upgrade: ${MGATE_AGENT_UPGRADE_UNIT} already running, refusing duplicate schedule"
+        return 1
+    fi
+    # Write "scheduled" BEFORE handing off to systemd-run, not after: the
+    # worker can start (and even finish, writing running/succeeded/failed)
+    # faster than systemd-run itself returns control here. Writing
+    # "scheduled" afterward would then clobber a newer, more accurate status
+    # back down to "scheduled" -- Cloud could get stuck showing a finished
+    # upgrade as forever "in progress". _aslu_scheduled_written is set
+    # immediately on success -- see agent_upgrade_signal_abort for why a
+    # signal landing before this point must never touch the status file.
+    if agent_upgrade_status_write "scheduled" "combined upgrade scheduled" "" ""; then
+        _aslu_scheduled_written=1
+    else
+        logger -t mgate "combined upgrade: failed to persist scheduled status, refusing to schedule"
+        return 1
+    fi
+    logger -t mgate "combined upgrade: scheduling ${MGATE_AGENT_UPGRADE_UNIT} (mgate.sh $MGATE_VERSION + mgate-agent update)"
+    if systemd-run --unit="$MGATE_AGENT_UPGRADE_UNIT" --collect \
+        --description="mgate combined upgrade (mgate.sh + mgate-agent)" \
+        "$SCRIPT_PATH" _agent-combined-upgrade-worker \
+        >/dev/null 2>&1
+    then
+        logger -t mgate "combined upgrade: ${MGATE_AGENT_UPGRADE_UNIT} scheduled successfully"
+        return 0
+    fi
+
+    # systemd-run itself failed. Only overwrite the status with "failed" if
+    # there is genuinely no unit active now -- re-check rather than assume:
+    # a stale leftover unit or an out-of-band race could mean a real upgrade
+    # IS in flight, in which case its own status is authoritative and must
+    # not be clobbered with a false "failed".
+    if systemctl is-active "${MGATE_AGENT_UPGRADE_UNIT}.service" >/dev/null 2>&1; then
+        logger -t mgate "combined upgrade: systemd-run reported failure but ${MGATE_AGENT_UPGRADE_UNIT} is active -- preserving its status"
+        return 1
+    fi
+    agent_upgrade_status_write "failed" "systemd-run scheduling failed" "" ""
+    logger -t mgate "combined upgrade: systemd-run scheduling failed"
+    return 1
+}
+
+agent_schedule_combined_upgrade() {
+    # Runs the mgate.sh + mgate-agent combined upgrade completely outside
+    # mgate-agent's own systemd cgroup. If mgate-agent (a systemd service with
+    # the default KillMode=control-group) is what spawned this self-update
+    # subprocess to fulfill a cloud action, calling `systemctl stop
+    # mgate-agent` directly from here would kill this very subprocess before
+    # it can finish — so the actual migrate+agent-update work is handed off
+    # to a brand-new, unrelated transient unit that survives mgate-agent
+    # being stopped. Fixed argv only, zero shell text: no cloud-supplied
+    # version/URL/args ever reaches this command line.
+    have systemd-run || {
+        logger -t mgate "combined upgrade: systemd-run not available, refusing"
+        agent_upgrade_status_write "failed" "systemd-run not available" "" ""
+        return 1
+    }
+    ( agent_schedule_combined_upgrade_locked )
+}
+
+agent_upgrade_worker_finalize_interrupted() {
+    # $1 = signal/event name (for logging) $2 = exit code to record if
+    # nothing terminal has been recorded yet. Re-reads the persisted,
+    # strictly-validated status rather than trusting _acuw_final_written
+    # alone: a signal can land in the narrow gap between a terminal
+    # agent_upgrade_status_write() call succeeding and the very next
+    # statement setting that flag, in which case the real, final
+    # succeeded/failed status is ALREADY on disk and must never be
+    # overwritten with a false "interrupted". Idempotent: safe to call more
+    # than once for the same abort (e.g. once from a signal handler, again
+    # from the EXIT trap that handler's own `exit` triggers afterward).
+    agent_upgrade_status_read
+    case "$AGENT_UPGRADE_STATE" in
+        succeeded|failed) return 0 ;;
+    esac
+    agent_upgrade_status_write "failed" "combined upgrade interrupted" "$2" ""
+    logger -t mgate "combined upgrade: worker aborted by $1, status set to failed (interrupted)"
+}
+
+agent_upgrade_worker_exit_guard() {
+    # Defensive catch-all: every normal return path in
+    # cmd_agent_combined_upgrade_worker() sets _acuw_final_written to 1
+    # immediately after writing its own terminal status, so this is a no-op
+    # in the common case. It exists so that ANY exit from this function --
+    # not just the signal paths below -- can never leave "running" stuck on
+    # disk forever.
+    [ "$_acuw_final_written" = "1" ] && return 0
+    agent_upgrade_worker_finalize_interrupted "EXIT" 1
+}
+
+agent_upgrade_worker_signal_abort() {
+    # $1 = signal name (for logging) $2 = conventional 128+signal exit code.
+    [ "$_acuw_final_written" = "1" ] || agent_upgrade_worker_finalize_interrupted "$1" "$2"
+    exit "$2"
+}
+
+cmd_agent_combined_upgrade_worker() {
+    # Entry point for the transient mgate-agent-upgrade unit ONLY (see
+    # agent_schedule_combined_upgrade). Accepts zero arguments -- this is a
+    # fixed internal command, never wired into cmd_agent_mutation_json, so no
+    # cloud-controlled input ever reaches it. Runs migrate + conditional Web
+    # restart + agent update entirely outside mgate-agent's own cgroup,
+    # recording each transition into the status file cmd_agent_snapshot()
+    # later reports.
+    #
+    # cmd_migrate() refreshes the Web management files/service files but
+    # deliberately never restarts mgate-web itself (the human-facing path
+    # just hints "run mgate web-restart") -- for an unattended combined
+    # upgrade there's no human to run that, so this worker does it here,
+    # but ONLY if Web was already running before migrate: a Web management
+    # instance that was never started, or that the operator deliberately
+    # stopped/disabled, must stay that way. This unattended auto-restart is
+    # scoped to this worker alone; plain `mgate self-update`/`mgate migrate`
+    # keep their existing human-facing behavior untouched. The restart itself
+    # uses agent_web_restart_strict(), not the human-facing web_restart(),
+    # since the latter tolerates a failed stop for an interactive operator's
+    # benefit -- this worker has no operator to notice, so it needs the
+    # strict, independently-reverified version instead.
+    #
+    # Traps here are scoped to this worker's own process (the whole transient
+    # unit IS this process; there is no further subshell to isolate) so that
+    # being stopped by INT/TERM/HUP (or completing normally, via EXIT) can
+    # never leave "running" stuck on disk forever -- see
+    # agent_upgrade_worker_finalize_interrupted for why the persisted state is
+    # re-read rather than trusted from the in-memory flag alone.
+    [ "$#" -eq 0 ] || return 2
+
+    _acuw_final_written=0
+    trap 'agent_upgrade_worker_exit_guard' EXIT
+    trap 'agent_upgrade_worker_signal_abort HUP 129' HUP
+    trap 'agent_upgrade_worker_signal_abort INT 130' INT
+    trap 'agent_upgrade_worker_signal_abort TERM 143' TERM
+
+    agent_upgrade_status_write "running" "combined upgrade running" "" ""
+    logger -t mgate "combined upgrade: worker started"
+
+    _acuw_web_was_running=0
+    web_is_running_quiet && _acuw_web_was_running=1
+
+    ( cmd_migrate ) >/dev/null 2>&1
+    _acuw_rc=$?
+    if [ "$_acuw_rc" -ne 0 ]; then
+        agent_upgrade_status_write "failed" "migrate step failed" "$_acuw_rc" ""
+        _acuw_final_written=1
+        logger -t mgate "combined upgrade: worker failed at migrate (exit $_acuw_rc)"
+        return 1
+    fi
+
+    if [ "$_acuw_web_was_running" -eq 1 ]; then
+        ( agent_web_restart_strict ) >/dev/null 2>&1
+        _acuw_rc=$?
+        if [ "$_acuw_rc" -ne 0 ]; then
+            agent_upgrade_status_write "failed" "web restart step failed" "$_acuw_rc" ""
+            _acuw_final_written=1
+            logger -t mgate "combined upgrade: worker failed at web restart (exit $_acuw_rc)"
+            return 1
+        fi
+    fi
+
+    ( cmd_agent_update --yes ) >/dev/null 2>&1
+    _acuw_rc=$?
+    if [ "$_acuw_rc" -ne 0 ]; then
+        agent_upgrade_status_write "failed" "agent update step failed" "$_acuw_rc" ""
+        _acuw_final_written=1
+        logger -t mgate "combined upgrade: worker failed at agent update (exit $_acuw_rc)"
+        return 1
+    fi
+
+    agent_upgrade_status_write "succeeded" "combined upgrade succeeded" "0" ""
+    _acuw_final_written=1
+    logger -t mgate "combined upgrade: worker succeeded"
+    return 0
 }
 
 cmd_self_update() {
@@ -1150,6 +1819,23 @@ cmd_self_update() {
 
     ok "mgate 管理脚本已更新：$SCRIPT_PATH"
     info "当前版本：$new_version"
+
+    if is_agent_context; then
+        # Under agent context, self-update is the combined mgate.sh +
+        # mgate-agent upgrade entry point. migrate/agent-update must NOT run
+        # inline in this process — see agent_schedule_combined_upgrade for
+        # why. Success here means "safely scheduled", not "finished": cloud
+        # is expected to poll agent-snapshot until both components report
+        # the new version.
+        step "调度独立升级单元执行 migrate + agent update"
+        agent_schedule_combined_upgrade || {
+            err "调度组合升级任务失败"
+            return 1
+        }
+        ok "组合升级任务已调度：$MGATE_AGENT_UPGRADE_UNIT"
+        return 0
+    fi
+
     step "自动执行 migrate 同步配置和生成文件"
     # 当前脚本已被替换，直接切换到新版进程，避免 BusyBox sh 继续读取旧文件。
     exec "$SCRIPT_PATH" migrate
@@ -4245,6 +4931,29 @@ web_fallback_status_quiet() {
     kill -0 "$pid" >/dev/null 2>&1
 }
 
+web_is_running_quiet() {
+    # Silent, side-effect-free "is Web management currently running" check --
+    # unlike web_status(), never prints anything for a human. Used by the
+    # combined-upgrade worker to decide whether it's safe to restart Web
+    # (only if it was already running) without ever parsing web_status()'s
+    # human-oriented text output.
+    mode="$(detect_service_mode)"
+    case "$mode" in
+        openwrt)
+            [ -x "$WEB_OPENWRT_SERVICE_LINK" ] && "$WEB_OPENWRT_SERVICE_LINK" status >/dev/null 2>&1
+            ;;
+        systemd)
+            [ -e "$WEB_SYSTEMD_SERVICE_LINK" ] && systemctl is-active --quiet mgate-web.service
+            ;;
+        plain)
+            web_fallback_status_quiet
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 web_fallback_start() {
     httpd_cmd="$(find_httpd_cmd || true)"
     [ -n "$httpd_cmd" ] || die "未找到可用 httpd，请安装 busybox httpd"
@@ -4313,6 +5022,47 @@ web_restart() {
     need_root
     web_stop || true
     web_start
+}
+
+agent_web_restart_strict() {
+    # Strict, non-interactive Web restart for the combined-upgrade worker
+    # ONLY -- never used by the human-facing web_restart() above, whose
+    # semantics stay exactly as they were. web_restart() calls web_stop(),
+    # which on systemd/OpenWrt deliberately swallows a failed stop (`|| true`)
+    # so a human operator's retry via web_start isn't blocked by a lingering
+    # old process; that's a reasonable interactive default, but it means "stop
+    # actually failed, so start became a silent no-op against the still-old
+    # process" could get reported back as a genuine restart success. An
+    # unattended worker has no operator to notice and retry, so this helper
+    # never tolerates that: each mode's own atomic restart-if-available
+    # primitive is used, and the result is independently re-verified
+    # (is-active / status / fallback-status) afterward -- a failure at
+    # either step is real and propagates as a real, non-zero exit code.
+    need_root
+    mode="$(detect_service_mode)"
+    case "$mode" in
+        openwrt)
+            [ -x "$WEB_OPENWRT_SERVICE_LINK" ] || return 1
+            "$WEB_OPENWRT_SERVICE_LINK" restart || return 1
+            "$WEB_OPENWRT_SERVICE_LINK" status >/dev/null 2>&1
+            return $?
+            ;;
+        systemd)
+            [ -e "$WEB_SYSTEMD_SERVICE_LINK" ] || return 1
+            systemctl restart mgate-web.service || return 1
+            systemctl is-active --quiet mgate-web.service
+            return $?
+            ;;
+        plain)
+            web_fallback_stop
+            web_fallback_start
+            web_fallback_status_quiet
+            return $?
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 web_enable() {
@@ -5057,6 +5807,119 @@ cmd_ap_install_deps() {
     ap_install_deps_run
 }
 
+ap_subnet_conflict_detected() {
+    # Narrow v1 check: does another existing interface already hold the exact
+    # AP_IPADDR? Full subnet-overlap arithmetic is out of scope — this catches
+    # the most common/severe collision, and is report-only (never remediated).
+    have ip || return 1
+    ip -4 addr show 2>/dev/null | awk -v ap_if="$AP_IF" -v ap_ip="$AP_IPADDR" '
+        /^[0-9]+: / { iface=$2; sub(/:$/, "", iface); sub(/@.*/, "", iface) }
+        $1 == "inet" {
+            split($2, a, "/")
+            if (a[1] == ap_ip && iface != ap_if) { found=1 }
+        }
+        END { exit (found ? 0 : 1) }
+    '
+}
+
+agent_module_check_ap() {
+    agent_module_check_wifi
+    _ap_wifi_ready=0
+    [ "$MODULE_ROLLUP_STATE" = "ready" ] && _ap_wifi_ready=1
+
+    ap_load_config
+    module_check_reset
+
+    _ap_bins_missing=""
+    for _b in hostapd dnsmasq iw ip; do
+        have "$_b" || _ap_bins_missing="${_ap_bins_missing} $_b"
+    done
+    _ap_bins_missing="${_ap_bins_missing# }"
+    AP_MODULE_MISSING_BINS="$_ap_bins_missing"
+    if [ -z "$_ap_bins_missing" ]; then
+        module_check_add "dep_binaries" "ready" "false" "hostapd/dnsmasq/iw/ip all present"
+    else
+        module_check_add "dep_binaries" "missing_dependencies" "true" "missing: $_ap_bins_missing"
+    fi
+
+    if [ "$_ap_wifi_ready" -eq 1 ] && interface_exists "$AP_UPSTREAM"; then
+        module_check_add "upstream_interface" "ready" "false" "upstream wireless interface present"
+    else
+        module_check_add "upstream_interface" "blocked" "false" "wifi module not ready or upstream interface missing"
+    fi
+
+    module_check_add "ap_mode_support" "ready" "false" "not known to be unsupported"
+
+    _ap_pass_len="$(printf '%s' "$AP_PASSWORD" | wc -c | awk '{print $1}')"
+    if [ -n "$AP_SSID" ] && [ "$_ap_pass_len" -ge 8 ] 2>/dev/null && [ "$_ap_pass_len" -le 63 ] 2>/dev/null; then
+        module_check_add "ap_config" "ready" "false" "SSID and password configured"
+    else
+        module_check_add "ap_config" "not_configured" "false" "AP SSID/password missing or invalid"
+    fi
+
+    if ap_subnet_conflict_detected; then
+        module_check_add "subnet_port_conflict" "missing_dependencies" "false" "AP subnet address already in use by another interface"
+    else
+        module_check_add "subnet_port_conflict" "ready" "false" "no subnet conflict detected"
+    fi
+}
+
+cmd_agent_ap_prepare_json() {
+    agent_prepare_require_root "ap" || return 1
+
+    agent_module_check_ap
+    _before_state_json="$(module_check_state_only)"
+    _remediable="$MODULE_REMEDIABLE_IDS"
+    _missing_bins="$AP_MODULE_MISSING_BINS"
+
+    if [ "$MODULE_ROLLUP_STATE" = "ready" ]; then
+        agent_prepare_already_ready_json "ap"
+        return 0
+    elif [ "$MODULE_ROLLUP_STATE" != "missing_dependencies" ]; then
+        agent_prepare_failure_json "ap" "$MODULE_ROLLUP_STATE" "nothing installable for ap module"
+        return 1
+    elif [ -z "$_remediable" ]; then
+        agent_prepare_failure_json "ap" "missing_dependencies" "no remediable items available for ap module"
+        return 1
+    fi
+
+    if ! pkg_manager_install_available; then
+        agent_prepare_failure_json "ap" "package_manager_unavailable" "no supported package manager found"
+        return 1
+    fi
+
+    _changed=""
+    _fail=0
+    for _id in $_remediable; do
+        case "$_id" in
+            dep_binaries)
+                if pkg_manager_install "$AP_DEP_PACKAGES"; then
+                    for _b in $_missing_bins; do
+                        case "$_b" in
+                            ip) _changed="${_changed} iproute2" ;;
+                            *) _changed="${_changed} $_b" ;;
+                        esac
+                    done
+                else
+                    _fail=1
+                fi
+                ;;
+        esac
+    done
+    _changed="${_changed# }"
+
+    agent_module_check_ap
+    _after_state_json="$(module_check_state_only)"
+
+    if [ "$_fail" -eq 0 ]; then
+        agent_prepare_success_json "ap" "dependencies prepared" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 0
+    else
+        agent_prepare_partial_failure_json "ap" "install_failed" "one or more prepare steps failed" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 1
+    fi
+}
+
 ap_preflight_for_start() {
     if ap_run_check; then
         return 0
@@ -5319,6 +6182,96 @@ gateway_check_env() {
 
 cmd_gateway_check() {
     gateway_check_env
+}
+
+agent_module_check_gateway() {
+    agent_module_check_ap
+    _gw_ap_ready=0
+    [ "$MODULE_ROLLUP_STATE" = "ready" ] && _gw_ap_ready=1
+
+    agent_module_check_wifi
+    _gw_wifi_ready=0
+    [ "$MODULE_ROLLUP_STATE" = "ready" ] && _gw_wifi_ready=1
+
+    ap_load_config
+    module_check_reset
+
+    if [ "$_gw_ap_ready" -eq 1 ]; then
+        module_check_add "ap_ready" "ready" "false" "ap module ready"
+    else
+        module_check_add "ap_ready" "blocked" "false" "ap module not ready"
+    fi
+
+    if [ "$_gw_wifi_ready" -eq 1 ] && ip route show default 2>/dev/null | grep -q "dev $AP_UPSTREAM"; then
+        module_check_add "upstream_route" "ready" "false" "default route via upstream interface"
+    else
+        module_check_add "upstream_route" "blocked" "false" "wifi module not ready or no default route via upstream"
+    fi
+
+    if gateway_have_iptables && have ip; then
+        module_check_add "nat_iptables_backend" "ready" "false" "iptables and iproute2 present"
+    else
+        module_check_add "nat_iptables_backend" "missing_dependencies" "true" "iptables/iproute2 not installed"
+    fi
+
+    _gw_fwd="$(gateway_ip_forward_value)"
+    if [ "$_gw_fwd" = "1" ]; then
+        module_check_add "ip_forward" "ready" "false" "ipv4 forwarding enabled"
+    else
+        # Deliberately remediable:false, always — flipping this is equivalent
+        # to half-starting the gateway itself, which prepare must never do.
+        module_check_add "ip_forward" "missing_dependencies" "false" "ipv4 forwarding disabled (not touched by prepare)"
+    fi
+}
+
+cmd_agent_gateway_prepare_json() {
+    agent_prepare_require_root "gateway" || return 1
+
+    agent_module_check_gateway
+    _before_state_json="$(module_check_state_only)"
+    _remediable="$MODULE_REMEDIABLE_IDS"
+
+    if [ "$MODULE_ROLLUP_STATE" = "ready" ]; then
+        agent_prepare_already_ready_json "gateway"
+        return 0
+    elif [ "$MODULE_ROLLUP_STATE" != "missing_dependencies" ]; then
+        agent_prepare_failure_json "gateway" "$MODULE_ROLLUP_STATE" "nothing installable for gateway module"
+        return 1
+    elif [ -z "$_remediable" ]; then
+        agent_prepare_failure_json "gateway" "missing_dependencies" "no remediable items available for gateway module"
+        return 1
+    fi
+
+    if ! pkg_manager_install_available; then
+        agent_prepare_failure_json "gateway" "package_manager_unavailable" "no supported package manager found"
+        return 1
+    fi
+
+    _changed=""
+    _fail=0
+    for _id in $_remediable; do
+        case "$_id" in
+            nat_iptables_backend)
+                if pkg_manager_install "iptables iproute2"; then
+                    _changed="${_changed} iptables iproute2"
+                else
+                    _fail=1
+                fi
+                ;;
+        esac
+    done
+    _changed="${_changed# }"
+
+    agent_module_check_gateway
+    _after_state_json="$(module_check_state_only)"
+
+    if [ "$_fail" -eq 0 ]; then
+        agent_prepare_success_json "gateway" "dependencies prepared" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 0
+    else
+        agent_prepare_partial_failure_json "gateway" "install_failed" "one or more prepare steps failed" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 1
+    fi
 }
 
 gateway_enable_ip_forward() {
@@ -5842,6 +6795,46 @@ tproxy_module_hint_one() {
     tproxy_warn "$mod: not loaded or unknown"
 }
 
+tproxy_kernel_module_state() {
+    # Tri-state (via stdout): "loaded" | "available" (modprobe dry-run only) | "unavailable"
+    mod="$1"
+    if [ -r /proc/modules ] && grep -q "^$mod[[:space:]]" /proc/modules 2>/dev/null; then
+        printf 'loaded\n'
+        return 0
+    fi
+    if have modprobe && modprobe -n -v "$mod" >/dev/null 2>&1; then
+        printf 'available\n'
+        return 0
+    fi
+    # Always return 0: the tri-state result is conveyed entirely via stdout.
+    # Callers capture this via `var="$(tproxy_kernel_module_state ...)"`, and a
+    # nonzero exit here would abort any caller running under `set -e`
+    # (including our own test scripts) even though "unavailable" is a normal,
+    # expected outcome, not an error.
+    printf 'unavailable\n'
+    return 0
+}
+
+tproxy_prepare_load_kernel_modules() {
+    # Loads only modules modprobe's dry-run confirms are available but not
+    # currently loaded — a narrow, reversible action. Never attempts a module
+    # modprobe can't resolve at all (that's unsupported, not installable).
+    TPROXY_PREPARE_MODULES_LOADED=""
+    failed=0
+    for mod in xt_TPROXY nf_tproxy_ipv4 xt_socket nf_defrag_ipv4; do
+        state="$(tproxy_kernel_module_state "$mod")"
+        if [ "$state" = "available" ]; then
+            if modprobe "$mod" >/dev/null 2>&1; then
+                TPROXY_PREPARE_MODULES_LOADED="${TPROXY_PREPARE_MODULES_LOADED} $mod"
+            else
+                failed=1
+            fi
+        fi
+    done
+    TPROXY_PREPARE_MODULES_LOADED="${TPROXY_PREPARE_MODULES_LOADED# }"
+    [ "$failed" -eq 0 ]
+}
+
 tproxy_mangle_table_available() {
     gateway_have_iptables || return 1
     iptables -t mangle -S >/dev/null 2>&1
@@ -6022,6 +7015,138 @@ cmd_tproxy_check() {
         no) tproxy_warn "TProxy is not configured yet" ;;
         *) tproxy_warn "TProxy state: unknown" ;;
     esac
+}
+
+agent_module_check_tproxy() {
+    agent_module_check_core
+    _tp_core_ready=0
+    [ "$MODULE_ROLLUP_STATE" = "ready" ] && _tp_core_ready=1
+
+    agent_module_check_ap
+    _tp_ap_ready=0
+    [ "$MODULE_ROLLUP_STATE" = "ready" ] && _tp_ap_ready=1
+
+    agent_module_check_gateway
+    _tp_gateway_ready=0
+    [ "$MODULE_ROLLUP_STATE" = "ready" ] && _tp_gateway_ready=1
+
+    ap_load_config
+    module_check_reset
+
+    if [ "$_tp_core_ready" -eq 1 ]; then
+        module_check_add "core_ready" "ready" "false" "core module ready"
+    else
+        module_check_add "core_ready" "blocked" "false" "core module not ready"
+    fi
+
+    if [ "$_tp_ap_ready" -eq 1 ]; then
+        module_check_add "ap_ready" "ready" "false" "ap module ready"
+    else
+        module_check_add "ap_ready" "blocked" "false" "ap module not ready"
+    fi
+
+    if [ "$_tp_gateway_ready" -eq 1 ] && gateway_rules_active; then
+        module_check_add "gateway_ready" "ready" "false" "NAT fallback active"
+    else
+        module_check_add "gateway_ready" "blocked" "false" "gateway module not ready or NAT fallback not active"
+    fi
+
+    if have ip && gateway_have_iptables; then
+        module_check_add "ip_tools" "ready" "false" "ip and iptables present"
+    else
+        module_check_add "ip_tools" "missing_dependencies" "true" "ip/iptables not installed"
+    fi
+
+    if ! gateway_have_iptables; then
+        # iptables itself missing is already captured by ip_tools above; don't
+        # also claim a kernel-level "unsupported" here, or prepare would refuse
+        # to fix the real (installable) root cause once iptables is present.
+        module_check_add "kernel_tproxy_target" "missing_dependencies" "false" "cannot verify: iptables not installed"
+    elif tproxy_target_available; then
+        module_check_add "kernel_tproxy_target" "ready" "false" "TPROXY iptables target available"
+    else
+        module_check_add "kernel_tproxy_target" "unsupported" "false" "TPROXY iptables target unavailable on this kernel/build"
+    fi
+
+    _tp_mod_missing=""
+    _tp_mod_unavailable=0
+    for _m in xt_TPROXY nf_tproxy_ipv4 xt_socket nf_defrag_ipv4; do
+        _st="$(tproxy_kernel_module_state "$_m")"
+        case "$_st" in
+            available) _tp_mod_missing="${_tp_mod_missing} $_m" ;;
+            unavailable) _tp_mod_unavailable=1 ;;
+        esac
+    done
+    _tp_mod_missing="${_tp_mod_missing# }"
+    if [ "$_tp_mod_unavailable" -eq 1 ]; then
+        module_check_add "kernel_module_loaded" "unsupported" "false" "one or more TPROXY kernel modules unavailable"
+    elif [ -n "$_tp_mod_missing" ]; then
+        module_check_add "kernel_module_loaded" "missing_dependencies" "true" "modules available but not loaded: $_tp_mod_missing"
+    else
+        module_check_add "kernel_module_loaded" "ready" "false" "kernel modules loaded"
+    fi
+
+    _tp_fwd="$(gateway_ip_forward_value)"
+    if [ "$_tp_fwd" = "1" ]; then
+        module_check_add "ip_forward" "ready" "false" "ipv4 forwarding enabled"
+    else
+        # Deliberately remediable:false, always — same reasoning as gateway's
+        # ip_forward check: flipping this half-starts tproxy itself.
+        module_check_add "ip_forward" "missing_dependencies" "false" "ipv4 forwarding disabled (not touched by prepare)"
+    fi
+}
+
+cmd_agent_tproxy_prepare_json() {
+    agent_prepare_require_root "tproxy" || return 1
+
+    agent_module_check_tproxy
+    _before_state_json="$(module_check_state_only)"
+    _remediable="$MODULE_REMEDIABLE_IDS"
+
+    if [ "$MODULE_ROLLUP_STATE" = "ready" ]; then
+        agent_prepare_already_ready_json "tproxy"
+        return 0
+    elif [ "$MODULE_ROLLUP_STATE" != "missing_dependencies" ]; then
+        agent_prepare_failure_json "tproxy" "$MODULE_ROLLUP_STATE" "nothing installable for tproxy module"
+        return 1
+    elif [ -z "$_remediable" ]; then
+        agent_prepare_failure_json "tproxy" "missing_dependencies" "no remediable items available for tproxy module"
+        return 1
+    fi
+
+    _changed=""
+    _fail=0
+    for _id in $_remediable; do
+        case "$_id" in
+            ip_tools)
+                if pkg_manager_install_available && pkg_manager_install "iptables iproute2"; then
+                    _changed="${_changed} iptables iproute2"
+                else
+                    _fail=1
+                fi
+                ;;
+            kernel_module_loaded)
+                tproxy_prepare_load_kernel_modules
+                _tp_load_rc=$?
+                for _m in $TPROXY_PREPARE_MODULES_LOADED; do
+                    _changed="${_changed} $_m"
+                done
+                [ "$_tp_load_rc" -eq 0 ] || _fail=1
+                ;;
+        esac
+    done
+    _changed="${_changed# }"
+
+    agent_module_check_tproxy
+    _after_state_json="$(module_check_state_only)"
+
+    if [ "$_fail" -eq 0 ]; then
+        agent_prepare_success_json "tproxy" "dependencies prepared" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 0
+    else
+        agent_prepare_partial_failure_json "tproxy" "install_failed" "one or more prepare steps failed" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 1
+    fi
 }
 
 cmd_tproxy_status() {
@@ -7785,6 +8910,115 @@ json_yes_no_lit() {
     if "$@"; then printf 'true'; else printf 'false'; fi
 }
 
+# -----------------------------
+# Module readiness accumulator (agent-snapshot "modules" + "*-prepare")
+# -----------------------------
+# Each agent_module_check_<name>() calls module_check_reset, then
+# module_check_add once per check item, leaving the rolled-up result in
+# MODULE_ROLLUP_STATE / MODULE_REMEDIABLE_IDS / MODULE_CHECKS_JSON for the
+# caller (cmd_agent_snapshot's module_check_emit, or a *_prepare_json
+# function) to read or print.
+
+module_check_reset() {
+    MODULE_CHECKS_JSON=""
+    MODULE_ROLLUP_STATE="ready"
+    MODULE_HAS_REMEDIABLE=0
+    MODULE_REMEDIABLE_IDS=""
+}
+
+module_check_add() {
+    # $1=id $2=state $3=remediable(true/false) $4=detail (never a secret value)
+    _mc_id="$1"; _mc_state="$2"; _mc_remediable="$3"; _mc_detail="$4"
+    _mc_frag="{\"id\":$(json_string "$_mc_id"),\"state\":$(json_string "$_mc_state"),\"remediable\":$(json_bool "$_mc_remediable"),\"detail\":$(json_string "$_mc_detail")}"
+    if [ -n "$MODULE_CHECKS_JSON" ]; then
+        MODULE_CHECKS_JSON="${MODULE_CHECKS_JSON},${_mc_frag}"
+    else
+        MODULE_CHECKS_JSON="$_mc_frag"
+    fi
+    case "$_mc_state" in
+        unsupported)
+            MODULE_ROLLUP_STATE="unsupported"
+            ;;
+        blocked)
+            case "$MODULE_ROLLUP_STATE" in unsupported) ;; *) MODULE_ROLLUP_STATE="blocked" ;; esac
+            ;;
+        not_configured)
+            case "$MODULE_ROLLUP_STATE" in unsupported|blocked) ;; *) MODULE_ROLLUP_STATE="not_configured" ;; esac
+            ;;
+        missing_dependencies)
+            case "$MODULE_ROLLUP_STATE" in unsupported|blocked|not_configured) ;; *) MODULE_ROLLUP_STATE="missing_dependencies" ;; esac
+            ;;
+    esac
+    if [ "$_mc_remediable" = "true" ] && [ "$_mc_state" != "ready" ]; then
+        MODULE_HAS_REMEDIABLE=1
+        MODULE_REMEDIABLE_IDS="${MODULE_REMEDIABLE_IDS} ${_mc_id}"
+    fi
+}
+
+module_check_installable() {
+    if [ "$MODULE_ROLLUP_STATE" = "missing_dependencies" ] && [ "$MODULE_HAS_REMEDIABLE" -eq 1 ]; then
+        printf 'true'
+    else
+        printf 'false'
+    fi
+}
+
+module_check_emit() {
+    printf '{"state":%s,"installable":%s,"checks":[%s]}' \
+        "$(json_string "$MODULE_ROLLUP_STATE")" "$(module_check_installable)" "$MODULE_CHECKS_JSON"
+}
+
+module_check_state_only() {
+    printf '{"state":%s}' "$(json_string "$MODULE_ROLLUP_STATE")"
+}
+
+agent_prepare_json_array() {
+    # $1: space-separated list -> JSON string array, e.g. "hostapd dnsmasq" -> ["hostapd","dnsmasq"]
+    _arr=""
+    for _item in $1; do
+        [ -n "$_item" ] || continue
+        if [ -n "$_arr" ]; then
+            _arr="${_arr},$(json_string "$_item")"
+        else
+            _arr="$(json_string "$_item")"
+        fi
+    done
+    printf '[%s]' "$_arr"
+}
+
+agent_prepare_failure_json() {
+    # $1=module $2=code $3=message (checks come from the caller's current MODULE_CHECKS_JSON)
+    printf '{"ok":false,"module":%s,"code":%s,"message":%s,"checks":[%s]}\n' \
+        "$(json_string "$1")" "$(json_string "$2")" "$(json_string "$3")" "$MODULE_CHECKS_JSON"
+}
+
+agent_prepare_success_json() {
+    # $1=module $2=message $3=before_state_json $4=after_state_json $5=changed(space-separated)
+    printf '{"ok":true,"module":%s,"message":%s,"before":%s,"after":%s,"changed":%s}\n' \
+        "$(json_string "$1")" "$(json_string "$2")" "$3" "$4" "$(agent_prepare_json_array "$5")"
+}
+
+agent_prepare_partial_failure_json() {
+    # $1=module $2=code $3=message $4=before_state_json $5=after_state_json $6=changed(space-separated)
+    printf '{"ok":false,"module":%s,"code":%s,"message":%s,"before":%s,"after":%s,"changed":%s}\n' \
+        "$(json_string "$1")" "$(json_string "$2")" "$(json_string "$3")" "$4" "$5" "$(agent_prepare_json_array "$6")"
+}
+
+agent_prepare_require_root() {
+    # $1=module ; prints the standard not_root failure JSON and returns 1 if not root
+    tproxy_is_root && return 0
+    printf '{"ok":false,"module":%s,"code":"not_root","message":"must run as root","checks":[]}\n' "$(json_string "$1")"
+    return 1
+}
+
+agent_prepare_already_ready_json() {
+    # $1=module ; called when the before-check already came back "ready" — a
+    # safe no-op success, not a failure (distinct from unsupported/
+    # not_configured/blocked, which ARE failures for prepare's purposes).
+    _state_json="$(module_check_state_only)"
+    agent_prepare_success_json "$1" "already ready, nothing to prepare" "$_state_json" "$_state_json" ""
+}
+
 json_collect_ap_state() {
     ap_load_config
     JSON_AP_LIMITED="$(json_root_limited)"
@@ -8056,6 +9290,144 @@ wifi_detect_manager() {
         printf 'wpa_supplicant\n'
     else
         printf 'unknown\n'
+    fi
+}
+
+wifi_rfkill_state() {
+    # Via stdout: "unblocked" | "soft" | "hard" | "unknown" (no rfkill binary
+    # or no wifi entry found — treated as unblocked-equivalent, never as a
+    # reason to attempt anything). Always returns 0 — the tri-state result is
+    # conveyed entirely via stdout; callers capture this via a bare
+    # `var="$(wifi_rfkill_state)"` assignment, and a nonzero exit here would
+    # abort any caller running under `set -e` for a perfectly normal outcome.
+    have rfkill || { printf 'unknown\n'; return 0; }
+    out="$(rfkill list wifi 2>/dev/null)"
+    [ -n "$out" ] || out="$(rfkill list wlan 2>/dev/null)"
+    if [ -z "$out" ]; then
+        printf 'unknown\n'
+        return 0
+    fi
+    hard="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Hard blocked:[[:space:]]*//p' | head -n 1)"
+    soft="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Soft blocked:[[:space:]]*//p' | head -n 1)"
+    if [ "$hard" = "yes" ]; then
+        printf 'hard\n'
+    elif [ "$soft" = "yes" ]; then
+        printf 'soft\n'
+    else
+        printf 'unblocked\n'
+    fi
+}
+
+wifi_prepare_rfkill_unblock() {
+    # Only meaningful for a soft block; hard (physical-switch) blocks cannot be
+    # fixed in software. Caller is expected to check wifi_rfkill_state first.
+    have rfkill || return 1
+    rfkill unblock wifi >/dev/null 2>&1
+}
+
+agent_module_check_wifi() {
+    module_check_reset
+
+    if wifi_if_exists; then
+        module_check_add "interface_exists" "ready" "false" "wireless interface present"
+    else
+        module_check_add "interface_exists" "unsupported" "false" "wireless interface not found"
+    fi
+
+    _wifi_mgr="$(wifi_detect_manager)"
+    case "$_wifi_mgr" in
+        NetworkManager|wpa_supplicant)
+            module_check_add "manager_present" "ready" "false" "manager detected: $_wifi_mgr"
+            ;;
+        *)
+            # Deliberately never installable: auto-installing/enabling a network
+            # manager risks taking over interfaces or fighting an existing,
+            # unknown network-management scheme — the same boundary that keeps
+            # this project from ever touching wlan0 without explicit user action.
+            module_check_add "manager_present" "unsupported" "false" "no supported wifi manager detected"
+            ;;
+    esac
+
+    _rf_state="$(wifi_rfkill_state)"
+    case "$_rf_state" in
+        unblocked|unknown)
+            module_check_add "rfkill_soft" "ready" "false" "not rf-blocked"
+            ;;
+        soft)
+            module_check_add "rfkill_soft" "missing_dependencies" "true" "wifi soft-blocked by rfkill"
+            ;;
+        hard)
+            module_check_add "rfkill_soft" "unsupported" "false" "wifi hard-blocked by physical switch"
+            ;;
+    esac
+
+    case "$_wifi_mgr" in
+        NetworkManager)
+            if [ -n "$(wifi_list_profiles 2>/dev/null)" ]; then
+                module_check_add "profile_configured" "ready" "false" "at least one saved wifi profile"
+            else
+                module_check_add "profile_configured" "not_configured" "false" "no saved wifi profile"
+            fi
+            ;;
+        wpa_supplicant)
+            # Match on a leading network-id digit rather than skipping a fixed
+            # number of header lines, so this doesn't depend on whether wpa_cli
+            # prints any extra banner line before the "network id / ssid / ..."
+            # header in this invocation form.
+            if have wpa_cli && wpa_cli -i "$WIFI_IF" list_networks 2>/dev/null | grep -qE '^[0-9]'; then
+                module_check_add "profile_configured" "ready" "false" "at least one saved wifi profile"
+            else
+                module_check_add "profile_configured" "not_configured" "false" "no saved wifi profile"
+            fi
+            ;;
+        *)
+            module_check_add "profile_configured" "not_configured" "false" "cannot enumerate saved profiles under this manager"
+            ;;
+    esac
+}
+
+cmd_agent_wifi_prepare_json() {
+    agent_prepare_require_root "wifi" || return 1
+
+    agent_module_check_wifi
+    _before_state_json="$(module_check_state_only)"
+    _remediable="$MODULE_REMEDIABLE_IDS"
+
+    if [ "$MODULE_ROLLUP_STATE" = "ready" ]; then
+        agent_prepare_already_ready_json "wifi"
+        return 0
+    elif [ "$MODULE_ROLLUP_STATE" != "missing_dependencies" ]; then
+        agent_prepare_failure_json "wifi" "$MODULE_ROLLUP_STATE" "nothing installable for wifi module"
+        return 1
+    elif [ -z "$_remediable" ]; then
+        agent_prepare_failure_json "wifi" "missing_dependencies" "no remediable items available for wifi module"
+        return 1
+    fi
+
+    _changed=""
+    _fail=0
+    for _id in $_remediable; do
+        case "$_id" in
+            rfkill_soft)
+                if wifi_prepare_rfkill_unblock; then
+                    _changed="${_changed} rfkill_unblock"
+                else
+                    _fail=1
+                fi
+                ;;
+        esac
+    done
+    _changed="${_changed# }"
+
+    agent_module_check_wifi
+    _after_state_json="$(module_check_state_only)"
+
+    if [ "$_fail" -eq 0 ]; then
+        agent_prepare_success_json "wifi" "dependencies prepared" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 0
+    else
+        agent_prepare_partial_failure_json "wifi" "install_failed" "one or more prepare steps failed" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 1
     fi
 }
 
@@ -8898,8 +10270,9 @@ cmd_agent_snapshot() {
     have systemctl && systemctl is-enabled mgate-agent >/dev/null 2>&1 && _ag_enabled="true"
     _ag_ver="unknown"
     [ "$_ag_installed" = "true" ] && \
-        _ag_ver="$("$MGATE_AGENT_BIN" version 2>/dev/null || \
-                   "$MGATE_AGENT_BIN" --version 2>/dev/null || printf 'unknown')"
+        _ag_ver="$(agent_normalize_release_version "$("$MGATE_AGENT_BIN" version 2>/dev/null || \
+                   "$MGATE_AGENT_BIN" --version 2>/dev/null || printf 'unknown')")"
+    agent_upgrade_status_reconcile_for_snapshot
     _ag_enrolled="false"; _ag_device_id=""
     if [ -f "$MGATE_AGENT_CREDS_FILE" ]; then
         _ag_did="$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -8919,8 +10292,36 @@ cmd_agent_snapshot() {
     printf '    "enabled": %s,\n' "$_ag_enabled"
     printf '    "version": '; json_string "$_ag_ver"; printf ',\n'
     printf '    "enrolled": %s,\n' "$_ag_enrolled"
-    printf '    "device_id": '; json_string "$_ag_device_id"; printf '\n'
+    printf '    "device_id": '; json_string "$_ag_device_id"; printf ',\n'
+    printf '    "upgrade": {\n'
+    printf '      "state": '; json_string "$AGENT_UPGRADE_STATE"; printf ',\n'
+    printf '      "message": '; json_string_or_null "$AGENT_UPGRADE_MESSAGE"; printf ',\n'
+    printf '      "exit_code": %s,\n' "$(json_number_or_null "$AGENT_UPGRADE_EXIT_CODE")"
+    printf '      "updated_at": %s\n' "$(json_number_or_null "$AGENT_UPGRADE_UPDATED_AT")"
+    printf '    }\n'
     printf '  },\n'
+
+    agent_module_check_core
+    _mod_core_json="$(module_check_emit)"
+    agent_module_check_wifi
+    _mod_wifi_json="$(module_check_emit)"
+    agent_module_check_ap
+    _mod_ap_json="$(module_check_emit)"
+    agent_module_check_gateway
+    _mod_gateway_json="$(module_check_emit)"
+    agent_module_check_tproxy
+    _mod_tproxy_json="$(module_check_emit)"
+    agent_module_check_subscription
+    _mod_subscription_json="$(module_check_emit)"
+    printf '  "modules": {\n'
+    printf '    "core": %s,\n' "$_mod_core_json"
+    printf '    "ap": %s,\n' "$_mod_ap_json"
+    printf '    "tproxy": %s,\n' "$_mod_tproxy_json"
+    printf '    "gateway": %s,\n' "$_mod_gateway_json"
+    printf '    "subscription": %s,\n' "$_mod_subscription_json"
+    printf '    "wifi": %s\n' "$_mod_wifi_json"
+    printf '  },\n'
+
     printf '  "warnings": []\n'
     printf '}\n'
 }
@@ -8968,6 +10369,9 @@ cmd_capabilities_json() {
     printf '      "tui","ap-install-deps","edit"\n'
     printf '    ]\n'
     printf '  },\n'
+    printf '  "agent_only_actions": [\n'
+    printf '    "core-prepare","ap-prepare","tproxy-prepare","gateway-prepare","subscription-prepare","wifi-prepare"\n'
+    printf '  ],\n'
     printf '  "agent_contract": {\n'
     printf '    "safe_poll_command": "agent-snapshot",\n'
     printf '    "recommended_poll_interval_seconds": 10,\n'
@@ -9327,6 +10731,19 @@ cmd_agent_action_json() {
     return 0
 }
 
+cmd_agent_prepare_dispatch() {
+    _prep_cmd="$1"
+    shift
+    case "$_prep_cmd" in
+        core-prepare) cmd_agent_core_prepare_json "$@" ;;
+        ap-prepare) cmd_agent_ap_prepare_json "$@" ;;
+        tproxy-prepare) cmd_agent_tproxy_prepare_json "$@" ;;
+        gateway-prepare) cmd_agent_gateway_prepare_json "$@" ;;
+        subscription-prepare) cmd_agent_subscription_prepare_json "$@" ;;
+        wifi-prepare) cmd_agent_wifi_prepare_json "$@" ;;
+    esac
+}
+
 cmd_agent_mutation_json() {
     # Run cloud-approved mutations without exposing their human-oriented
     # output.  Some underlying commands may print provider URLs, controller
@@ -9334,6 +10751,31 @@ cmd_agent_mutation_json() {
     AGENT_MUTATION_HANDLED=1
     _mutation_cmd="$1"
     shift
+
+    # The 6 *-prepare actions get their own richer JSON shape (module/before/
+    # after/changed, or module/code on failure) instead of the generic
+    # {"ok":true/false,"message":"operation completed/failed"} below — they
+    # are intercepted here, before the generic dispatch table, and never fall
+    # through to it. Deliberately NOT added to the plain CLI case statement or
+    # agent_is_read_action(): these are agent-context only and a human typing
+    # `mgate core-prepare` etc. directly must see "unknown command".
+    case "$_mutation_cmd" in
+        core-prepare|ap-prepare|tproxy-prepare|gateway-prepare|subscription-prepare|wifi-prepare)
+            # Subshell-wrapped for the same reason as the generic path below:
+            # any check/remediation function that calls die() must not be able
+            # to take down the whole process before a JSON response is printed.
+            _prepare_out="$( ( cmd_agent_prepare_dispatch "$_mutation_cmd" "$@" ) 2>/dev/null )"
+            _prepare_rc=$?
+            if [ -n "$_prepare_out" ]; then
+                printf '%s\n' "$_prepare_out"
+            else
+                printf '{"ok":false,"module":%s,"code":"internal_error","message":"prepare failed unexpectedly","checks":[]}\n' "$(json_string "$_mutation_cmd")"
+                _prepare_rc=1
+            fi
+            return "$_prepare_rc"
+            ;;
+    esac
+
     case "$_mutation_cmd" in
         self-update|update) _mutation_fn=cmd_self_update ;;
         core-start) _mutation_fn=service_start ;;
@@ -9475,6 +10917,26 @@ agent_get_installed_version() {
     v="$("$MGATE_AGENT_BIN" version 2>/dev/null || \
          "$MGATE_AGENT_BIN" --version 2>/dev/null || printf 'unknown')"
     printf '%s\n' "${v:-unknown}"
+}
+
+agent_normalize_release_version() {
+    # $1 = raw output from `mgate-agent version`/`--version`, e.g. the real
+    # CLI's current "mgate-agent v0.2.0". Cloud's 0.6.0 gate compares this
+    # value directly against its own minimum (e.g. v0.2.0), so it must be a
+    # bare, strict vMAJOR.MINOR.PATCH string -- never the human-facing
+    # "mgate-agent v0.2.0" form, never a dev/rc suffix, never raw garbage.
+    # Used ONLY by cmd_agent_snapshot(); agent_get_installed_version()'s
+    # human-facing output (mgate agent status) is untouched.
+    _anrv_raw="$1"
+    case "$_anrv_raw" in
+        "mgate-agent "*) _anrv_raw="${_anrv_raw#mgate-agent }" ;;
+    esac
+    _anrv_raw="$(printf '%s' "$_anrv_raw" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if printf '%s' "$_anrv_raw" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        printf '%s\n' "$_anrv_raw"
+    else
+        printf 'unknown\n'
+    fi
 }
 
 agent_create_dirs() {
@@ -9823,10 +11285,14 @@ cmd_agent_update() {
         return 1; }
     chmod 755 "$MGATE_AGENT_BIN"
     ok "binary 已更新：$MGATE_AGENT_BIN"
-    agent_install_service || return 1
+    agent_install_service || {
+        [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
+        return 1; }
     systemctl daemon-reload 2>/dev/null || true
     _au_pkg_dir="$(dirname "$AGENT_DOWNLOAD_BIN_PATH")"
-    agent_install_config "$_au_pkg_dir" "$_au_force" || return 1
+    agent_install_config "$_au_pkg_dir" "$_au_force" || {
+        [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
+        return 1; }
     for _p in "$_au_pkg_dir/configs/agent.example.yaml" \
               "$_au_pkg_dir/agent.yaml.example" "$_au_pkg_dir/agent.example.yaml" \
               "$_au_pkg_dir/config/agent.yaml.example"; do
@@ -9838,11 +11304,24 @@ cmd_agent_update() {
     rm -rf "$_au_tmp" 2>/dev/null || true
     MGATE_AGENT_ACTIVE_TOKEN=""
     agent_warn_legacy_config
-    agent_check_if_enrolled || return 1
-    [ "$_au_was_running" = "1" ] && {
+    agent_check_if_enrolled || {
+        [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
+        return 1; }
+    if [ "$_au_was_running" = "1" ]; then
         step "重启服务..."
-        systemctl start mgate-agent 2>/dev/null && ok "服务已重启" || \
-            warn "服务重启失败：mgate agent status"; }
+        systemctl start mgate-agent 2>/dev/null
+        _au_start_rc=$?
+        if [ "$_au_start_rc" -ne 0 ]; then
+            # The service was running before this update and is not running
+            # now -- this is a real failure, not advisory: propagate the
+            # actual systemctl exit code so callers (the combined-upgrade
+            # worker) record "failed" with a genuine, non-zero exit_code
+            # instead of silently reporting overall success.
+            err "服务重启失败：mgate agent status"
+            return "$_au_start_rc"
+        fi
+        ok "服务已重启"
+    fi
     ok "mgate-agent 已更新至 $_au_ver"
     info "配置和 credentials 已保留"
 }
@@ -12023,6 +13502,134 @@ cmd_sub_status() {
     fi
 }
 
+sub_ca_certificates_present() {
+    [ -f /etc/ssl/certs/ca-certificates.crt ]
+}
+
+agent_module_check_subscription() {
+    agent_module_check_core
+    _sub_core_ready=0
+    [ "$MODULE_ROLLUP_STATE" = "ready" ] && _sub_core_ready=1
+
+    module_check_reset
+
+    if [ "$_sub_core_ready" -eq 1 ]; then
+        module_check_add "core_ready" "ready" "false" "core module ready"
+    else
+        module_check_add "core_ready" "blocked" "false" "core module not ready"
+    fi
+
+    if have curl || have wget; then
+        module_check_add "download_tool" "ready" "false" "curl or wget present"
+    else
+        module_check_add "download_tool" "missing_dependencies" "true" "neither curl nor wget installed"
+    fi
+
+    if sub_ca_certificates_present; then
+        module_check_add "ca_certificates" "ready" "false" "CA certificate bundle present"
+    else
+        module_check_add "ca_certificates" "missing_dependencies" "true" "CA certificate bundle not installed"
+    fi
+
+    if [ -d "$DATA_DIR" ] && [ -w "$DATA_DIR" ] && [ -d "$CONFIG_DIR" ] && [ -w "$CONFIG_DIR" ]; then
+        module_check_add "dir_writable" "ready" "false" "data/config directories writable"
+    else
+        module_check_add "dir_writable" "missing_dependencies" "true" "data/config directories missing or not writable"
+    fi
+
+    if [ -s "$SUB_URL_FILE" ]; then
+        module_check_add "url_configured" "ready" "false" "subscription URL configured"
+        if [ -f "$SUB_PROVIDER_FILE" ] && [ -x "$CORE_BIN" ] && "$CORE_BIN" -t -f "$CONFIG_FILE" >/dev/null 2>&1; then
+            module_check_add "config_validatable" "ready" "false" "cached subscription config passes validation"
+        else
+            # User supplied a subscription, but its cached content doesn't
+            # validate — neither "not_configured" (something IS configured)
+            # nor installable (it's user-authored content, not a dependency).
+            module_check_add "config_validatable" "missing_dependencies" "false" "subscription content failed validation"
+        fi
+    else
+        module_check_add "url_configured" "not_configured" "false" "subscription URL not configured"
+    fi
+}
+
+cmd_agent_subscription_prepare_json() {
+    agent_prepare_require_root "subscription" || return 1
+
+    agent_module_check_subscription
+    _before_state_json="$(module_check_state_only)"
+    _remediable="$MODULE_REMEDIABLE_IDS"
+
+    if [ "$MODULE_ROLLUP_STATE" = "ready" ]; then
+        agent_prepare_already_ready_json "subscription"
+        return 0
+    elif [ "$MODULE_ROLLUP_STATE" != "missing_dependencies" ]; then
+        agent_prepare_failure_json "subscription" "$MODULE_ROLLUP_STATE" "nothing installable for subscription module"
+        return 1
+    elif [ -z "$_remediable" ]; then
+        agent_prepare_failure_json "subscription" "missing_dependencies" "no remediable items available for subscription module"
+        return 1
+    fi
+
+    # Only download_tool/ca_certificates need a package manager; dir_writable
+    # (ensure_dirs) doesn't, so a missing package manager must not skip it.
+    _sub_pkgs=""
+    _sub_dir_remediable=0
+    for _id in $_remediable; do
+        case "$_id" in
+            download_tool) _sub_pkgs="${_sub_pkgs} curl" ;;
+            ca_certificates) _sub_pkgs="${_sub_pkgs} ca-certificates" ;;
+            dir_writable) _sub_dir_remediable=1 ;;
+        esac
+    done
+    _sub_pkgs="${_sub_pkgs# }"
+
+    # Clean, informative failure only when nothing else could be attempted
+    # anyway; if dir_writable is also remediable, fall through and let it run
+    # via ensure_dirs (no package manager needed), tracking the pkg-manager
+    # side as a partial failure instead of bailing out early.
+    if [ -n "$_sub_pkgs" ] && [ "$_sub_dir_remediable" -eq 0 ] && ! pkg_manager_install_available; then
+        agent_prepare_failure_json "subscription" "package_manager_unavailable" "no supported package manager found"
+        return 1
+    fi
+
+    _changed=""
+    _fail=0
+    if [ -n "$_sub_pkgs" ]; then
+        if ! pkg_manager_install_available; then
+            _fail=1
+        elif pkg_manager_install "$_sub_pkgs"; then
+            for _p in $_sub_pkgs; do
+                _changed="${_changed} $_p"
+            done
+        else
+            _fail=1
+        fi
+    fi
+    for _id in $_remediable; do
+        case "$_id" in
+            dir_writable)
+                if ( ensure_dirs ) >/dev/null 2>&1; then
+                    _changed="${_changed} data_dirs"
+                else
+                    _fail=1
+                fi
+                ;;
+        esac
+    done
+    _changed="${_changed# }"
+
+    agent_module_check_subscription
+    _after_state_json="$(module_check_state_only)"
+
+    if [ "$_fail" -eq 0 ]; then
+        agent_prepare_success_json "subscription" "dependencies prepared" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 0
+    else
+        agent_prepare_partial_failure_json "subscription" "install_failed" "one or more prepare steps failed" "$_before_state_json" "$_after_state_json" "$_changed"
+        return 1
+    fi
+}
+
 cmd_sub_nodes() {
     [ -s "$SUB_NODES_FILE" ] || die "no subscription data found; please run mgate sub-update"
     cat "$SUB_NODES_FILE"
@@ -12191,8 +13798,40 @@ mgate-agent 管理：
   mgate agent enroll-status           查看当前绑定状态
 
 Agent 接口（只读，JSON，schema_version=1）：
-  mgate agent-snapshot      agent 专用完整只读快照（推荐高频采集入口）
-  mgate capabilities-json   能力声明，告知 agent 支持哪些命令和特性
+  mgate agent-snapshot      agent 专用完整只读快照（推荐高频采集入口），
+                            额外带 modules 字段：core/ap/tproxy/gateway/
+                            subscription/wifi 六个模块各自的 state
+                            （ready/missing_dependencies/not_configured/
+                            unsupported/blocked）、installable、checks[]
+  mgate capabilities-json   能力声明，告知 agent 支持哪些命令和特性，
+                            agent_only_actions 列出仅 agent 可用的动作
+
+Agent-only 准备动作（仅 MGATE_AGENT_CONTEXT=1 下可用，人工终端敲不通）：
+  core-prepare / ap-prepare / tproxy-prepare / gateway-prepare /
+  subscription-prepare / wifi-prepare
+  —— 只在对应模块 state=missing_dependencies 时才会安装固定、可审计的依赖并复检，
+     不会启动 Core/AP/TProxy/Gateway，不改路由/iptables 规则，不写订阅/密码/
+     WiFi 配置，不删除或覆盖已有用户配置；非 root 或平台不支持时返回结构化失败，
+     不等待任何输入。
+
+Agent 上下文下 self-update 语义变化：
+  MGATE_AGENT_CONTEXT=1 mgate self-update 会替换 mgate.sh 后，用 systemd-run
+  调度一个固定名 mgate-agent-upgrade 的独立 transient unit 去执行内部专用
+  worker（零参数，不接受任何云端传入版本号/URL/参数），worker 依次执行：记录
+  Web 管理升级前是否在运行 → cmd_migrate → 若 Web 原本在运行则 web_restart
+  （cmd_migrate 只刷新 Web 文件、不会自动重启，人工路径仍是提示手动执行
+  mgate web-restart；这个无人值守自动重启只发生在这个 worker 内）→
+  cmd_agent_update --yes——而不是在当前进程内直接跑，避免
+  mgate-agent 自己停止自己时把发起升级的子进程连带杀死。此时返回的 ok:true
+  只代表"组合升级任务已安全调度"，不代表 mgate.sh/mgate-agent 已完成升级，
+  cloud 需轮询 agent-snapshot 直到两者版本都达标。
+  人工直接执行 mgate self-update（未设置 MGATE_AGENT_CONTEXT）行为不变。
+  agent-snapshot 的 agent.version 现在是规范化后的纯发布版本号（如
+  "v0.2.0"），会自动剥离 mgate-agent CLI 输出里的 "mgate-agent " 前缀；无法
+  严格识别为 vMAJOR.MINOR.PATCH 时输出 "unknown"（人工 mgate agent status
+  的显示格式不受影响）。agent.upgrade 字段报告组合升级任务当前状态
+  （idle/scheduled/running/succeeded/failed + message/exit_code/updated_at），
+  状态文件缺失或损坏时安全回退为 idle。
 
 升级与迁移：
   mgate migrate             升级后同步配置和生成文件（self-update 会自动调用）
@@ -12969,6 +14608,7 @@ main() {
         agent-snapshot) cmd_agent_snapshot "$@" ;;
         capabilities-json) cmd_capabilities_json "$@" ;;
         _wifi-watchdog) cmd_wifi_watchdog_run "$@" ;;
+        _agent-combined-upgrade-worker) cmd_agent_combined_upgrade_worker "$@" ;;
         backup) cmd_backup "$@" ;;
         backups) cmd_backups "$@" ;;
         backup-delete) cmd_backup_delete "$@" ;;
