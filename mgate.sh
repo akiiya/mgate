@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.6.2"
+MGATE_VERSION="0.6.3"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -609,6 +609,13 @@ bind-address: '*'
 tproxy-port: __TPROXY_PORT__
 external-controller: 127.0.0.1:__MIHOMO_API_PORT__
 
+# Bootstrap the AliDNS DoH hostname locally so proxy-node DNS never depends on
+# an unavailable third-party resolver before the selected proxy connects.
+hosts:
+  dns.alidns.com:
+    - 223.5.5.5
+    - 223.6.6.6
+
 # DNS server: fake-ip so TProxy-captured connections carry full domain info for
 # rule matching. Client DNS follows TPROXY-OUT; proxy node hostnames use
 # encrypted, IP-addressed DoH directly only for bootstrap, avoiding a DNS
@@ -625,8 +632,7 @@ dns:
   nameserver:
     - https://1.1.1.1/dns-query
   proxy-server-nameserver:
-    - https://1.1.1.1/dns-query#DIRECT
-    - https://8.8.8.8/dns-query#DIRECT
+    - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
 
 profile:
@@ -7729,8 +7735,59 @@ tproxy_config_insert_rule() {
 # connection.  Keep that bootstrap query encrypted, but bind it to DIRECT so
 # respect-rules cannot route it back into the not-yet-connected node.
 tproxy_config_proxy_dns_bootstrap_ok() {
-    grep -q '^[[:space:]]*-[[:space:]]*https://1\.1\.1\.1/dns-query#DIRECT[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null && \
-        grep -q '^[[:space:]]*-[[:space:]]*https://8\.8\.8\.8/dns-query#DIRECT[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null
+    grep -q '^[[:space:]]*-[[:space:]]*https://dns\.alidns\.com/dns-query#DIRECT[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null && \
+        grep -q '^[[:space:]]*dns\.alidns\.com:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null && \
+        grep -q '^[[:space:]]*-[[:space:]]*223\.5\.5\.5[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null && \
+        grep -q '^[[:space:]]*-[[:space:]]*223\.6\.6\.6[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_set_bootstrap_hosts() {
+    tmp="$TMP_DIR/tproxy-config.$$.bootstrap-hosts"
+    if grep -q '^[[:space:]]*dns\.alidns\.com:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null; then
+        awk '
+            BEGIN {in_hosts=0; skipping=0; replaced=0}
+            /^hosts:[[:space:]]*$/ {in_hosts=1}
+            in_hosts && /^[[:space:]]*dns\.alidns\.com:[[:space:]]*$/ {
+                print "  dns.alidns.com:"
+                print "    - 223.5.5.5"
+                print "    - 223.6.6.6"
+                skipping=1; replaced=1; next
+            }
+            skipping && /^  [^[:space:]][^:]*:[[:space:]]*/ {skipping=0}
+            skipping && /^[^[:space:]]/ {skipping=0; in_hosts=0}
+            skipping {next}
+            {print}
+            END {exit replaced ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    elif grep -q '^hosts:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null; then
+        awk '
+            BEGIN {inserted=0}
+            /^hosts:[[:space:]]*$/ && !inserted {
+                print
+                print "  dns.alidns.com:"
+                print "    - 223.5.5.5"
+                print "    - 223.6.6.6"
+                inserted=1; next
+            }
+            {print}
+            END {exit inserted ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    else
+        awk '
+            BEGIN {inserted=0}
+            /^dns:[[:space:]]*$/ && !inserted {
+                print "hosts:"
+                print "  dns.alidns.com:"
+                print "    - 223.5.5.5"
+                print "    - 223.6.6.6"
+                print ""
+                inserted=1
+            }
+            {print}
+            END {exit inserted ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+    mv "$tmp" "$CONFIG_FILE" || return 1
 }
 
 tproxy_config_set_proxy_dns_bootstrap() {
@@ -7741,8 +7798,7 @@ tproxy_config_set_proxy_dns_bootstrap() {
             /^dns:[[:space:]]*$/ {in_dns=1}
             in_dns && /^[[:space:]]*proxy-server-nameserver:[[:space:]]*$/ {
                 print "  proxy-server-nameserver:"
-                print "    - https://1.1.1.1/dns-query#DIRECT"
-                print "    - https://8.8.8.8/dns-query#DIRECT"
+                print "    - https://dns.alidns.com/dns-query#DIRECT"
                 skipping=1; replaced=1; next
             }
             skipping && /^  [^[:space:]][^:]*:[[:space:]]*/ {skipping=0}
@@ -7756,8 +7812,7 @@ tproxy_config_set_proxy_dns_bootstrap() {
             /^dns:[[:space:]]*$/ && !inserted {
                 print
                 print "  proxy-server-nameserver:"
-                print "    - https://1.1.1.1/dns-query#DIRECT"
-                print "    - https://8.8.8.8/dns-query#DIRECT"
+                print "    - https://dns.alidns.com/dns-query#DIRECT"
                 inserted=1; next
             }
             {print}
@@ -7765,6 +7820,7 @@ tproxy_config_set_proxy_dns_bootstrap() {
         ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
     fi
     mv "$tmp" "$CONFIG_FILE" || return 1
+    tproxy_config_set_bootstrap_hosts
 }
 
 tproxy_ensure_config_port() {
@@ -12372,8 +12428,7 @@ migrate_patch_config() {
             printf '  nameserver:\n'
             printf '    - https://1.1.1.1/dns-query\n'
             printf '  proxy-server-nameserver:\n'
-            printf '    - https://1.1.1.1/dns-query#DIRECT\n'
-            printf '    - https://8.8.8.8/dns-query#DIRECT\n'
+            printf '    - https://dns.alidns.com/dns-query#DIRECT\n'
             printf '  respect-rules: true\n'
         } >> "$CONFIG_FILE"
         MIGRATE_CONFIG_CHANGED=1
@@ -12915,6 +12970,11 @@ bind-address: '*'
 tproxy-port: $TPROXY_PORT
 external-controller: 127.0.0.1:$DEFAULT_MIHOMO_API_PORT
 
+hosts:
+  dns.alidns.com:
+    - 223.5.5.5
+    - 223.6.6.6
+
 dns:
   enable: true
   listen: 127.0.0.1:$TPROXY_DNS_PORT
@@ -12927,8 +12987,7 @@ dns:
   nameserver:
     - https://1.1.1.1/dns-query
   proxy-server-nameserver:
-    - https://1.1.1.1/dns-query#DIRECT
-    - https://8.8.8.8/dns-query#DIRECT
+    - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
 
 profile:
@@ -12978,6 +13037,11 @@ bind-address: '*'
 tproxy-port: $TPROXY_PORT
 external-controller: 127.0.0.1:$DEFAULT_MIHOMO_API_PORT
 
+hosts:
+  dns.alidns.com:
+    - 223.5.5.5
+    - 223.6.6.6
+
 dns:
   enable: true
   listen: 127.0.0.1:$TPROXY_DNS_PORT
@@ -12990,8 +13054,7 @@ dns:
   nameserver:
     - https://1.1.1.1/dns-query
   proxy-server-nameserver:
-    - https://1.1.1.1/dns-query#DIRECT
-    - https://8.8.8.8/dns-query#DIRECT
+    - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
 
 profile:

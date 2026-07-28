@@ -24,8 +24,10 @@ EOF
 ! tproxy_config_proxy_dns_bootstrap_ok
 tproxy_config_set_proxy_dns_bootstrap
 tproxy_config_proxy_dns_bootstrap_ok
-grep -q '^    - https://1.1.1.1/dns-query#DIRECT$' "$CONFIG_FILE"
-grep -q '^    - https://8.8.8.8/dns-query#DIRECT$' "$CONFIG_FILE"
+grep -q '^    - https://dns.alidns.com/dns-query#DIRECT$' "$CONFIG_FILE"
+grep -q '^  dns.alidns.com:$' "$CONFIG_FILE"
+grep -q '^    - 223.5.5.5$' "$CONFIG_FILE"
+grep -q '^    - 223.6.6.6$' "$CONFIG_FILE"
 ! grep -q '^    - https://1.1.1.1/dns-query$' "$CONFIG_FILE"
 
 cat > "$CONFIG_FILE" <<'EOF'
