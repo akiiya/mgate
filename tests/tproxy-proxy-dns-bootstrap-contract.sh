@@ -37,8 +37,11 @@ grep -q '^    - 223.5.5.5$' "$CONFIG_FILE"
 grep -q '^    - 223.6.6.6$' "$CONFIG_FILE"
 ! grep -q '^    - https://1.1.1.1/dns-query$' "$CONFIG_FILE"
 grep -q '^  use-hosts: true$' "$CONFIG_FILE"
-grep -q "^    - '1.1.1.1#TPROXY-OUT'$" "$CONFIG_FILE"
-grep -q "^    - '8.8.8.8#TPROXY-OUT'$" "$CONFIG_FILE"
+grep -q "^    - 'https://cloudflare-dns.com/dns-query#TPROXY-OUT'$" "$CONFIG_FILE"
+grep -q "^    - 'https://dns.google/dns-query#TPROXY-OUT'$" "$CONFIG_FILE"
+grep -q '^  cloudflare-dns.com:$' "$CONFIG_FILE"
+grep -q '^  dns.google:$' "$CONFIG_FILE"
+grep -q '^  prefer-h3: false$' "$CONFIG_FILE"
 
 cat > "$CONFIG_FILE" <<'EOF'
 dns:
@@ -78,6 +81,28 @@ EOF
 
 ! tproxy_config_native_dns_migratable
 ! tproxy_config_native_dns_ok
+
+cat > "$CONFIG_FILE" <<'EOF'
+hosts:
+  cloudflare-dns.com:
+    - 10.0.0.1
+  dns.google:
+    - 10.0.0.2
+dns:
+  nameserver:
+    - '1.1.1.1#TPROXY-OUT'
+    - '8.8.8.8#TPROXY-OUT'
+EOF
+
+tproxy_config_native_dns_migratable
+tproxy_config_set_native_dns
+tproxy_config_native_dns_ok
+tproxy_config_doh_hosts_ok
+! grep -q '^    - 10\.0\.0\.[12]$' "$CONFIG_FILE"
+grep -A2 '^  cloudflare-dns.com:$' "$CONFIG_FILE" | grep -q '^    - 1\.1\.1\.1$'
+grep -A2 '^  cloudflare-dns.com:$' "$CONFIG_FILE" | grep -q '^    - 1\.0\.0\.1$'
+grep -A2 '^  dns.google:$' "$CONFIG_FILE" | grep -q '^    - 8\.8\.8\.8$'
+grep -A2 '^  dns.google:$' "$CONFIG_FILE" | grep -q '^    - 8\.8\.4\.4$'
 
 cat > "$CONFIG_FILE" <<'EOF'
 dns:
@@ -271,6 +296,38 @@ cp "$CONFIG_FILE" "$test_dir/before-quoted-keys.yaml"
 cmp "$test_dir/before-quoted-keys.yaml" "$CONFIG_FILE"
 grep -q 'quoted dns/hosts keys detected' "$TPROXY_LAST_ERROR_FILE"
 
+cat > "$CONFIG_FILE" <<EOF
+allow-lan: true
+bind-address: '*'
+tproxy-port: $TPROXY_PORT
+hosts:
+  "cloudflare-dns.com":
+    - 1.1.1.1
+    - 1.0.0.1
+  'dns.google':
+    - 8.8.8.8
+    - 8.8.4.4
+dns:
+  prefer-h3: false
+  "prefer-h3": true
+  nameserver:
+    - 'https://cloudflare-dns.com/dns-query#TPROXY-OUT'
+    - 'https://dns.google/dns-query#TPROXY-OUT'
+proxy-groups:
+  - name: TPROXY-OUT
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - IN-TYPE,TPROXY,TPROXY-OUT
+EOF
+
+cp "$CONFIG_FILE" "$test_dir/before-quoted-doh-keys.yaml"
+tproxy_config_has_quoted_managed_dns_keys
+! tproxy_ensure_config_port
+cmp "$test_dir/before-quoted-doh-keys.yaml" "$CONFIG_FILE"
+grep -q 'quoted dns/hosts keys detected' "$TPROXY_LAST_ERROR_FILE"
+
 cat > "$CONFIG_FILE" <<'EOF'
 proxy-providers:
   mgate-sub:
@@ -286,5 +343,18 @@ EOF
 tproxy_config_out_group_ok
 sed -i 's/type: select/type: url-test/' "$CONFIG_FILE"
 ! tproxy_config_out_group_ok
+
+generate_config_content > "$test_dir/generated-config.yaml"
+grep -q '^  cloudflare-dns.com:$' "$test_dir/generated-config.yaml"
+grep -q "^    - 'https://cloudflare-dns.com/dns-query#TPROXY-OUT'$" "$test_dir/generated-config.yaml"
+grep -q '^  prefer-h3: false$' "$test_dir/generated-config.yaml"
+
+: > "$test_dir/accounts.txt"
+: > "$test_dir/countries.txt"
+generate_sub_config_file "$test_dir/generated-sub-config.yaml" ./providers/sub.yaml \
+    "$test_dir/accounts.txt" "$test_dir/countries.txt"
+grep -q '^  cloudflare-dns.com:$' "$test_dir/generated-sub-config.yaml"
+grep -q "^    - 'https://dns.google/dns-query#TPROXY-OUT'$" "$test_dir/generated-sub-config.yaml"
+grep -q '^  prefer-h3: false$' "$test_dir/generated-sub-config.yaml"
 
 printf 'tproxy proxy DNS bootstrap contract: OK\n'

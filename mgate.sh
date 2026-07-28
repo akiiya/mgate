@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.6.4"
+MGATE_VERSION="0.6.5"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -615,9 +615,15 @@ hosts:
   dns.alidns.com:
     - 223.5.5.5
     - 223.6.6.6
+  cloudflare-dns.com:
+    - 1.1.1.1
+    - 1.0.0.1
+  dns.google:
+    - 8.8.8.8
+    - 8.8.4.4
 
 # DNS server: fake-ip so TProxy-captured connections carry full domain info for
-# rule matching. Website DNS uses native UDP only through TPROXY-OUT;
+# rule matching. Website DNS uses TCP/HTTPS DoH through TPROXY-OUT;
 # proxy-node hostnames use encrypted direct DoH only for bootstrap, avoiding a
 # resolution loop before the selected proxy can connect.
 dns:
@@ -627,12 +633,13 @@ dns:
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.0/16
   use-hosts: true
+  prefer-h3: false
   default-nameserver:
     - 1.1.1.1
     - 8.8.8.8
   nameserver:
-    - '1.1.1.1#TPROXY-OUT'
-    - '8.8.8.8#TPROXY-OUT'
+    - 'https://cloudflare-dns.com/dns-query#TPROXY-OUT'
+    - 'https://dns.google/dns-query#TPROXY-OUT'
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
@@ -7822,7 +7829,7 @@ tproxy_config_native_dns_ok() {
             count++; resolver[count]=value
         }
         END {
-            exit (found && count == 2 && resolver[1] == "1.1.1.1#TPROXY-OUT" && resolver[2] == "8.8.8.8#TPROXY-OUT") ? 0 : 1
+            exit (found && count == 2 && resolver[1] == "https://cloudflare-dns.com/dns-query#TPROXY-OUT" && resolver[2] == "https://dns.google/dns-query#TPROXY-OUT") ? 0 : 1
         }
     ' "$CONFIG_FILE" 2>/dev/null
 }
@@ -7885,7 +7892,7 @@ tproxy_config_has_quoted_managed_dns_keys() {
                 key=substr(key, 2)
                 if (substr(key, length(key), 1) == single_quote || substr(key, length(key), 1) == double_quote) key=substr(key, 1, length(key)-1)
             }
-            if (quoted && (key == "nameserver" || key == "proxy-server-nameserver" || key == "use-hosts")) found=1
+            if (quoted && (key == "nameserver" || key == "proxy-server-nameserver" || key == "use-hosts" || key == "prefer-h3")) found=1
         }
         section == "hosts" && /^[[:space:]][[:space:]][^[:space:]]/ {
             key=$0
@@ -7896,13 +7903,13 @@ tproxy_config_has_quoted_managed_dns_keys() {
                 key=substr(key, 2)
                 if (substr(key, length(key), 1) == single_quote || substr(key, length(key), 1) == double_quote) key=substr(key, 1, length(key)-1)
             }
-            if (quoted && key == "dns.alidns.com") found=1
+            if (quoted && (key == "dns.alidns.com" || key == "cloudflare-dns.com" || key == "dns.google")) found=1
         }
         END {exit found ? 0 : 1}
     ' "$CONFIG_FILE" 2>/dev/null
 }
 
-# Only rewrite the one resolver used by pre-0.6.4 generated configs.  A
+# Only rewrite resolvers used by pre-0.6.5 generated configs.  A
 # different existing list is user-owned and must not be replaced silently.
 tproxy_config_native_dns_migratable() {
     awk '
@@ -7914,10 +7921,12 @@ tproxy_config_native_dns_migratable() {
             value=$0
             sub(/^[[:space:]]*-[[:space:]]*/, "", value)
             gsub(/^[\"'\'' ]+|[\"'\'' ]+$/, "", value)
-            count++; resolver=value
+            count++; resolver[count]=value
         }
         END {
-            if (!found || (count == 1 && resolver == "https://1.1.1.1/dns-query")) exit 0
+            if (!found || \
+                (count == 1 && resolver[1] == "https://1.1.1.1/dns-query") || \
+                (count == 2 && resolver[1] == "1.1.1.1#TPROXY-OUT" && resolver[2] == "8.8.8.8#TPROXY-OUT")) exit 0
             exit 1
         }
     ' "$CONFIG_FILE" 2>/dev/null
@@ -7931,8 +7940,8 @@ tproxy_config_set_native_dns() {
             /^dns:[[:space:]]*$/ {in_dns=1}
             in_dns && /^  nameserver:[[:space:]]*$/ {
                 print "  nameserver:"
-                print "    - '\''1.1.1.1#TPROXY-OUT'\''"
-                print "    - '\''8.8.8.8#TPROXY-OUT'\''"
+                print "    - '\''https://cloudflare-dns.com/dns-query#TPROXY-OUT'\''"
+                print "    - '\''https://dns.google/dns-query#TPROXY-OUT'\''"
                 skipping=1; replaced=1; next
             }
             skipping && /^  [^[:space:]][^:]*:[[:space:]]*/ {skipping=0}
@@ -7946,14 +7955,134 @@ tproxy_config_set_native_dns() {
             /^dns:[[:space:]]*$/ && !inserted {
                 print
                 print "  nameserver:"
-                print "    - '\''1.1.1.1#TPROXY-OUT'\''"
-                print "    - '\''8.8.8.8#TPROXY-OUT'\''"
+                print "    - '\''https://cloudflare-dns.com/dns-query#TPROXY-OUT'\''"
+                print "    - '\''https://dns.google/dns-query#TPROXY-OUT'\''"
                 inserted=1; next
             }
             {print}
             END {exit inserted ? 0 : 1}
         ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
     fi
+    mv "$tmp" "$CONFIG_FILE" || return 1
+    tproxy_config_set_doh_hosts && tproxy_config_set_dns_prefer_h3_false
+}
+
+tproxy_config_managed_host_ok() {
+    host="$1"
+    ip1="$2"
+    ip2="$3"
+    awk -v host="$host" -v ip1="$ip1" -v ip2="$ip2" '
+        /^hosts:[[:space:]]*$/ {in_hosts=1; next}
+        in_hosts && /^[^[:space:]]/ {in_hosts=0; collecting=0}
+        in_hosts && $0 ~ "^  " host ":[[:space:]]*$" {found=1; collecting=1; next}
+        in_hosts && collecting && /^  [^[:space:]][^:]*:[[:space:]]*/ {collecting=0}
+        in_hosts && collecting && /^[[:space:]]*-[[:space:]]*/ {
+            value=$0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+            gsub(/^[\"'\'' ]+|[\"'\'' ]+$/, "", value)
+            count++; address[count]=value
+        }
+        END {exit (found && count == 2 && address[1] == ip1 && address[2] == ip2) ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_doh_hosts_ok() {
+    tproxy_config_managed_host_ok cloudflare-dns.com 1.1.1.1 1.0.0.1 && \
+        tproxy_config_managed_host_ok dns.google 8.8.8.8 8.8.4.4
+}
+
+tproxy_config_managed_host_present() {
+    host="$1"
+    awk -v host="$host" '
+        /^hosts:[[:space:]]*$/ {in_hosts=1; next}
+        in_hosts && /^[^[:space:]]/ {in_hosts=0}
+        in_hosts && $0 ~ "^  " host ":[[:space:]]*$" {found=1}
+        END {exit found ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_set_managed_host() {
+    host="$1"
+    ip1="$2"
+    ip2="$3"
+    tmp="$TMP_DIR/tproxy-config.$$.managed-hosts"
+    if tproxy_config_managed_host_present "$host"; then
+        awk -v host="$host" -v ip1="$ip1" -v ip2="$ip2" '
+            BEGIN {in_hosts=0; skipping=0; replaced=0}
+            /^hosts:[[:space:]]*$/ {in_hosts=1}
+            in_hosts && $0 ~ "^  " host ":[[:space:]]*$" {
+                print "  " host ":"
+                print "    - " ip1
+                print "    - " ip2
+                skipping=1; replaced=1; next
+            }
+            skipping && /^  [^[:space:]][^:]*:[[:space:]]*/ {skipping=0}
+            skipping && /^[^[:space:]]/ {skipping=0; in_hosts=0}
+            skipping {next}
+            {print}
+            END {exit replaced ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    elif grep -q '^hosts:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null; then
+        awk -v host="$host" -v ip1="$ip1" -v ip2="$ip2" '
+            BEGIN {inserted=0}
+            /^hosts:[[:space:]]*$/ && !inserted {
+                print
+                print "  " host ":"
+                print "    - " ip1
+                print "    - " ip2
+                inserted=1; next
+            }
+            {print}
+            END {exit inserted ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    else
+        awk -v host="$host" -v ip1="$ip1" -v ip2="$ip2" '
+            BEGIN {inserted=0}
+            /^dns:[[:space:]]*$/ && !inserted {
+                print "hosts:"
+                print "  " host ":"
+                print "    - " ip1
+                print "    - " ip2
+                print ""
+                inserted=1
+            }
+            {print}
+            END {exit inserted ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+    mv "$tmp" "$CONFIG_FILE" || return 1
+}
+
+tproxy_config_set_doh_hosts() {
+    tproxy_config_set_managed_host cloudflare-dns.com 1.1.1.1 1.0.0.1 && \
+        tproxy_config_set_managed_host dns.google 8.8.8.8 8.8.4.4
+}
+
+tproxy_config_dns_prefer_h3_disabled() {
+    awk '
+        /^dns:[[:space:]]*$/ {in_dns=1; next}
+        in_dns && /^[^[:space:]]/ {in_dns=0}
+        in_dns && /^  prefer-h3:[[:space:]]*(false|False|FALSE)[[:space:]]*$/ {found=1}
+        END {exit found ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_set_dns_prefer_h3_false() {
+    tmp="$TMP_DIR/tproxy-config.$$.prefer-h3"
+    awk '
+        BEGIN {in_dns=0; written=0}
+        /^dns:[[:space:]]*$/ {in_dns=1; print; next}
+        in_dns && /^[^[:space:]]/ {
+            if (!written) print "  prefer-h3: false"
+            in_dns=0; written=1
+        }
+        in_dns && /^  prefer-h3:[[:space:]]*/ {
+            if (!written) print "  prefer-h3: false"
+            written=1; next
+        }
+        {print}
+        END {if (in_dns && !written) print "  prefer-h3: false"}
+    ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
     mv "$tmp" "$CONFIG_FILE" || return 1
 }
 
@@ -8061,6 +8190,8 @@ tproxy_ensure_config_port() {
     tproxy_config_out_group_ok || needs_update=1
     tproxy_config_has_in_type_rule || needs_update=1
     tproxy_config_proxy_dns_bootstrap_ok || needs_update=1
+    tproxy_config_doh_hosts_ok || needs_update=1
+    tproxy_config_dns_prefer_h3_disabled || needs_update=1
     if tproxy_config_dns_has_unsafe_overrides; then
         tproxy_save_error "dns.nameserver-policy, dns.fallback, or dns.direct-nameserver detected; refusing TProxy start because DNS could bypass $TPROXY_OUT_GROUP"
         return 1
@@ -8096,6 +8227,8 @@ tproxy_ensure_config_port() {
     tproxy_config_has_in_type_rule || tproxy_config_insert_rule || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
     tproxy_config_proxy_dns_bootstrap_ok || tproxy_config_set_proxy_dns_bootstrap || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
     tproxy_config_native_dns_ok || tproxy_config_set_native_dns || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+    tproxy_config_doh_hosts_ok || tproxy_config_set_doh_hosts || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+    tproxy_config_dns_prefer_h3_disabled || tproxy_config_set_dns_prefer_h3_false || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
 
     printf '%s\n' "$backup_path" > "$TPROXY_CONFIG_OWNED_FILE" 2>/dev/null || true
     TPROXY_START_CONFIG_MODIFIED=1
@@ -12662,12 +12795,13 @@ migrate_patch_config() {
             printf '  enhanced-mode: fake-ip\n'
             printf '  fake-ip-range: 198.18.0.0/16\n'
             printf '  use-hosts: true\n'
+            printf '  prefer-h3: false\n'
             printf '  default-nameserver:\n'
             printf '    - 1.1.1.1\n'
             printf '    - 8.8.8.8\n'
             printf '  nameserver:\n'
-            printf "    - '1.1.1.1#TPROXY-OUT'\\n"
-            printf "    - '8.8.8.8#TPROXY-OUT'\\n"
+            printf "    - 'https://cloudflare-dns.com/dns-query#TPROXY-OUT'\\n"
+            printf "    - 'https://dns.google/dns-query#TPROXY-OUT'\\n"
             printf '  proxy-server-nameserver:\n'
             printf '    - https://dns.alidns.com/dns-query#DIRECT\n'
             printf '  respect-rules: true\n'
@@ -12693,12 +12827,18 @@ migrate_patch_config() {
         if ! tproxy_config_native_dns_ok && tproxy_config_native_dns_migratable; then
             if tproxy_config_set_native_dns; then
                 MIGRATE_CONFIG_CHANGED=1
-                ok "migrate: website DNS now uses native UDP through TPROXY-OUT"
+                ok "migrate: website DNS now uses Cloudflare/Google DoH through TPROXY-OUT"
             else
                 warn "migrate: failed to update website DNS policy; inspect the dns block"
             fi
         elif ! tproxy_config_native_dns_ok; then
-            warn "migrate: keeping custom dns.nameserver unchanged; TProxy will refuse to start until it uses native resolvers through $TPROXY_OUT_GROUP"
+            warn "migrate: keeping custom dns.nameserver unchanged; TProxy will refuse to start until it uses managed DoH through $TPROXY_OUT_GROUP"
+        fi
+        if ! tproxy_config_doh_hosts_ok; then
+            tproxy_config_set_doh_hosts && MIGRATE_CONFIG_CHANGED=1 || warn "migrate: failed to add DoH bootstrap hosts"
+        fi
+        if ! tproxy_config_dns_prefer_h3_disabled; then
+            tproxy_config_set_dns_prefer_h3_false && MIGRATE_CONFIG_CHANGED=1 || warn "migrate: failed to disable DoH HTTP/3"
         fi
     fi
 
@@ -13236,6 +13376,12 @@ hosts:
   dns.alidns.com:
     - 223.5.5.5
     - 223.6.6.6
+  cloudflare-dns.com:
+    - 1.1.1.1
+    - 1.0.0.1
+  dns.google:
+    - 8.8.8.8
+    - 8.8.4.4
 
 dns:
   enable: true
@@ -13244,12 +13390,13 @@ dns:
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.0/16
   use-hosts: true
+  prefer-h3: false
   default-nameserver:
     - 1.1.1.1
     - 8.8.8.8
   nameserver:
-    - '1.1.1.1#TPROXY-OUT'
-    - '8.8.8.8#TPROXY-OUT'
+    - 'https://cloudflare-dns.com/dns-query#TPROXY-OUT'
+    - 'https://dns.google/dns-query#TPROXY-OUT'
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
@@ -13305,6 +13452,12 @@ hosts:
   dns.alidns.com:
     - 223.5.5.5
     - 223.6.6.6
+  cloudflare-dns.com:
+    - 1.1.1.1
+    - 1.0.0.1
+  dns.google:
+    - 8.8.8.8
+    - 8.8.4.4
 
 dns:
   enable: true
@@ -13313,12 +13466,13 @@ dns:
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.0/16
   use-hosts: true
+  prefer-h3: false
   default-nameserver:
     - 1.1.1.1
     - 8.8.8.8
   nameserver:
-    - '1.1.1.1#TPROXY-OUT'
-    - '8.8.8.8#TPROXY-OUT'
+    - 'https://cloudflare-dns.com/dns-query#TPROXY-OUT'
+    - 'https://dns.google/dns-query#TPROXY-OUT'
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
