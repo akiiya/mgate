@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.6.0"
+MGATE_VERSION="0.6.1"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -610,8 +610,9 @@ tproxy-port: __TPROXY_PORT__
 external-controller: 127.0.0.1:__MIHOMO_API_PORT__
 
 # DNS server: fake-ip so TProxy-captured connections carry full domain info for
-# rule matching, and respect-rules/proxy-server-nameserver so DNS queries
-# themselves transit TPROXY-OUT instead of leaking out in plaintext.
+# rule matching. Client DNS follows TPROXY-OUT; proxy node hostnames use
+# encrypted, IP-addressed DoH directly only for bootstrap, avoiding a DNS
+# resolution loop before the selected proxy can connect.
 dns:
   enable: true
   listen: 127.0.0.1:__TPROXY_DNS_PORT__
@@ -624,8 +625,8 @@ dns:
   nameserver:
     - https://1.1.1.1/dns-query
   proxy-server-nameserver:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
+    - https://1.1.1.1/dns-query#DIRECT
+    - https://8.8.8.8/dns-query#DIRECT
   respect-rules: true
 
 profile:
@@ -7726,6 +7727,48 @@ tproxy_config_insert_rule() {
     mv "$tmp" "$CONFIG_FILE" || return 1
 }
 
+# Node hostnames must be resolvable before TPROXY-OUT can establish its first
+# connection.  Keep that bootstrap query encrypted, but bind it to DIRECT so
+# respect-rules cannot route it back into the not-yet-connected node.
+tproxy_config_proxy_dns_bootstrap_ok() {
+    grep -q '^[[:space:]]*-[[:space:]]*https://1\.1\.1\.1/dns-query#DIRECT[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null && \
+        grep -q '^[[:space:]]*-[[:space:]]*https://8\.8\.8\.8/dns-query#DIRECT[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_set_proxy_dns_bootstrap() {
+    tmp="$TMP_DIR/tproxy-config.$$.proxy-dns"
+    if grep -q '^[[:space:]]*proxy-server-nameserver:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null; then
+        awk '
+            BEGIN {in_dns=0; skipping=0; replaced=0}
+            /^dns:[[:space:]]*$/ {in_dns=1}
+            in_dns && /^[[:space:]]*proxy-server-nameserver:[[:space:]]*$/ {
+                print "  proxy-server-nameserver:"
+                print "    - https://1.1.1.1/dns-query#DIRECT"
+                print "    - https://8.8.8.8/dns-query#DIRECT"
+                skipping=1; replaced=1; next
+            }
+            skipping && /^  [^[:space:]][^:]*:[[:space:]]*/ {skipping=0}
+            skipping {next}
+            {print}
+            END {exit replaced ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    else
+        awk '
+            BEGIN {inserted=0}
+            /^dns:[[:space:]]*$/ && !inserted {
+                print
+                print "  proxy-server-nameserver:"
+                print "    - https://1.1.1.1/dns-query#DIRECT"
+                print "    - https://8.8.8.8/dns-query#DIRECT"
+                inserted=1; next
+            }
+            {print}
+            END {exit inserted ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+    mv "$tmp" "$CONFIG_FILE" || return 1
+}
+
 tproxy_ensure_config_port() {
     current_port="$(tproxy_mihomo_port || true)"
     if [ -n "$current_port" ] && [ "$current_port" != "$TPROXY_PORT" ]; then
@@ -7739,6 +7782,7 @@ tproxy_ensure_config_port() {
     tproxy_config_bind_ok || needs_update=1
     tproxy_config_out_group_ok || needs_update=1
     tproxy_config_has_in_type_rule || needs_update=1
+    tproxy_config_proxy_dns_bootstrap_ok || needs_update=1
 
     if [ "$needs_update" -eq 0 ]; then
         tproxy_ok "mihomo transparent config already present"
@@ -7760,6 +7804,7 @@ tproxy_ensure_config_port() {
     tproxy_config_bind_ok || tproxy_config_set_key bind-address "'*'" || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
     tproxy_config_out_group_ok || { tproxy_config_remove_out_group && tproxy_config_insert_group; } || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
     tproxy_config_has_in_type_rule || tproxy_config_insert_rule || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+    tproxy_config_proxy_dns_bootstrap_ok || tproxy_config_set_proxy_dns_bootstrap || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
 
     printf '%s\n' "$backup_path" > "$TPROXY_CONFIG_OWNED_FILE" 2>/dev/null || true
     TPROXY_START_CONFIG_MODIFIED=1
@@ -7979,6 +8024,29 @@ cmd_tproxy_start() {
     tproxy_info "NAT gateway fallback will be preserved"
 
     tproxy_start_preflight || return 1
+
+    # Bring old generated configs forward before checking the live listener.
+    # In particular, proxy-node DNS bootstrap must be fixed and Mihomo restarted
+    # before the first TPROXY connection, otherwise domain-based nodes loop.
+    TPROXY_START_CONFIG_MODIFIED=0
+    if ! tproxy_ensure_config_port; then
+        tproxy_save_error "failed to prepare mihomo transparent-proxy configuration"
+        return 1
+    fi
+    if [ "$TPROXY_START_CONFIG_MODIFIED" = "1" ]; then
+        if ! tproxy_test_config; then
+            tproxy_restore_config_from_backup "$TPROXY_START_BACKUP" >/dev/null 2>&1 || true
+            tproxy_save_error "updated mihomo config failed validation; restored backup"
+            return 1
+        fi
+        if ! tproxy_restart_mihomo; then
+            tproxy_restore_config_from_backup "$TPROXY_START_BACKUP" >/dev/null 2>&1 || true
+            tproxy_restart_mihomo >/dev/null 2>&1 || true
+            tproxy_save_error "mihomo restart failed after transparent-proxy config update; restored backup"
+            return 1
+        fi
+        tproxy_ok "mihomo restarted after transparent-proxy config update"
+    fi
 
     if ! tproxy_mihomo_running; then
         tproxy_save_error "mihomo is not running; run: mgate core-start"
@@ -12306,12 +12374,21 @@ migrate_patch_config() {
             printf '  nameserver:\n'
             printf '    - https://1.1.1.1/dns-query\n'
             printf '  proxy-server-nameserver:\n'
-            printf '    - https://1.1.1.1/dns-query\n'
-            printf '    - https://8.8.8.8/dns-query\n'
+            printf '    - https://1.1.1.1/dns-query#DIRECT\n'
+            printf '    - https://8.8.8.8/dns-query#DIRECT\n'
             printf '  respect-rules: true\n'
         } >> "$CONFIG_FILE"
         MIGRATE_CONFIG_CHANGED=1
         ok "migrate: 已添加 dns 配置块（fake-ip + respect-rules，防止 DNS 泄露）"
+    fi
+
+    if ! tproxy_config_proxy_dns_bootstrap_ok; then
+        if tproxy_config_set_proxy_dns_bootstrap; then
+            MIGRATE_CONFIG_CHANGED=1
+            ok "migrate: proxy-node DNS bootstrap now uses encrypted direct DoH to avoid TProxy loops"
+        else
+            warn "migrate: failed to update proxy-node DNS bootstrap; inspect the dns block"
+        fi
     fi
 
     if ! tproxy_config_has_out_group 2>/dev/null; then
@@ -12852,8 +12929,8 @@ dns:
   nameserver:
     - https://1.1.1.1/dns-query
   proxy-server-nameserver:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
+    - https://1.1.1.1/dns-query#DIRECT
+    - https://8.8.8.8/dns-query#DIRECT
   respect-rules: true
 
 profile:
@@ -12915,8 +12992,8 @@ dns:
   nameserver:
     - https://1.1.1.1/dns-query
   proxy-server-nameserver:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
+    - https://1.1.1.1/dns-query#DIRECT
+    - https://8.8.8.8/dns-query#DIRECT
   respect-rules: true
 
 profile:
