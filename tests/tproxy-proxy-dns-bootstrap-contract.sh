@@ -357,4 +357,43 @@ grep -q '^  cloudflare-dns.com:$' "$test_dir/generated-sub-config.yaml"
 grep -q "^    - 'https://dns.google/dns-query#TPROXY-OUT'$" "$test_dir/generated-sub-config.yaml"
 grep -q '^  prefer-h3: false$' "$test_dir/generated-sub-config.yaml"
 
+mihomo_api_call() {
+    case "$2" in
+        *cloudflare-dns.com*) printf '{"delay":18}\n' ;;
+        *dns.google*) printf '{"delay":21}\n' ;;
+        *) return 1 ;;
+    esac
+}
+tproxy_doh_preflight
+
+mihomo_api_call() {
+    case "$2" in
+        *cloudflare-dns.com*) printf '{"delay":18}\n' ;;
+        *) return 1 ;;
+    esac
+}
+! tproxy_doh_preflight
+[ "${TPROXY_DOH_PREFLIGHT_FAILED:-}" = "dns.google" ]
+
+tproxy_core_rules_active() { return 0; }
+: > "$test_dir/tproxy-select-calls.txt"
+mihomo_api_call() {
+    method="$1"
+    path="$2"
+    body="${3:-}"
+    case "$method:$path" in
+        GET:/proxies/TPROXY-OUT) printf '{"now":"old-node"}\n' ;;
+        GET:*cloudflare-dns.com*) printf '{"delay":18}\n' ;;
+        GET:*dns.google*) return 1 ;;
+        PUT:/proxies/TPROXY-OUT)
+            printf '%s\n' "$body" >> "$test_dir/tproxy-select-calls.txt"
+            ;;
+        *) return 1 ;;
+    esac
+}
+! cmd_tproxy_select new-node
+grep -q '"name":"new-node"' "$test_dir/tproxy-select-calls.txt"
+grep -q '"name":"old-node"' "$test_dir/tproxy-select-calls.txt"
+grep -q "selected node 'new-node' cannot reach required DoH resolver(s): dns.google; restored previous node 'old-node'" "$TPROXY_LAST_ERROR_FILE"
+
 printf 'tproxy proxy DNS bootstrap contract: OK\n'

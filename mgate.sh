@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.6.5"
+MGATE_VERSION="0.6.6"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -74,6 +74,7 @@ TPROXY_ROUTE_TABLE="${MGATE_TPROXY_ROUTE_TABLE:-100}"
 TPROXY_PORT="${MGATE_TPROXY_PORT:-31802}"
 TPROXY_DNS_PORT="${MGATE_TPROXY_DNS_PORT:-1053}"
 TPROXY_OUT_GROUP="${MGATE_TPROXY_OUT_GROUP:-TPROXY-OUT}"
+TPROXY_DOH_PREFLIGHT_TIMEOUT="${MGATE_TPROXY_DOH_PREFLIGHT_TIMEOUT:-8000}"
 TPROXY_SOCKET_BYPASS="${MGATE_TPROXY_SOCKET_BYPASS:-0}"
 TPROXY_ENABLED_FILE="$DATA_DIR/tproxy.enabled"
 TPROXY_LAST_ERROR_FILE="$DATA_DIR/tproxy.last_error"
@@ -8492,6 +8493,16 @@ cmd_tproxy_start() {
         fi
     fi
 
+    if ! tproxy_doh_preflight; then
+        # A failed resolver probe must never leave a previous partial TProxy
+        # state intercepting clients.  Roll back to the known NAT fallback
+        # before returning the actionable error written by the preflight.
+        preflight_error="selected $TPROXY_OUT_GROUP node cannot reach required DoH resolver(s): ${TPROXY_DOH_PREFLIGHT_FAILED:-unknown}; TProxy was not enabled and AP DNS remains on NAT fallback"
+        tproxy_save_error "$preflight_error"
+        tproxy_rollback "$preflight_error"
+        return 1
+    fi
+
     tproxy_info "installing TProxy routing and mangle rules"
     if ! tproxy_add_ip_rule; then
         tproxy_rollback "failed to add ip rule fwmark $TPROXY_MARK lookup $TPROXY_ROUTE_TABLE"
@@ -8653,6 +8664,39 @@ tproxy_fetch_now() {
     printf '%s' "$result" | sed -n 's/.*"now"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
+# DoH is intentionally bound to TPROXY-OUT.  Verify that the currently
+# selected node can reach both managed resolvers before redirecting AP DNS to
+# Mihomo; otherwise every client would lose name resolution at once.
+tproxy_doh_preflight() {
+    timeout="$TPROXY_DOH_PREFLIGHT_TIMEOUT"
+    case "$timeout" in
+        ''|*[!0-9]*) timeout=8000 ;;
+    esac
+
+    failed=""
+    for resolver in cloudflare-dns.com dns.google; do
+        case "$resolver" in
+            cloudflare-dns.com)
+                url='https%3A%2F%2Fcloudflare-dns.com%2Fdns-query%3Fdns%3DAAABAAABAAAAAAAAB2V4YW1wbGUDY29tAAABAAE'
+                ;;
+            dns.google)
+                url='https%3A%2F%2Fdns.google%2Fdns-query%3Fdns%3DAAABAAABAAAAAAAAB2V4YW1wbGUDY29tAAABAAE'
+                ;;
+        esac
+        result="$(mihomo_api_call GET "/proxies/$TPROXY_OUT_GROUP/delay?timeout=$timeout&url=$url" 2>/dev/null || true)"
+        if ! printf '%s' "$result" | grep -Eq '"delay"[[:space:]]*:[[:space:]]*[1-9][0-9]*'; then
+            failed="${failed}${failed:+, }$resolver"
+        fi
+    done
+
+    if [ -n "$failed" ]; then
+        TPROXY_DOH_PREFLIGHT_FAILED="$failed"
+        return 1
+    fi
+    TPROXY_DOH_PREFLIGHT_FAILED=""
+    tproxy_ok "selected $TPROXY_OUT_GROUP node can reach Cloudflare and Google DoH"
+}
+
 cmd_tproxy_nodes() {
     addr="$(config_mihomo_api_addr)"
     info "查询 $TPROXY_OUT_GROUP 可用节点（mihomo API: $addr）"
@@ -8679,6 +8723,14 @@ cmd_tproxy_select() {
     node="$1"
     [ -n "$node" ] || die "用法：mgate tproxy-select <节点名>  （用 mgate tproxy-nodes 查看可用节点）"
     addr="$(config_mihomo_api_addr)"
+    previous=""
+    if tproxy_core_rules_active; then
+        previous="$(tproxy_fetch_now)"
+        if [ -z "$previous" ]; then
+            err "无法读取当前 $TPROXY_OUT_GROUP 节点；为避免切换后 DNS 不可用，已拒绝切换"
+            return 1
+        fi
+    fi
     info "切换 $TPROXY_OUT_GROUP 到节点：$node"
     # PUT /proxies/{group} 成功返回 HTTP 204 空 body，用退出码判断结果
     result="$(mihomo_api_call PUT "/proxies/$TPROXY_OUT_GROUP" "{\"name\":\"$node\"}")"
@@ -8687,6 +8739,19 @@ cmd_tproxy_select() {
         errmsg="$(printf '%s' "$result" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
         err "切换失败：${errmsg:-请确认 mihomo 正在运行且节点名正确}"
         hint "可用节点：mgate tproxy-nodes"
+        return 1
+    fi
+    if [ -n "$previous" ] && [ "$previous" != "$node" ] && ! tproxy_doh_preflight; then
+        preflight_error="selected node '$node' cannot reach required DoH resolver(s): ${TPROXY_DOH_PREFLIGHT_FAILED:-unknown}"
+        warn "$preflight_error; restoring previous node '$previous'"
+        if mihomo_api_call PUT "/proxies/$TPROXY_OUT_GROUP" "{\"name\":\"$previous\"}" >/dev/null 2>&1; then
+            tproxy_save_error "$preflight_error; restored previous node '$previous'"
+            err "切换已撤销，当前仍使用：$previous"
+        else
+            tproxy_rollback "$preflight_error; failed to restore previous node '$previous'"
+            tproxy_save_error "$preflight_error; previous node restore failed, so TProxy was stopped and NAT fallback was restored"
+            err "切换失败且旧节点恢复失败；已停止 TProxy 并恢复 NAT"
+        fi
         return 1
     fi
     ok "已切换 $TPROXY_OUT_GROUP -> $node（即时生效，无需重启）"
