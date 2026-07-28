@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.6.1"
+MGATE_VERSION="0.6.2"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -7614,7 +7614,7 @@ tproxy_config_out_group_ok() {
             in_group=(line == name)
             next
         }
-        in_group && /^[[:space:]]*type:[[:space:]]*url-test[[:space:]]*$/ {found=1}
+        in_group && /^[[:space:]]*type:[[:space:]]*select[[:space:]]*$/ {found=1}
         END {exit found ? 0 : 1}
     ' "$CONFIG_FILE" 2>/dev/null
 }
@@ -7685,11 +7685,9 @@ tproxy_config_insert_group() {
             BEGIN {inserted=0}
             /^rules:[[:space:]]*$/ && !inserted {
                 print "  - name: " name
-                print "    type: url-test"
+                print "    type: select"
                 print "    use:"
                 print "      - mgate-sub"
-                print "    url: http://www.gstatic.com/generate_204"
-                print "    interval: 300"
                 print ""
                 inserted=1
             }
