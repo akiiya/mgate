@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.6.3"
+MGATE_VERSION="0.6.4"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -617,8 +617,8 @@ hosts:
     - 223.6.6.6
 
 # DNS server: fake-ip so TProxy-captured connections carry full domain info for
-# rule matching. Client DNS follows TPROXY-OUT; proxy node hostnames use
-# encrypted, IP-addressed DoH directly only for bootstrap, avoiding a DNS
+# rule matching. Website DNS uses native UDP only through TPROXY-OUT;
+# proxy-node hostnames use encrypted direct DoH only for bootstrap, avoiding a
 # resolution loop before the selected proxy can connect.
 dns:
   enable: true
@@ -626,11 +626,13 @@ dns:
   ipv6: false
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.0/16
+  use-hosts: true
   default-nameserver:
     - 1.1.1.1
     - 8.8.8.8
   nameserver:
-    - https://1.1.1.1/dns-query
+    - '1.1.1.1#TPROXY-OUT'
+    - '8.8.8.8#TPROXY-OUT'
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
@@ -7735,10 +7737,224 @@ tproxy_config_insert_rule() {
 # connection.  Keep that bootstrap query encrypted, but bind it to DIRECT so
 # respect-rules cannot route it back into the not-yet-connected node.
 tproxy_config_proxy_dns_bootstrap_ok() {
-    grep -q '^[[:space:]]*-[[:space:]]*https://dns\.alidns\.com/dns-query#DIRECT[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null && \
-        grep -q '^[[:space:]]*dns\.alidns\.com:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null && \
-        grep -q '^[[:space:]]*-[[:space:]]*223\.5\.5\.5[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null && \
-        grep -q '^[[:space:]]*-[[:space:]]*223\.6\.6\.6[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null
+    tproxy_config_bootstrap_hosts_ok && \
+        tproxy_config_proxy_server_nameserver_ok && \
+        tproxy_config_dns_use_hosts_ok
+}
+
+tproxy_config_bootstrap_hosts_ok() {
+    awk '
+        /^hosts:[[:space:]]*$/ {in_hosts=1; next}
+        in_hosts && /^[^[:space:]]/ {in_hosts=0; collecting=0}
+        in_hosts && /^  dns\.alidns\.com:[[:space:]]*$/ {found=1; collecting=1; next}
+        in_hosts && collecting && /^  [^[:space:]][^:]*:[[:space:]]*/ {collecting=0}
+        in_hosts && collecting && /^[[:space:]]*-[[:space:]]*/ {
+            value=$0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+            count++; address[count]=value
+        }
+        END {exit (found && count == 2 && address[1] == "223.5.5.5" && address[2] == "223.6.6.6") ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_proxy_server_nameserver_ok() {
+    awk '
+        /^dns:[[:space:]]*$/ {in_dns=1; next}
+        in_dns && /^[^[:space:]]/ {in_dns=0; collecting=0}
+        in_dns && /^  proxy-server-nameserver:[[:space:]]*$/ {found=1; collecting=1; next}
+        in_dns && collecting && /^  [^[:space:]][^:]*:[[:space:]]*/ {collecting=0}
+        in_dns && collecting && /^[[:space:]]*-[[:space:]]*/ {
+            value=$0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+            count++; resolver[count]=value
+        }
+        END {exit (found && count == 1 && resolver[1] == "https://dns.alidns.com/dns-query#DIRECT") ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_dns_has_proxy_server_nameserver() {
+    awk '
+        /^dns:[[:space:]]*$/ {in_dns=1; next}
+        in_dns && /^[^[:space:]]/ {in_dns=0}
+        in_dns && /^[[:space:]][[:space:]][^[:space:]]/ && /^  proxy-server-nameserver:[[:space:]]*$/ {found=1}
+        END {exit found ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_dns_use_hosts_ok() {
+    awk '
+        /^dns:[[:space:]]*$/ {in_dns=1; next}
+        in_dns && /^[^[:space:]]/ {in_dns=0}
+        in_dns && /^  use-hosts:[[:space:]]*(true|True|TRUE)[[:space:]]*$/ {found=1}
+        END {exit found ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_set_dns_use_hosts() {
+    tmp="$TMP_DIR/tproxy-config.$$.dns-use-hosts"
+    awk '
+        BEGIN {in_dns=0; written=0}
+        /^dns:[[:space:]]*$/ {in_dns=1; print; next}
+        in_dns && /^[^[:space:]]/ {
+            if (!written) print "  use-hosts: true"
+            in_dns=0; written=1
+        }
+        in_dns && /^  use-hosts:[[:space:]]*/ {
+            if (!written) print "  use-hosts: true"
+            written=1; next
+        }
+        {print}
+        END {if (in_dns && !written) print "  use-hosts: true"}
+    ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    mv "$tmp" "$CONFIG_FILE" || return 1
+}
+
+tproxy_config_native_dns_ok() {
+    awk '
+        /^dns:[[:space:]]*$/ {in_dns=1; next}
+        in_dns && /^[^[:space:]]/ {in_dns=0; collecting=0}
+        in_dns && /^  nameserver:[[:space:]]*$/ {found=1; collecting=1; next}
+        in_dns && collecting && /^  [^[:space:]][^:]*:[[:space:]]*/ {collecting=0}
+        in_dns && collecting && /^[[:space:]]*-[[:space:]]*/ {
+            value=$0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+            gsub(/^[\"'\'' ]+|[\"'\'' ]+$/, "", value)
+            count++; resolver[count]=value
+        }
+        END {
+            exit (found && count == 2 && resolver[1] == "1.1.1.1#TPROXY-OUT" && resolver[2] == "8.8.8.8#TPROXY-OUT") ? 0 : 1
+        }
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+# These entries can bypass dns.nameserver for selected domains or connection
+# types.  Until every resolver can be validated as #TPROXY-OUT, fail closed.
+tproxy_config_dns_has_unsafe_overrides() {
+    awk '
+        BEGIN {single_quote=sprintf("%c", 39); double_quote=sprintf("%c", 34)}
+        /^dns:[[:space:]]*$/ {in_dns=1; next}
+        in_dns && /^[^[:space:]]/ {in_dns=0}
+        in_dns && /^[[:space:]][[:space:]][^[:space:]]/ {
+            key=$0
+            sub(/^[[:space:]][[:space:]]/, "", key)
+            sub(/:.*/, "", key)
+            if (substr(key, 1, 1) == single_quote || substr(key, 1, 1) == double_quote) {
+                key=substr(key, 2)
+                if (substr(key, length(key), 1) == single_quote || substr(key, length(key), 1) == double_quote) key=substr(key, 1, length(key)-1)
+            }
+            if (key == "nameserver-policy" || key == "fallback" || key == "direct-nameserver") found=1
+        }
+        END {exit found ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_dns_has_yaml_merge_or_alias() {
+    awk '
+        /^(dns|hosts):[[:space:]]*/ {
+            line=$0
+            sub(/[[:space:]]#.*/, "", line)
+            if (line ~ /:[[:space:]]*[&*][^[:space:]#]+/) found=1
+            in_dns=($0 ~ /^dns:/)
+            next
+        }
+        in_dns && /^[^[:space:]]/ {in_dns=0}
+        in_dns && /^[[:space:]][[:space:]]/ {
+            line=$0
+            sub(/[[:space:]]#.*/, "", line)
+            if (line ~ /^[[:space:]][[:space:]]<<:/ || line ~ /:[[:space:]]*\*[^[:space:]#]+/ || line ~ /&[^[:space:]#]+/) found=1
+        }
+        END {exit found ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+# The YAML parser accepts quoted mapping keys, but the migration writers emit
+# unquoted keys.  Do not risk creating a duplicate semantic key; preserve the
+# user config and require it to be normalized explicitly before TProxy starts.
+tproxy_config_has_quoted_managed_dns_keys() {
+    awk '
+        BEGIN {single_quote=sprintf("%c", 39); double_quote=sprintf("%c", 34)}
+        /^dns:[[:space:]]*$/ {section="dns"; next}
+        /^hosts:[[:space:]]*$/ {section="hosts"; next}
+        /^[^[:space:]]/ {section=""}
+        section == "dns" && /^[[:space:]][[:space:]][^[:space:]]/ {
+            key=$0
+            sub(/^[[:space:]][[:space:]]/, "", key)
+            sub(/:.*/, "", key)
+            quoted=(substr(key, 1, 1) == single_quote || substr(key, 1, 1) == double_quote)
+            if (quoted) {
+                key=substr(key, 2)
+                if (substr(key, length(key), 1) == single_quote || substr(key, length(key), 1) == double_quote) key=substr(key, 1, length(key)-1)
+            }
+            if (quoted && (key == "nameserver" || key == "proxy-server-nameserver" || key == "use-hosts")) found=1
+        }
+        section == "hosts" && /^[[:space:]][[:space:]][^[:space:]]/ {
+            key=$0
+            sub(/^[[:space:]][[:space:]]/, "", key)
+            sub(/:.*/, "", key)
+            quoted=(substr(key, 1, 1) == single_quote || substr(key, 1, 1) == double_quote)
+            if (quoted) {
+                key=substr(key, 2)
+                if (substr(key, length(key), 1) == single_quote || substr(key, length(key), 1) == double_quote) key=substr(key, 1, length(key)-1)
+            }
+            if (quoted && key == "dns.alidns.com") found=1
+        }
+        END {exit found ? 0 : 1}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+# Only rewrite the one resolver used by pre-0.6.4 generated configs.  A
+# different existing list is user-owned and must not be replaced silently.
+tproxy_config_native_dns_migratable() {
+    awk '
+        /^dns:[[:space:]]*$/ {in_dns=1; next}
+        in_dns && /^[^[:space:]]/ {in_dns=0}
+        in_dns && /^  nameserver:[[:space:]]*$/ {found=1; collecting=1; next}
+        in_dns && collecting && /^  [^[:space:]][^:]*:[[:space:]]*/ {collecting=0}
+        in_dns && collecting && /^[[:space:]]*-[[:space:]]*/ {
+            value=$0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+            gsub(/^[\"'\'' ]+|[\"'\'' ]+$/, "", value)
+            count++; resolver=value
+        }
+        END {
+            if (!found || (count == 1 && resolver == "https://1.1.1.1/dns-query")) exit 0
+            exit 1
+        }
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+tproxy_config_set_native_dns() {
+    tmp="$TMP_DIR/tproxy-config.$$.native-dns"
+    if grep -q '^  nameserver:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null; then
+        awk '
+            BEGIN {in_dns=0; skipping=0; replaced=0}
+            /^dns:[[:space:]]*$/ {in_dns=1}
+            in_dns && /^  nameserver:[[:space:]]*$/ {
+                print "  nameserver:"
+                print "    - '\''1.1.1.1#TPROXY-OUT'\''"
+                print "    - '\''8.8.8.8#TPROXY-OUT'\''"
+                skipping=1; replaced=1; next
+            }
+            skipping && /^  [^[:space:]][^:]*:[[:space:]]*/ {skipping=0}
+            skipping {next}
+            {print}
+            END {exit replaced ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    else
+        awk '
+            BEGIN {inserted=0}
+            /^dns:[[:space:]]*$/ && !inserted {
+                print
+                print "  nameserver:"
+                print "    - '\''1.1.1.1#TPROXY-OUT'\''"
+                print "    - '\''8.8.8.8#TPROXY-OUT'\''"
+                inserted=1; next
+            }
+            {print}
+            END {exit inserted ? 0 : 1}
+        ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+    mv "$tmp" "$CONFIG_FILE" || return 1
 }
 
 tproxy_config_set_bootstrap_hosts() {
@@ -7792,11 +8008,11 @@ tproxy_config_set_bootstrap_hosts() {
 
 tproxy_config_set_proxy_dns_bootstrap() {
     tmp="$TMP_DIR/tproxy-config.$$.proxy-dns"
-    if grep -q '^[[:space:]]*proxy-server-nameserver:[[:space:]]*$' "$CONFIG_FILE" 2>/dev/null; then
+    if tproxy_config_dns_has_proxy_server_nameserver; then
         awk '
             BEGIN {in_dns=0; skipping=0; replaced=0}
             /^dns:[[:space:]]*$/ {in_dns=1}
-            in_dns && /^[[:space:]]*proxy-server-nameserver:[[:space:]]*$/ {
+            in_dns && /^  proxy-server-nameserver:[[:space:]]*$/ {
                 print "  proxy-server-nameserver:"
                 print "    - https://dns.alidns.com/dns-query#DIRECT"
                 skipping=1; replaced=1; next
@@ -7820,13 +8036,21 @@ tproxy_config_set_proxy_dns_bootstrap() {
         ' "$CONFIG_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
     fi
     mv "$tmp" "$CONFIG_FILE" || return 1
-    tproxy_config_set_bootstrap_hosts
+    tproxy_config_set_bootstrap_hosts && tproxy_config_set_dns_use_hosts
 }
 
 tproxy_ensure_config_port() {
     current_port="$(tproxy_mihomo_port || true)"
     if [ -n "$current_port" ] && [ "$current_port" != "$TPROXY_PORT" ]; then
         tproxy_save_error "config has tproxy-port $current_port, expected $TPROXY_PORT; not overwriting user config"
+        return 1
+    fi
+    if tproxy_config_has_quoted_managed_dns_keys; then
+        tproxy_save_error "quoted dns/hosts keys detected; refusing automatic DNS migration because it could create duplicate YAML keys"
+        return 1
+    fi
+    if tproxy_config_dns_has_yaml_merge_or_alias; then
+        tproxy_save_error "YAML merge or alias detected in dns; refusing TProxy start because DNS overrides cannot be verified"
         return 1
     fi
 
@@ -7837,6 +8061,18 @@ tproxy_ensure_config_port() {
     tproxy_config_out_group_ok || needs_update=1
     tproxy_config_has_in_type_rule || needs_update=1
     tproxy_config_proxy_dns_bootstrap_ok || needs_update=1
+    if tproxy_config_dns_has_unsafe_overrides; then
+        tproxy_save_error "dns.nameserver-policy, dns.fallback, or dns.direct-nameserver detected; refusing TProxy start because DNS could bypass $TPROXY_OUT_GROUP"
+        return 1
+    fi
+    if ! tproxy_config_native_dns_ok; then
+        if tproxy_config_native_dns_migratable; then
+            needs_update=1
+        else
+            tproxy_save_error "custom dns.nameserver detected; refusing to replace it automatically. Set it to native resolvers through $TPROXY_OUT_GROUP before starting TProxy"
+            return 1
+        fi
+    fi
 
     if [ "$needs_update" -eq 0 ]; then
         tproxy_ok "mihomo transparent config already present"
@@ -7859,6 +8095,7 @@ tproxy_ensure_config_port() {
     tproxy_config_out_group_ok || { tproxy_config_remove_out_group && tproxy_config_insert_group; } || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
     tproxy_config_has_in_type_rule || tproxy_config_insert_rule || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
     tproxy_config_proxy_dns_bootstrap_ok || tproxy_config_set_proxy_dns_bootstrap || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
+    tproxy_config_native_dns_ok || tproxy_config_set_native_dns || { tproxy_restore_config_from_backup "$backup_path" >/dev/null 2>&1 || true; return 1; }
 
     printf '%s\n' "$backup_path" > "$TPROXY_CONFIG_OWNED_FILE" 2>/dev/null || true
     TPROXY_START_CONFIG_MODIFIED=1
@@ -8084,7 +8321,9 @@ cmd_tproxy_start() {
     # before the first TPROXY connection, otherwise domain-based nodes loop.
     TPROXY_START_CONFIG_MODIFIED=0
     if ! tproxy_ensure_config_port; then
-        tproxy_save_error "failed to prepare mihomo transparent-proxy configuration"
+        if [ ! -s "$TPROXY_LAST_ERROR_FILE" ]; then
+            tproxy_save_error "failed to prepare mihomo transparent-proxy configuration"
+        fi
         return 1
     fi
     if [ "$TPROXY_START_CONFIG_MODIFIED" = "1" ]; then
@@ -12422,11 +12661,13 @@ migrate_patch_config() {
             printf '  ipv6: false\n'
             printf '  enhanced-mode: fake-ip\n'
             printf '  fake-ip-range: 198.18.0.0/16\n'
+            printf '  use-hosts: true\n'
             printf '  default-nameserver:\n'
             printf '    - 1.1.1.1\n'
             printf '    - 8.8.8.8\n'
             printf '  nameserver:\n'
-            printf '    - https://1.1.1.1/dns-query\n'
+            printf "    - '1.1.1.1#TPROXY-OUT'\\n"
+            printf "    - '8.8.8.8#TPROXY-OUT'\\n"
             printf '  proxy-server-nameserver:\n'
             printf '    - https://dns.alidns.com/dns-query#DIRECT\n'
             printf '  respect-rules: true\n'
@@ -12435,13 +12676,34 @@ migrate_patch_config() {
         ok "migrate: 已添加 dns 配置块（fake-ip + respect-rules，防止 DNS 泄露）"
     fi
 
-    if ! tproxy_config_proxy_dns_bootstrap_ok; then
-        if tproxy_config_set_proxy_dns_bootstrap; then
-            MIGRATE_CONFIG_CHANGED=1
-            ok "migrate: proxy-node DNS bootstrap now uses encrypted direct DoH to avoid TProxy loops"
-        else
-            warn "migrate: failed to update proxy-node DNS bootstrap; inspect the dns block"
+    if tproxy_config_has_quoted_managed_dns_keys; then
+        warn "migrate: quoted managed dns/hosts key preserved; TProxy will refuse to start until it is normalized to an unquoted key"
+    elif tproxy_config_dns_has_yaml_merge_or_alias; then
+        warn "migrate: YAML merge or alias in dns preserved; TProxy will refuse to start because DNS overrides cannot be verified"
+    else
+        if ! tproxy_config_proxy_dns_bootstrap_ok; then
+            if tproxy_config_set_proxy_dns_bootstrap; then
+                MIGRATE_CONFIG_CHANGED=1
+                ok "migrate: proxy-node DNS bootstrap now uses encrypted direct DoH to avoid TProxy loops"
+            else
+                warn "migrate: failed to update proxy-node DNS bootstrap; inspect the dns block"
+            fi
         fi
+
+        if ! tproxy_config_native_dns_ok && tproxy_config_native_dns_migratable; then
+            if tproxy_config_set_native_dns; then
+                MIGRATE_CONFIG_CHANGED=1
+                ok "migrate: website DNS now uses native UDP through TPROXY-OUT"
+            else
+                warn "migrate: failed to update website DNS policy; inspect the dns block"
+            fi
+        elif ! tproxy_config_native_dns_ok; then
+            warn "migrate: keeping custom dns.nameserver unchanged; TProxy will refuse to start until it uses native resolvers through $TPROXY_OUT_GROUP"
+        fi
+    fi
+
+    if tproxy_config_dns_has_unsafe_overrides; then
+        warn "migrate: dns.nameserver-policy, dns.fallback, or dns.direct-nameserver is preserved; TProxy will refuse to start because it could bypass $TPROXY_OUT_GROUP"
     fi
 
     if ! tproxy_config_has_out_group 2>/dev/null; then
@@ -12981,11 +13243,13 @@ dns:
   ipv6: false
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.0/16
+  use-hosts: true
   default-nameserver:
     - 1.1.1.1
     - 8.8.8.8
   nameserver:
-    - https://1.1.1.1/dns-query
+    - '1.1.1.1#TPROXY-OUT'
+    - '8.8.8.8#TPROXY-OUT'
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
@@ -13048,11 +13312,13 @@ dns:
   ipv6: false
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.0/16
+  use-hosts: true
   default-nameserver:
     - 1.1.1.1
     - 8.8.8.8
   nameserver:
-    - https://1.1.1.1/dns-query
+    - '1.1.1.1#TPROXY-OUT'
+    - '8.8.8.8#TPROXY-OUT'
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query#DIRECT
   respect-rules: true
