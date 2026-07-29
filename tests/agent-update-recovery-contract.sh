@@ -14,10 +14,12 @@ export MGATE_TEST_LIB_ONLY
 WORK_DIR=/tmp/mgate-test-agentupdate.$$
 mkdir -p "$WORK_DIR/pkg"
 MGATE_AGENT_BIN="$WORK_DIR/mgate-agent"
+MGATE_AGENT_SERVICE_FILE="$WORK_DIR/mgate-agent.service"
 TMP_DIR="$WORK_DIR/tmp"
 MGATE_AGENT_CONFIG_FILE="$WORK_DIR/agent.yaml"
 SYSTEMCTL_LOG="$WORK_DIR/systemctl.log"
 mkdir -p "$TMP_DIR"
+printf '[Service]\nExecStart=old-agent\n' > "$MGATE_AGENT_SERVICE_FILE"
 
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT

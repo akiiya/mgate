@@ -375,7 +375,16 @@ mihomo_api_call() {
 ! tproxy_doh_preflight
 [ "${TPROXY_DOH_PREFLIGHT_FAILED:-}" = "dns.google" ]
 
-tproxy_core_rules_active() { return 0; }
+# Web jobs invoke `mgate tproxy-select-idx` in a fresh shell.  Ensure the
+# selection command loads AP config before checking live rules that require
+# AP_IF (the same path used to fail with `set -u`).
+unset AP_IF
+AP_LOAD_COUNT=0
+ap_load_config() {
+    AP_LOAD_COUNT=$((AP_LOAD_COUNT + 1))
+    AP_IF=ap0
+}
+tproxy_core_rules_active() { [ "${AP_IF:-}" = ap0 ]; }
 : > "$test_dir/tproxy-select-calls.txt"
 mihomo_api_call() {
     method="$1"
@@ -392,8 +401,20 @@ mihomo_api_call() {
     esac
 }
 ! cmd_tproxy_select new-node
+[ "$AP_LOAD_COUNT" -eq 1 ] || { printf 'expected tproxy selection to load AP config\n' >&2; exit 1; }
 grep -q '"name":"new-node"' "$test_dir/tproxy-select-calls.txt"
 grep -q '"name":"old-node"' "$test_dir/tproxy-select-calls.txt"
 grep -q "selected node 'new-node' cannot reach required DoH resolver(s): dns.google; restored previous node 'old-node'" "$TPROXY_LAST_ERROR_FILE"
+
+set +e
+_select_noarg_output="$(cmd_tproxy_select 2>&1)"
+_select_noarg_rc=$?
+_select_idx_noarg_output="$(cmd_tproxy_select_idx 2>&1)"
+_select_idx_noarg_rc=$?
+set -e
+[ "$_select_noarg_rc" -ne 0 ] || { printf 'expected tproxy-select without a node to fail\n' >&2; exit 1; }
+[ "$_select_idx_noarg_rc" -ne 0 ] || { printf 'expected tproxy-select-idx without an index to fail\n' >&2; exit 1; }
+printf '%s' "$_select_noarg_output" | grep -q 'tproxy-select'
+printf '%s' "$_select_idx_noarg_output" | grep -q '索引\|index\|tproxy-select-idx'
 
 printf 'tproxy proxy DNS bootstrap contract: OK\n'

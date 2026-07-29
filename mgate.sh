@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.6.6"
+MGATE_VERSION="0.6.7"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -104,6 +104,8 @@ MGATE_AGENT_ACTIVE_TOKEN=""
 MGATE_AGENT_UPGRADE_UNIT="mgate-agent-upgrade"
 MGATE_AGENT_UPGRADE_STATUS_FILE="$MGATE_AGENT_DATA_DIR/combined-upgrade-status.json"
 MGATE_AGENT_UPGRADE_LOCK_DIR="$RUN_DIR/agent-upgrade-schedule.lock"
+MGATE_AGENT_HEALTH_RETRIES="${MGATE_AGENT_HEALTH_RETRIES:-5}"
+MGATE_AGENT_HEALTH_INTERVAL="${MGATE_AGENT_HEALTH_INTERVAL:-1}"
 
 REPO="MetaCubeX/mihomo"
 GITHUB_RELEASE_BASE="https://github.com/$REPO/releases"
@@ -8720,8 +8722,11 @@ cmd_tproxy_nodes() {
 }
 
 cmd_tproxy_select() {
-    node="$1"
+    node="${1:-}"
     [ -n "$node" ] || die "用法：mgate tproxy-select <节点名>  （用 mgate tproxy-nodes 查看可用节点）"
+    # Node selection may be invoked by the Web worker in a fresh shell.  The
+    # live-rule check below needs AP_IF to inspect the PREROUTING hook.
+    ap_load_config
     addr="$(config_mihomo_api_addr)"
     previous=""
     if tproxy_core_rules_active; then
@@ -8763,7 +8768,7 @@ tproxy_doctor_section() {
 }
 
 cmd_tproxy_select_idx() {
-    idx="$1"
+    idx="${1:-}"
     case "$idx" in ''|*[!0-9]*) die "索引必须为正整数，当前值：$idx" ;; esac
     node="$(tproxy_fetch_nodes | awk -v n="$idx" 'NR==n{print;exit}')"
     [ -n "$node" ] || die "节点索引 $idx 超出范围，请刷新页面重试"
@@ -11541,6 +11546,55 @@ EOF
     ok "已写入：$MGATE_AGENT_SERVICE_FILE"
 }
 
+agent_wait_service_active() {
+    _awsa_tries="$MGATE_AGENT_HEALTH_RETRIES"
+    _awsa_interval="$MGATE_AGENT_HEALTH_INTERVAL"
+    case "$_awsa_tries" in ''|*[!0-9]*) _awsa_tries=5 ;; esac
+    case "$_awsa_interval" in ''|*[!0-9]*) _awsa_interval=1 ;; esac
+    [ "$_awsa_tries" -gt 0 ] 2>/dev/null || _awsa_tries=1
+
+    _awsa_attempt=1
+    while [ "$_awsa_attempt" -le "$_awsa_tries" ]; do
+        if systemctl is-active mgate-agent >/dev/null 2>&1; then
+            return 0
+        fi
+        if [ "$_awsa_attempt" -lt "$_awsa_tries" ]; then
+            sleep "$_awsa_interval"
+        fi
+        _awsa_attempt=$((_awsa_attempt + 1))
+    done
+    return 1
+}
+
+agent_update_restore_previous() {
+    _aurp_bin_backup="$1"
+    _aurp_service_backup="$2"
+    _aurp_service_existed="$3"
+    _aurp_config_backup="$4"
+    _aurp_config_existed="$5"
+    _aurp_was_running="$6"
+
+    if [ -n "$_aurp_bin_backup" ] && [ -f "$_aurp_bin_backup" ]; then
+        cp "$_aurp_bin_backup" "$MGATE_AGENT_BIN" 2>/dev/null || warn "恢复旧 mgate-agent binary 失败"
+        chmod 755 "$MGATE_AGENT_BIN" 2>/dev/null || true
+    fi
+    if [ "$_aurp_service_existed" = "1" ] && [ -f "$_aurp_service_backup" ]; then
+        cp "$_aurp_service_backup" "$MGATE_AGENT_SERVICE_FILE" 2>/dev/null || warn "恢复旧 systemd service 失败"
+    elif [ "$_aurp_service_existed" = "0" ]; then
+        rm -f "$MGATE_AGENT_SERVICE_FILE" 2>/dev/null || true
+    fi
+    if [ "$_aurp_config_existed" = "1" ] && [ -f "$_aurp_config_backup" ]; then
+        cp "$_aurp_config_backup" "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || warn "恢复旧 agent.yaml 失败"
+        chmod 644 "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || true
+    elif [ "$_aurp_config_existed" = "0" ]; then
+        rm -f "$MGATE_AGENT_CONFIG_FILE" 2>/dev/null || true
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || warn "恢复后 systemd daemon-reload 失败"
+    if [ "$_aurp_was_running" = "1" ]; then
+        systemctl start mgate-agent >/dev/null 2>&1 || warn "恢复旧 agent 服务失败；请检查：systemctl status mgate-agent"
+    fi
+}
+
 agent_patch_config_mgate_path() {
     _apc_file="$1"
     _apc_tmp="${_apc_file}.tmp.$$"
@@ -11831,26 +11885,72 @@ cmd_agent_update() {
     AGENT_DOWNLOAD_BIN_PATH=""
     agent_download_and_verify "$_au_ver" "$_au_arch" "$_au_tmp" || {
         rm -rf "$_au_tmp" 2>/dev/null; return 1; }
+    have systemctl || { err "systemctl 不可用，无法安全切换 mgate-agent 服务"; rm -rf "$_au_tmp" 2>/dev/null; return 1; }
+
     _au_was_running=0
-    have systemctl && systemctl is-active mgate-agent >/dev/null 2>&1 && {
+    if systemctl is-active mgate-agent >/dev/null 2>&1; then
         _au_was_running=1
-        step "临时停止服务..."
-        systemctl stop mgate-agent 2>/dev/null || true; }
+    else
+        # `is-active` returns non-zero for activating/deactivating units even
+        # though an old process can still be alive.  Stop those states before
+        # replacing the executable as well, otherwise the update could leave
+        # the old process serving the new on-disk binary.
+        _au_service_state="$(systemctl is-active mgate-agent 2>/dev/null || true)"
+        case "$_au_service_state" in
+            activating|reloading|deactivating) _au_was_running=1 ;;
+        esac
+    fi
+    _au_bin_backup=""
+    _au_service_backup=""
+    _au_service_existed=0
+    _au_config_backup=""
+    _au_config_existed=0
+    if [ -f "$MGATE_AGENT_BIN" ]; then
+        _au_bin_backup="$_au_tmp/mgate-agent.previous"
+        cp "$MGATE_AGENT_BIN" "$_au_bin_backup" || { err "备份现有 binary 失败"; rm -rf "$_au_tmp" 2>/dev/null; return 1; }
+    fi
+    if [ -f "$MGATE_AGENT_SERVICE_FILE" ]; then
+        _au_service_existed=1
+        _au_service_backup="$_au_tmp/mgate-agent.service.previous"
+        cp "$MGATE_AGENT_SERVICE_FILE" "$_au_service_backup" || { err "备份现有 service 失败"; rm -rf "$_au_tmp" 2>/dev/null; return 1; }
+    fi
+    if [ -f "$MGATE_AGENT_CONFIG_FILE" ]; then
+        _au_config_existed=1
+        _au_config_backup="$_au_tmp/agent.yaml.previous"
+        cp "$MGATE_AGENT_CONFIG_FILE" "$_au_config_backup" || { err "备份现有 agent.yaml 失败"; rm -rf "$_au_tmp" 2>/dev/null; return 1; }
+    fi
+    if [ "$_au_was_running" = "1" ]; then
+        step "停止当前服务..."
+        systemctl stop mgate-agent 2>/dev/null
+        _au_stop_rc=$?
+        if [ "$_au_stop_rc" -ne 0 ]; then
+            err "停止 mgate-agent 服务失败；未替换 binary"
+            rm -rf "$_au_tmp" 2>/dev/null || true
+            return "$_au_stop_rc"
+        fi
+    fi
     step "替换 binary"
     cp "$AGENT_DOWNLOAD_BIN_PATH" "$MGATE_AGENT_BIN" || {
         err "替换 binary 失败"
-        rm -rf "$_au_tmp"
-        [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
+        agent_update_restore_previous "$_au_bin_backup" "$_au_service_backup" "$_au_service_existed" "$_au_config_backup" "$_au_config_existed" "$_au_was_running"
+        rm -rf "$_au_tmp" 2>/dev/null || true
         return 1; }
     chmod 755 "$MGATE_AGENT_BIN"
     ok "binary 已更新：$MGATE_AGENT_BIN"
     agent_install_service || {
-        [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
+        agent_update_restore_previous "$_au_bin_backup" "$_au_service_backup" "$_au_service_existed" "$_au_config_backup" "$_au_config_existed" "$_au_was_running"
+        rm -rf "$_au_tmp" 2>/dev/null || true
         return 1; }
-    systemctl daemon-reload 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || {
+        err "systemd daemon-reload 失败"
+        agent_update_restore_previous "$_au_bin_backup" "$_au_service_backup" "$_au_service_existed" "$_au_config_backup" "$_au_config_existed" "$_au_was_running"
+        rm -rf "$_au_tmp" 2>/dev/null || true
+        return 1
+    }
     _au_pkg_dir="$(dirname "$AGENT_DOWNLOAD_BIN_PATH")"
     agent_install_config "$_au_pkg_dir" "$_au_force" || {
-        [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
+        agent_update_restore_previous "$_au_bin_backup" "$_au_service_backup" "$_au_service_existed" "$_au_config_backup" "$_au_config_existed" "$_au_was_running"
+        rm -rf "$_au_tmp" 2>/dev/null || true
         return 1; }
     for _p in "$_au_pkg_dir/configs/agent.example.yaml" \
               "$_au_pkg_dir/agent.yaml.example" "$_au_pkg_dir/agent.example.yaml" \
@@ -11860,27 +11960,29 @@ cmd_agent_update() {
                 hint "新示例配置：${MGATE_AGENT_CONFIG_FILE}.new-example（可与现有配置对比）"
             break; }
     done
-    rm -rf "$_au_tmp" 2>/dev/null || true
-    MGATE_AGENT_ACTIVE_TOKEN=""
     agent_warn_legacy_config
     agent_check_if_enrolled || {
-        [ "$_au_was_running" = "1" ] && systemctl start mgate-agent 2>/dev/null || true
+        agent_update_restore_previous "$_au_bin_backup" "$_au_service_backup" "$_au_service_existed" "$_au_config_backup" "$_au_config_existed" "$_au_was_running"
+        rm -rf "$_au_tmp" 2>/dev/null || true
         return 1; }
-    if [ "$_au_was_running" = "1" ]; then
-        step "重启服务..."
-        systemctl start mgate-agent 2>/dev/null
-        _au_start_rc=$?
-        if [ "$_au_start_rc" -ne 0 ]; then
-            # The service was running before this update and is not running
-            # now -- this is a real failure, not advisory: propagate the
-            # actual systemctl exit code so callers (the combined-upgrade
-            # worker) record "failed" with a genuine, non-zero exit_code
-            # instead of silently reporting overall success.
-            err "服务重启失败：mgate agent status"
-            return "$_au_start_rc"
-        fi
-        ok "服务已重启"
+    step "启动更新后的服务..."
+    systemctl start mgate-agent 2>/dev/null
+    _au_start_rc=$?
+    if [ "$_au_start_rc" -ne 0 ]; then
+        err "启动更新后的 mgate-agent 服务失败"
+        agent_update_restore_previous "$_au_bin_backup" "$_au_service_backup" "$_au_service_existed" "$_au_config_backup" "$_au_config_existed" "$_au_was_running"
+        rm -rf "$_au_tmp" 2>/dev/null || true
+        return "$_au_start_rc"
     fi
+    if ! agent_wait_service_active; then
+        err "更新后的 mgate-agent 未进入 active 状态"
+        agent_update_restore_previous "$_au_bin_backup" "$_au_service_backup" "$_au_service_existed" "$_au_config_backup" "$_au_config_existed" "$_au_was_running"
+        rm -rf "$_au_tmp" 2>/dev/null || true
+        return 1
+    fi
+    ok "更新后的 mgate-agent 服务已进入 active 状态"
+    rm -rf "$_au_tmp" 2>/dev/null || true
+    MGATE_AGENT_ACTIVE_TOKEN=""
     ok "mgate-agent 已更新至 $_au_ver"
     info "配置和 credentials 已保留"
 }
