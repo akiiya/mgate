@@ -7,7 +7,7 @@ umask 022
 
 APP_NAME="mgate"
 APP_DESC="Mobile Gateway Manager"
-MGATE_VERSION="0.6.7"
+MGATE_VERSION="0.6.8"
 
 WORKDIR="${MGATE_WORKDIR:-/opt/mgate}"
 SCRIPT_PATH="$WORKDIR/mgate"
@@ -3866,12 +3866,18 @@ EOF
 </div>
 EOF
 
-    # 节点切换（仅在启用时显示）
-    if [ "$_tp_enabled" = "true" ] && [ -n "$_tp_nodes" ]; then
+    # 节点选择独立于 TProxy 规则是否启用：预先选好节点后，下一次启用
+    # TProxy 会直接使用该 TPROXY-OUT 选择。
+    if [ -n "$_tp_nodes" ]; then
+        if [ "$_tp_enabled" = "true" ]; then
+            _tp_select_effect="切换即时生效，热点中所有设备的流量将立即走新节点。"
+        else
+            _tp_select_effect="节点选择将立即保存；下次启用透明代理时将使用该节点。"
+        fi
         cat <<EOF
 <div class="card">
 <h2>切换代理节点</h2>
-<p class="muted">当前节点：<strong>$(printf '%s' "${_tp_now:-未知}" | html_escape)</strong>。切换即时生效，无需重启。</p>
+<p class="muted">当前节点：<strong>$(printf '%s' "${_tp_now:-未知}" | html_escape)</strong>。$_tp_select_effect</p>
 <form method="POST" action="/cgi-bin/mgate.cgi">
 <input type="hidden" name="action" value="tproxy-select-do">
 <div class="row">
@@ -3890,7 +3896,7 @@ EOF
                     "$_tp_idx" "$(printf '%s' "$_n" | html_escape)"
             fi
         done
-        cat <<'EOF'
+        cat <<EOF
 </select>
 </div>
 <div class="row"><button type="button" class="primary" onclick="var s=this.closest('form').querySelector('[name=tproxy_node]');if(!s||!s.value)return;var idx=s.value;var label=s.options[s.selectedIndex]?s.options[s.selectedIndex].text:'#'+idx;document.getElementById('tproxy-sel-label').textContent=label;document.getElementById('tproxy-sel-idx').value=idx;openModal('modal-tproxy-select')">切换节点</button></div>
@@ -3901,7 +3907,7 @@ EOF
 <div class="modal-head"><h3>确认切换代理节点</h3><button class="modal-close" type="button" onclick="closeModal('modal-tproxy-select')">&#x2715;</button></div>
 <div class="modal-body">
 <p>将切换到节点：<strong id="tproxy-sel-label"></strong></p>
-<p class="muted">切换即时生效，热点中所有设备的流量将立即走新节点。</p>
+<p class="muted">$_tp_select_effect</p>
 </div>
 <div class="modal-foot">
 <button type="button" class="btn" onclick="closeModal('modal-tproxy-select')">取消</button>
@@ -3915,12 +3921,35 @@ EOF
 EOF
     fi
 
-    # 健康状态（运行时）
-    if [ "$_tp_enabled" = "true" ]; then
-        printf '<div class="card"><h2>健康状态</h2><pre>'
-        $MGATE tproxy-health 2>&1 | html_escape
-        printf '</pre></div>\n'
+    if [ -z "$_tp_nodes" ]; then
+        cat <<'EOF'
+<div class="card">
+<h2>切换代理节点</h2>
+<p class="muted">当前无法从 Mihomo 获取可选节点。请先启动 Mihomo，并确认 <span class="code">TPROXY-OUT</span> 为 <span class="code">select</span> 代理组后再切换。</p>
+</div>
+EOF
     fi
+
+    # 诊断可能读取防火墙和 Mihomo 日志；默认不执行，用户展开时才请求。
+    cat <<'EOF'
+<details class="card" id="tproxy-diagnostics" ontoggle="loadTproxyDiagnostics(this)">
+<summary style="cursor:pointer;font-weight:700">诊断 <span class="muted" style="font-weight:400">（展开后加载）</span></summary>
+<pre id="tproxy-diagnostics-output" style="display:none;margin-top:14px;max-height:420px;overflow:auto">等待展开后加载诊断信息…</pre>
+</details>
+<script>
+function loadTproxyDiagnostics(details){
+  if(!details.open||details.dataset.loaded==='1'||details.dataset.loading==='1')return;
+  details.dataset.loading='1';
+  var output=document.getElementById('tproxy-diagnostics-output');
+  if(output){output.style.display='block';output.textContent='正在加载诊断信息…';}
+  fetch('/cgi-bin/mgate.cgi?action=tproxy-health-text')
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text();})
+    .then(function(text){if(output)output.textContent=text||'诊断未返回内容';details.dataset.loaded='1';})
+    .catch(function(err){if(output)output.textContent='加载诊断失败：'+err;})
+    .finally(function(){delete details.dataset.loading;});
+}
+</script>
+EOF
 
     cat <<'EOF'
 <div id="modal-tproxy-stop" class="modal-overlay">
@@ -4745,6 +4774,10 @@ else
         doctor-text)
             _CGI_CONTENT_TYPE="text/plain; charset=utf-8"
             "$MGATE" doctor 2>&1
+            ;;
+        tproxy-health-text)
+            _CGI_CONTENT_TYPE="text/plain; charset=utf-8"
+            "$MGATE" tproxy-health 2>&1
             ;;
         logs-text)
             _CGI_CONTENT_TYPE="text/plain; charset=utf-8"
